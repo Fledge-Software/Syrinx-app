@@ -1,33 +1,55 @@
 //! Synthetic services for the worker tests: the test host's, plus a journal the test keeps
-//! after the instance is gone, and optionally a view service whose dependency never answers.
+//! after the instance is gone, optionally a view service whose dependency never answers, and
+//! requests the test says the services are working on, which a revocation abandons.
 
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex, PoisonError};
 
 use syrinx_plugin_host::PluginHost;
 use syrinx_plugin_host::bindings::syrinx::plugin::host::{self, LogLevel};
-use syrinx_plugin_host::bindings::syrinx::plugin::types::{self, PluginError};
+use syrinx_plugin_host::bindings::syrinx::plugin::types::{self, Outcome, PluginError};
 use syrinx_plugin_host::deadline::CallDeadline;
-use syrinx_plugin_host::manifest::PluginManifest;
+use syrinx_plugin_host::manifest::{CapabilityKind, PluginManifest};
 use syrinx_plugin_host::test_host::SyntheticHost;
 
-/// What the plugin logged and which requests the service was told to cancel, in order.
+/// What the plugin logged and which requests the service was told to cancel, in order, and
+/// the requests the services are working on.
 #[derive(Clone, Default)]
-pub struct Journal(Arc<Mutex<Vec<String>>>);
+pub struct Journal {
+    lines: Arc<Mutex<Vec<String>>>,
+    working_on: Arc<Mutex<Vec<u64>>>,
+}
 
 impl Journal {
     fn push(&self, line: String) {
-        self.0
+        self.lines
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .push(line);
     }
 
     pub fn lines(&self) -> Vec<String> {
-        self.0
+        self.lines
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .clone()
+    }
+
+    /// The services are working on `request`; a revocation abandons it.
+    pub fn work_on(&self, request: u64) {
+        self.working_on
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push(request);
+    }
+
+    fn abandon_all(&self) -> Vec<u64> {
+        std::mem::take(
+            &mut *self
+                .working_on
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner),
+        )
     }
 
     /// How many lines start with `prefix`.
@@ -95,6 +117,17 @@ impl PluginHost for TestServices {
     fn view_closed(&mut self, view: u64) {
         self.journal.push(format!("view-closed {view}"));
         self.inner.view_closed(view);
+    }
+
+    /// Notes the revocation and abandons every request the test said is in progress.
+    fn capability_revoked(&mut self, kind: CapabilityKind) -> Vec<(u64, Outcome)> {
+        self.journal.push(format!("revoked {kind}"));
+        let abandoned = Outcome::Uncertain("the capability was revoked".into());
+        self.journal
+            .abandon_all()
+            .into_iter()
+            .map(|request| (request, abandoned.clone()))
+            .collect()
     }
 }
 

@@ -60,6 +60,11 @@ impl lifecycle::Guest for Plugin {
 
 impl commands::Guest for Plugin {
     fn run(id: String) -> Result<(), PluginError> {
+        // Tests register this fixture under several plugin ids; its commands answer to any.
+        let id = match id.split_once('.') {
+            Some((_, name)) => format!("test.{name}"),
+            None => id,
+        };
         match id.as_str() {
             "test.echo" => echo(),
             "test.fail" => Err(PluginError::InvalidInput("synthetic failure".into())),

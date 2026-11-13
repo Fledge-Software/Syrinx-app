@@ -5,6 +5,7 @@ use std::fmt;
 use crate::bindings::syrinx::plugin::types::PluginError;
 use crate::deadline::Export;
 use crate::identity::IdentityMismatch;
+use crate::manifest::CapabilityKind;
 
 /// A failure on the host's side of the boundary. A plugin's own typed
 /// failures stay `plugin-error` values and never become a `HostError`.
@@ -32,6 +33,9 @@ pub enum HostError {
     Refused(String),
     /// The plugin cannot take the call now: its queue is full, or it stopped before answering.
     Unavailable(String),
+    /// The plugin's manifest requires a capability the owner has not granted, so it is not
+    /// activated (#136).
+    NotGranted(CapabilityKind),
     /// The plugin stopped while `forms.submit` ran for `request`, so the write's outcome is
     /// unknown; the worker reports it `uncertain` under the same id. `cause` is the trap
     /// (`Trap`) or the refusal of a discarded instance (`Discarded`), never another
@@ -53,6 +57,9 @@ impl fmt::Display for HostError {
             Self::Discarded => write!(formatter, "the plugin trapped earlier and was discarded"),
             Self::Refused(detail) => write!(formatter, "refused: {detail}"),
             Self::Unavailable(detail) => write!(formatter, "unavailable: {detail}"),
+            Self::NotGranted(kind) => {
+                write!(formatter, "the required {kind} capability is not granted")
+            }
             Self::SubmitStopped { request, cause } => {
                 write!(
                     formatter,

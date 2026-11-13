@@ -122,7 +122,9 @@ fn the_test_component_registers_then_loads_and_runs_from_its_manifest() {
         .expect("engine")
         .compile_package(registered, &bytes)
         .expect("the component agrees with its manifest");
-    let mut host = TestHost::load(&bytes, Declarations::from(&manifest)).expect("loads");
+    let declarations = Declarations::from(&manifest);
+    let mut host = TestHost::load_with_grants(&bytes, declarations, support::storage_granted())
+        .expect("loads");
     assert_eq!(host.run_command("test.echo").expect("call"), Ok(()));
 }
 

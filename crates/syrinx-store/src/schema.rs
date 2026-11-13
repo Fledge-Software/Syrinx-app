@@ -9,7 +9,7 @@ use crate::ShutdownState;
 use crate::error::{StoreError, StoreOperation, database_error, with_cleanup};
 
 pub(crate) const APPLICATION_ID: i64 = 0x5359_5258;
-pub(crate) const SCHEMA_VERSION: i64 = 7;
+pub(crate) const SCHEMA_VERSION: i64 = 8;
 
 /// The record layout of a recognized Syrinx database, by `user_version`.
 /// Declared in version order, so later generations compare greater.
@@ -29,9 +29,11 @@ pub(crate) enum SchemaGeneration {
     Permissions,
     /// Version 7 (#90): adds the owner's per-site zoom levels.
     SiteZoom,
+    /// Version 8 (#136): adds installed plugins, their grants, folders and settings.
+    Plugins,
 }
 
-pub(crate) const CURRENT_GENERATION: SchemaGeneration = SchemaGeneration::SiteZoom;
+pub(crate) const CURRENT_GENERATION: SchemaGeneration = SchemaGeneration::Plugins;
 
 impl SchemaGeneration {
     /// Whether this generation (version 2 or later) stores saved pages as a folder tree.
@@ -62,6 +64,11 @@ impl SchemaGeneration {
     /// Whether this generation (version 7 or later) stores per-site zoom levels.
     pub(crate) fn has_site_zoom(self) -> bool {
         self >= Self::SiteZoom
+    }
+
+    /// Whether this generation (version 8 or later) stores plugin installs and grants.
+    fn has_plugins(self) -> bool {
+        self >= Self::Plugins
     }
 }
 
@@ -336,6 +343,7 @@ fn inspect_identity(connection: &Connection) -> Result<Identity, StoreError> {
         5 => Ok(Identity::Syrinx(SchemaGeneration::Deletions)),
         6 => Ok(Identity::Syrinx(SchemaGeneration::Permissions)),
         7 => Ok(Identity::Syrinx(SchemaGeneration::SiteZoom)),
+        8 => Ok(Identity::Syrinx(SchemaGeneration::Plugins)),
         version if version > SCHEMA_VERSION => Err(StoreError::FutureSchema { version }),
         _ => Err(StoreError::SchemaMismatch),
     }
@@ -390,6 +398,17 @@ pub(crate) fn site_zoom_migration() -> String {
     format!("{};", crate::site_zoom::TABLE)
 }
 
+/// Version 8: adds the empty plugin tables. No plugin is installed or granted anything.
+pub(crate) fn plugins_migration() -> String {
+    format!(
+        "{}; {}; {}; {};",
+        crate::plugins::INSTALL_TABLE,
+        crate::plugins::GRANT_TABLE,
+        crate::plugins::FOLDER_TABLE,
+        crate::plugins::SETTING_TABLE
+    )
+}
+
 /// Owns the migration SQL that `rusqlite_migration` borrows, numbered by position.
 pub(crate) struct MigrationScripts {
     initial: String,
@@ -399,6 +418,7 @@ pub(crate) struct MigrationScripts {
     deletions: String,
     permissions: String,
     site_zoom: String,
+    plugins: String,
 }
 
 impl MigrationScripts {
@@ -411,6 +431,7 @@ impl MigrationScripts {
             deletions: deletions_migration(),
             permissions: permissions_migration(),
             site_zoom: site_zoom_migration(),
+            plugins: plugins_migration(),
         }
     }
 
@@ -423,6 +444,7 @@ impl MigrationScripts {
             M::up_with_hook(&self.deletions, check_migrated_deletions),
             M::up_with_hook(&self.permissions, check_migrated_permissions),
             M::up_with_hook(&self.site_zoom, check_migrated_site_zoom),
+            M::up_with_hook(&self.plugins, check_migrated_plugins).foreign_key_check(),
         ])
     }
 }
@@ -466,6 +488,15 @@ pub(crate) fn check_migrated_site_zoom(transaction: &Transaction<'_>) -> HookRes
     match crate::site_zoom::count(transaction) {
         Ok(0) => Ok(()),
         Ok(_) => Err(HookError::Hook("unexpected site zoom rows".to_owned())),
+        Err(error) => Err(HookError::Hook(error.to_string())),
+    }
+}
+
+pub(crate) fn check_migrated_plugins(transaction: &Transaction<'_>) -> HookResult {
+    // The new tables must start empty: a plugin gets nothing by default (decision 9).
+    match crate::plugins::count(transaction) {
+        Ok(0) => Ok(()),
+        Ok(_) => Err(HookError::Hook("unexpected plugin rows".to_owned())),
         Err(error) => Err(HookError::Hook(error.to_string())),
     }
 }
@@ -573,8 +604,16 @@ const PERMISSION_ADDED_OBJECTS: &[SchemaObject] =
 /// Version 7 adds the per-site zoom table to version 6.
 const SITE_ZOOM_ADDED_OBJECTS: &[SchemaObject] = &[table("site_zoom", crate::site_zoom::TABLE)];
 
+/// Version 8 adds the plugin tables to version 7.
+const PLUGIN_ADDED_OBJECTS: &[SchemaObject] = &[
+    table("plugin_folder", crate::plugins::FOLDER_TABLE),
+    table("plugin_grant", crate::plugins::GRANT_TABLE),
+    table("plugin_install", crate::plugins::INSTALL_TABLE),
+    table("plugin_setting", crate::plugins::SETTING_TABLE),
+];
+
 /// Objects of each generation, sorted by name as `sqlite_schema` lists them.
-/// Versions 5, 6 and 7 each add their objects on top of every earlier version's.
+/// Versions 5 to 8 each add their objects on top of every earlier version's.
 fn expected_objects(generation: SchemaGeneration) -> Vec<&'static SchemaObject> {
     let base = match generation {
         SchemaGeneration::FlatSaved => FLAT_OBJECTS,
@@ -583,12 +622,14 @@ fn expected_objects(generation: SchemaGeneration) -> Vec<&'static SchemaObject> 
         SchemaGeneration::History
         | SchemaGeneration::Deletions
         | SchemaGeneration::Permissions
-        | SchemaGeneration::SiteZoom => HISTORY_OBJECTS,
+        | SchemaGeneration::SiteZoom
+        | SchemaGeneration::Plugins => HISTORY_OBJECTS,
     };
     let additions = [
         (generation.has_deletion_state(), DELETION_ADDED_OBJECTS),
         (generation.has_permissions(), PERMISSION_ADDED_OBJECTS),
         (generation.has_site_zoom(), SITE_ZOOM_ADDED_OBJECTS),
+        (generation.has_plugins(), PLUGIN_ADDED_OBJECTS),
     ];
     let added = additions
         .into_iter()

@@ -1,6 +1,7 @@
 //! Synthetic lifecycle tests for the per-plugin workers (#135, P2-03): lazy activation,
 //! deadlines, traps, request identity, the bounded queue and deactivation.
 
+mod grants;
 mod services;
 mod workload;
 
@@ -14,7 +15,7 @@ use syrinx_plugin_host::bindings::syrinx::plugin::types::{Outcome, PluginError};
 use syrinx_plugin_host::deadline::Export;
 use syrinx_plugin_host::manifest::{CapabilityKind, DiscoveryOptions, PluginManifest};
 use syrinx_plugin_host::session::CallResult;
-use syrinx_plugin_host::test_host::{SyntheticHost, TestHost};
+use syrinx_plugin_host::test_host::{SyntheticGrants, SyntheticHost, TestHost};
 use syrinx_plugin_host::worker::{Pending, PluginEvent, PluginStatus, Plugins, StopReason};
 use syrinx_plugin_host::{Failure, HostError, PluginHost, PluginRegistry, Runtime, limits};
 use wasmtime::Trap;
@@ -26,11 +27,32 @@ use services::{Journal, TestServices};
 /// Long enough for the first activation to compile the fixture in a debug build.
 const WAIT: Duration = Duration::from_secs(60);
 
+/// Workers under `grants`, which the test keeps to grant and revoke.
+fn granted_plugins<S: PluginHost>(
+    grants: &SyntheticGrants,
+    services: impl Fn(&PluginManifest) -> S + Send + Sync + 'static,
+) -> (Plugins<S>, Receiver<PluginEvent>) {
+    let grants = Arc::new(grants.clone());
+    Plugins::new(
+        Runtime::new().expect("engine"),
+        "0.1.0-worker",
+        grants,
+        services,
+    )
+}
+
+/// Workers with nothing granted.
 fn plugins_with<S: PluginHost>(
     host_version: &str,
     services: impl Fn(&PluginManifest) -> S + Send + Sync + 'static,
 ) -> (Plugins<S>, Receiver<PluginEvent>) {
-    Plugins::new(Runtime::new().expect("engine"), host_version, services)
+    let grants = Arc::new(SyntheticGrants::new());
+    Plugins::new(
+        Runtime::new().expect("engine"),
+        host_version,
+        grants,
+        services,
+    )
 }
 
 fn synthetic(host_version: &str) -> (Plugins<SyntheticHost>, Receiver<PluginEvent>) {
@@ -57,8 +79,8 @@ fn answer<R>(queued: CallResult<Pending<R>>) -> CallResult<R> {
         .expect("answered in time")
 }
 
-fn run(
-    plugins: &mut Plugins<SyntheticHost>,
+fn run<S: PluginHost>(
+    plugins: &mut Plugins<S>,
     id: &'static str,
 ) -> CallResult<Result<(), PluginError>> {
     answer(plugins.call("test", move |session| session.run_command(id)))
@@ -73,7 +95,7 @@ fn logged(plugins: &mut Plugins<SyntheticHost>) -> Vec<String> {
 }
 
 /// Submit the fixture's form so that it answers `pending`; returns the request id.
-fn submit_pending(plugins: &mut Plugins<SyntheticHost>) -> u64 {
+fn submit_pending<S: PluginHost>(plugins: &mut Plugins<S>) -> u64 {
     let (request, result) = answer(plugins.call("test", |session| {
         session.submit("test.new-item", &[("name", "later")])
     }))
@@ -321,7 +343,7 @@ fn a_spinning_plugin_never_delays_the_caller_or_another_plugin() {
         let started = Instant::now();
         let other = answer(plugins.call("other", |session| session.run_command("other.fail")));
         assert!(
-            matches!(other, Ok(Err(PluginError::NotFound(_)))),
+            matches!(other, Ok(Err(PluginError::InvalidInput(_)))),
             "{other:?}"
         );
         slowest = slowest.max(started.elapsed());
@@ -377,6 +399,7 @@ fn the_epoch_does_not_tick_while_every_plugin_is_idle() {
     let (mut plugins, _events) = Plugins::new(
         runtime.clone(),
         "0.1.0-worker",
+        Arc::new(SyntheticGrants::new()),
         |_manifest: &PluginManifest| SyntheticHost::new(),
     );
     add(&mut plugins, "test", "");
@@ -428,9 +451,13 @@ fn shutdown_deactivates_each_running_plugin_and_settles_its_writes() {
 fn revoking_a_required_capability_deactivates_and_an_optional_one_does_not() {
     let capabilities = "[[capabilities]]\nkind = \"storage\"\nreason = \"Keeps synthetic settings.\"\nrequired = true\n\
                         [[capabilities]]\nkind = \"open-external\"\nreason = \"Opens a synthetic link.\"\nrequired = false\n";
-    let (mut plugins, events) = synthetic("0.1.0-worker");
+    let grants = SyntheticGrants::new();
+    grants.grant("test", CapabilityKind::Storage);
+    grants.grant("test", CapabilityKind::OpenExternal);
+    let (mut plugins, events) = granted_plugins(&grants, |_manifest| SyntheticHost::new());
     add(&mut plugins, "test", capabilities);
     assert!(run(&mut plugins, "test.fail").is_ok());
+    grants.revoke("test", CapabilityKind::OpenExternal);
     plugins
         .revoke("test", CapabilityKind::OpenExternal)
         .expect("optional");
@@ -443,6 +470,7 @@ fn revoking_a_required_capability_deactivates_and_an_optional_one_does_not() {
     );
     assert_eq!(plugins.status("test"), Some(PluginStatus::Active));
     assert!(events.try_recv().is_err(), "nothing was deactivated");
+    grants.revoke("test", CapabilityKind::Storage);
     plugins
         .revoke("test", CapabilityKind::Storage)
         .expect("revoked");

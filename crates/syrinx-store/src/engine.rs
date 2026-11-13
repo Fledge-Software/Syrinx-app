@@ -20,6 +20,7 @@ use crate::error::{
 use crate::history::{
     self, HistoryEntry, HistoryOutcome, HistoryRequest, HistoryVisit, HistoryWrite, RecordedVisit,
 };
+use crate::plugins::{PluginWrite, PluginWritten};
 use crate::preferences::{self, PreferenceWrite, StoredPreferences};
 use crate::replay::{self, AppliedDeletions};
 use crate::{BackupOutcome, DirectoryLease, ShutdownState};
@@ -263,6 +264,109 @@ impl Store {
         result.recv().map_err(|_| StoreError::WorkerUnavailable)?
     }
 
+    /// Every installed plugin, by id (#136).
+    pub fn plugin_installs(&self) -> Result<Vec<crate::PluginInstall>, StoreError> {
+        self.read(|connection| crate::plugins::installs(connection))
+    }
+
+    /// Every capability granted to every plugin, read at start-up (#136).
+    pub fn plugin_grants(&self) -> Result<Vec<crate::StoredGrant>, StoreError> {
+        self.read(|connection| crate::plugins::grants(connection))
+    }
+
+    /// The folders granted to `plugin_id`. Their paths are owner data.
+    pub fn plugin_folders(&self, plugin_id: &str) -> Result<Vec<crate::PluginFolder>, StoreError> {
+        self.read(|connection| crate::plugins::folders(connection, plugin_id))
+    }
+
+    /// One key from `plugin_id`'s own settings namespace.
+    pub fn plugin_setting(
+        &self,
+        plugin_id: &str,
+        key: &str,
+    ) -> Result<Option<Vec<u8>>, StoreError> {
+        self.read(|connection| crate::plugins::setting(connection, plugin_id, key))
+    }
+
+    /// Records an installed or updated plugin; its grants and settings are kept.
+    pub fn save_plugin_install(&self, install: crate::PluginInstall) -> Result<(), StoreError> {
+        self.write_plugin(PluginWrite::Install(install)).map(drop)
+    }
+
+    /// Grants `plugin_id` a capability, or replaces the grant's scope; returns the grant's id,
+    /// which stays the same across a re-grant.
+    pub fn grant_plugin(
+        &self,
+        plugin_id: String,
+        grant: crate::PluginGrant,
+    ) -> Result<i64, StoreError> {
+        match self.write_plugin(PluginWrite::Grant { plugin_id, grant })? {
+            PluginWritten::Grant(grant_id) => Ok(grant_id),
+            PluginWritten::Saved | PluginWritten::Removed(_) => Err(StoreError::ReplyAbandoned),
+        }
+    }
+
+    /// Withdraws one capability and the folders granted under it; `false` if none was granted.
+    pub fn revoke_plugin_grant(
+        &self,
+        plugin_id: String,
+        capability: String,
+    ) -> Result<bool, StoreError> {
+        self.removed(PluginWrite::Revoke {
+            plugin_id,
+            capability,
+        })
+    }
+
+    /// Adds a folder under one of `plugin_id`'s grants. The caller has applied the deny list.
+    pub fn add_plugin_folder(
+        &self,
+        plugin_id: String,
+        folder: crate::PluginFolder,
+    ) -> Result<(), StoreError> {
+        self.write_plugin(PluginWrite::Folder { plugin_id, folder })
+            .map(drop)
+    }
+
+    /// Saves one key in `plugin_id`'s own settings namespace.
+    pub fn save_plugin_setting(
+        &self,
+        plugin_id: String,
+        key: String,
+        value: Vec<u8>,
+    ) -> Result<(), StoreError> {
+        self.write_plugin(PluginWrite::Setting {
+            plugin_id,
+            key,
+            value,
+        })
+        .map(drop)
+    }
+
+    /// Removes `plugin_id` with its grants, folders and settings in one statement; `false` if
+    /// it was not installed.
+    pub fn remove_plugin(&self, plugin_id: String) -> Result<bool, StoreError> {
+        self.removed(PluginWrite::Remove { plugin_id })
+    }
+
+    fn removed(&self, write: PluginWrite) -> Result<bool, StoreError> {
+        match self.write_plugin(write)? {
+            PluginWritten::Removed(removed) => Ok(removed),
+            PluginWritten::Saved | PluginWritten::Grant(_) => Err(StoreError::ReplyAbandoned),
+        }
+    }
+
+    fn write_plugin(&self, write: PluginWrite) -> Result<PluginWritten, StoreError> {
+        crate::plugins::validate_write(&write)?;
+        let writer = self.writer.as_ref().ok_or(StoreError::Closed)?;
+        let (reply, result) = mpsc::sync_channel(1);
+        writer
+            .sender
+            .send(WriterRequest::Plugin { write, reply })
+            .map_err(|_| StoreError::WorkerUnavailable)?;
+        result.recv().map_err(|_| StoreError::WorkerUnavailable)?
+    }
+
     /// Creates a daily validated backup only while idle. This blocks on the existing writer queue.
     pub fn backup_if_due(
         &self,
@@ -467,6 +571,10 @@ enum WriterRequest {
         modified_at: i64,
         reply: mpsc::SyncSender<Result<(), StoreError>>,
     },
+    Plugin {
+        write: PluginWrite,
+        reply: mpsc::SyncSender<Result<PluginWritten, StoreError>>,
+    },
     /// D47 journal requests to apply in one transaction, whatever their categories.
     Deletions {
         requests: Vec<DeletionRequest>,
@@ -597,6 +705,10 @@ fn serve_writes(
             } => {
                 let result =
                     crate::site_zoom::write(&writer.connection, &host, factor, modified_at);
+                reply.send(result).map_err(|_| StoreError::ReplyAbandoned)?;
+            }
+            WriterRequest::Plugin { write, reply } => {
+                let result = crate::plugins::write(&writer.connection, &write);
                 reply.send(result).map_err(|_| StoreError::ReplyAbandoned)?;
             }
             WriterRequest::Deletions { requests, reply } => {

@@ -4,14 +4,15 @@
 //! It is a `Session` over synthetic services, so it keeps exactly the delivery
 //! order and request rules the per-plugin workers keep.
 
+mod grants;
 mod synthetic;
 
 use std::sync::Arc;
 
+pub use grants::SyntheticGrants;
 pub use synthetic::{SYNTHETIC_NOW, SyntheticHost, ViewRecord};
 
 use crate::bindings::syrinx::plugin::host::LogLevel;
-use crate::manifest::CapabilityKind;
 pub use crate::session::{CallResult, Declarations, DeclaredCommand};
 use crate::session::{Mediator, RequestIds, Session};
 use crate::{LoadedPlugin, PreparedPlugin, Runtime};
@@ -23,11 +24,20 @@ pub const HOST_VERSION: &str = "0.1.0-test-host";
 pub type TestHost = Session<SyntheticHost>;
 
 impl Session<SyntheticHost> {
-    /// Check the declarations and the component, then instantiate it.
+    /// Check the declarations and the component, then instantiate it with nothing granted.
     pub fn load(bytes: &[u8], declarations: Declarations) -> CallResult<Self> {
+        Self::load_with_grants(bytes, declarations, SyntheticGrants::new())
+    }
+
+    /// As `load`, under `grants`; keep a clone to grant or revoke while the plugin runs.
+    pub fn load_with_grants(
+        bytes: &[u8],
+        declarations: Declarations,
+        grants: SyntheticGrants,
+    ) -> CallResult<Self> {
         let runtime = Runtime::new()?;
         let prepared = Self::prepare(&runtime, bytes)?;
-        Self::from_prepared(&runtime, &prepared, declarations)
+        Self::from_prepared(&runtime, &prepared, declarations, grants)
     }
 
     /// Compile a component and resolve its imports once, to instantiate it many times.
@@ -39,19 +49,16 @@ impl Session<SyntheticHost> {
         LoadedPlugin::prepare(runtime, &component)
     }
 
-    /// Instantiate a prepared component under checked declarations. The test host grants
-    /// `storage`, so a plugin's settings can be tested; the owner's grants arrive with #136.
+    /// Instantiate a prepared component under checked declarations and synthetic grants,
+    /// which the host checks on every gated call as it checks the owner's.
     pub fn from_prepared(
         runtime: &Runtime,
         prepared: &PreparedPlugin<Mediator<SyntheticHost>>,
         declarations: Declarations,
+        grants: SyntheticGrants,
     ) -> CallResult<Self> {
         declarations.check()?;
-        let services = Mediator::new(
-            SyntheticHost::new(),
-            declarations,
-            vec![CapabilityKind::Storage],
-        );
+        let services = Mediator::new(SyntheticHost::new(), declarations, Arc::new(grants));
         let plugin = LoadedPlugin::from_prepared(runtime, prepared, services)?;
         Ok(Session::new(
             plugin,

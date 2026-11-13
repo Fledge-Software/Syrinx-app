@@ -47,6 +47,20 @@ pub fn bytes(what: &str, value: &str, max: usize) -> Result<(), PluginError> {
     Err(invalid(format!("{what} is larger than {max} bytes")))
 }
 
+/// A settings key: a bounded dotted id.
+pub fn settings_key(key: &str) -> Result<(), PluginError> {
+    bytes("settings key", key, limits::MAX_SETTINGS_KEY_BYTES)?;
+    id("settings key", key)
+}
+
+/// A settings value: opaque bytes, bounded.
+pub fn settings_value(value: &[u8]) -> Result<(), PluginError> {
+    if value.len() <= limits::MAX_SETTINGS_VALUE_BYTES {
+        return Ok(());
+    }
+    Err(invalid("the value is too large"))
+}
+
 /// JSON for a view: bounded and well formed.
 pub fn json(what: &str, value: &str) -> Result<(), PluginError> {
     bytes(what, value, limits::MAX_JSON_BYTES)?;

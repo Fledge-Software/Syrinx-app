@@ -6,7 +6,8 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::{Mutex, OnceLock};
 
-use syrinx_plugin_host::test_host::{Declarations, DeclaredCommand};
+use syrinx_plugin_host::manifest::CapabilityKind;
+use syrinx_plugin_host::test_host::{Declarations, DeclaredCommand, SyntheticGrants};
 
 /// A fixture: a package of the fixture workspace, built with at most one feature.
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
@@ -86,6 +87,13 @@ fn build(fixture: Fixture) -> Vec<u8> {
 }
 
 /// What the full fixture's manifest would declare.
+/// Grants the full fixture, plugin `test`, its settings, as the owner would at install.
+pub fn storage_granted() -> SyntheticGrants {
+    let grants = SyntheticGrants::new();
+    grants.grant("test", CapabilityKind::Storage);
+    grants
+}
+
 pub fn full_declarations() -> Declarations {
     let command = |id: &str, form: bool| DeclaredCommand {
         id: id.into(),

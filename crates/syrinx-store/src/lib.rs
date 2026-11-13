@@ -8,6 +8,7 @@ mod error;
 mod history;
 mod location;
 mod permissions;
+mod plugins;
 mod preferences;
 mod records;
 mod replay;
@@ -29,6 +30,10 @@ pub use location::{
     DirectoryLease, LocationError, LocationOperation, SessionControl, ShutdownState, StorageSession,
 };
 pub use permissions::{PermissionKind, RememberedPermission};
+pub use plugins::{
+    FolderAccess, MAX_PLUGIN_SETTING_KEY_BYTES, MAX_PLUGIN_SETTING_VALUE_BYTES,
+    MAX_PLUGIN_SETTINGS, PluginFolder, PluginGrant, PluginInstall, PluginState, StoredGrant,
+};
 pub use preferences::{MAX_SETTING_KEY_BYTES, MAX_SETTING_VALUE_BYTES, StoredPreferences};
 pub use replay::{AppliedDeletions, replay_deletions};
 pub use site_zoom::{MAX_SITE_ZOOM, MIN_SITE_ZOOM, is_default_zoom};

@@ -5,6 +5,7 @@ mod checks;
 pub mod deadline;
 mod engine;
 mod error;
+pub mod grants;
 mod identity;
 mod instance;
 pub mod limits;

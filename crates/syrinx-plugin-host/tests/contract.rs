@@ -11,15 +11,22 @@ use syrinx_plugin_host::bindings::exports::syrinx::plugin::forms::{
 use syrinx_plugin_host::bindings::exports::syrinx::plugin::search_feed::Change;
 use syrinx_plugin_host::bindings::syrinx::plugin::types::{Icon, Outcome, PluginError};
 use syrinx_plugin_host::deadline::Export;
+use syrinx_plugin_host::manifest::CapabilityKind;
 use syrinx_plugin_host::test_host::{SYNTHETIC_NOW, TestHost};
 use syrinx_plugin_host::{Failure, HostError, OUTPUT_LIMIT_BYTES, Runtime, limits};
 use wasmtime::Trap;
 
-use support::{FULL, MINIMAL, PLAIN_VARIANT, full_declarations, one_command, variant};
+use support::{
+    FULL, MINIMAL, PLAIN_VARIANT, full_declarations, one_command, storage_granted, variant,
+};
 
 fn full() -> TestHost {
-    let mut host =
-        TestHost::load(&support::bytes(FULL), full_declarations()).expect("the full fixture loads");
+    let mut host = TestHost::load_with_grants(
+        &support::bytes(FULL),
+        full_declarations(),
+        storage_granted(),
+    )
+    .expect("the full fixture loads");
     host.activate()
         .expect("activate runs")
         .expect("activate succeeds");
@@ -360,6 +367,50 @@ fn the_plain_host_imports_answer() {
     assert_eq!(host.changed_feeds(), ["test.items"]);
 }
 
+// The owner's grants (#136), through the synthetic grant store.
+
+#[test]
+fn a_plugin_granted_nothing_is_told_so_and_denied_its_settings_by_name() {
+    let mut host = TestHost::load(&support::bytes(FULL), full_declarations()).expect("loads");
+    host.activate().expect("runs").expect("activates");
+    assert!(logged(&host).contains(&"activate 0.1.0-test-host granted=0".to_owned()));
+    let echoed = host.run_command("test.echo").expect("runs");
+    assert!(
+        matches!(echoed, Err(PluginError::Denied(ref reason)) if reason.contains("storage")),
+        "{echoed:?}"
+    );
+}
+
+#[test]
+fn a_capability_revoked_while_in_use_answers_revoked_and_a_new_instance_denied() {
+    let grants = storage_granted();
+    let mut host =
+        TestHost::load_with_grants(&support::bytes(FULL), full_declarations(), grants.clone())
+            .expect("loads");
+    host.activate().expect("runs").expect("activates");
+    assert!(logged(&host).contains(&"activate 0.1.0-test-host granted=1".to_owned()));
+    assert_eq!(host.run_command("test.echo").expect("runs"), Ok(()));
+
+    grants.revoke("test", CapabilityKind::Storage);
+    host.apply_revocations().expect("applied");
+    let echoed = host.run_command("test.echo").expect("runs");
+    assert!(
+        matches!(echoed, Err(PluginError::Revoked(ref reason)) if reason.contains("storage")),
+        "{echoed:?}"
+    );
+    grants.grant("test", CapabilityKind::Storage);
+    assert_eq!(host.run_command("test.echo").expect("runs"), Ok(()));
+
+    grants.revoke("test", CapabilityKind::Storage);
+    let mut fresh = TestHost::load_with_grants(&support::bytes(FULL), full_declarations(), grants)
+        .expect("loads");
+    fresh.activate().expect("runs").expect("activates");
+    assert!(matches!(
+        fresh.run_command("test.echo").expect("runs"),
+        Err(PluginError::Denied(_))
+    ));
+}
+
 // The form rule and declarations.
 
 #[test]
@@ -492,8 +543,10 @@ fn deferred_calls_that_keep_deferring_more_past_the_limit_are_a_flood() {
 fn time_other_instances_spend_before_activation_is_not_charged_to_it() {
     let runtime = Runtime::new().expect("engine");
     let prepared = TestHost::prepare(&runtime, &support::bytes(FULL)).expect("compiles");
-    let instantiate =
-        || TestHost::from_prepared(&runtime, &prepared, full_declarations()).expect("loads");
+    let instantiate = || {
+        TestHost::from_prepared(&runtime, &prepared, full_declarations(), storage_granted())
+            .expect("loads")
+    };
     let mut later = instantiate();
     let mut busy = instantiate();
     busy.activate().expect("runs").expect("activated");

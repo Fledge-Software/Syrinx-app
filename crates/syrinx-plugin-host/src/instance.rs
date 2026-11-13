@@ -6,9 +6,11 @@ use std::time::Duration;
 use wasmtime::component::{Component, HasSelf, Linker};
 use wasmtime::{Engine, Store, StoreLimits, StoreLimitsBuilder};
 
+use crate::bindings::syrinx::plugin::types::Outcome;
 use crate::bindings::syrinx::plugin::{host, types};
 use crate::bindings::{LinkOptions, Plugin, PluginPre};
 use crate::deadline::{CallDeadline, Export};
+use crate::manifest::CapabilityKind;
 use crate::wasi::{self, WasiState};
 use crate::{Failure, HostError, Runtime, limits};
 
@@ -20,6 +22,13 @@ pub trait PluginHost: types::Host + host::Host + Send + 'static {
 
     /// The host closed `view`: the owner closed its tab, or the plugin refused to open it.
     fn view_closed(&mut self, _view: u64) {}
+
+    /// The owner withdrew `kind` while this instance held it. Close every resource opened
+    /// under it, abandon its pending requests, and return each abandoned request with the
+    /// outcome it settles with: `uncertain` if it may have had an effect. Never resubmit one.
+    fn capability_revoked(&mut self, _kind: CapabilityKind) -> Vec<(u64, Outcome)> {
+        Vec::new()
+    }
 }
 
 /// A store's data: the WASI state, the resource limits and the host's own state.

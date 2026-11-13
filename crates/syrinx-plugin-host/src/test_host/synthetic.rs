@@ -58,11 +58,6 @@ impl SyntheticHost {
     }
 }
 
-fn check_settings_key(key: &str) -> Result<(), PluginError> {
-    validate::bytes("settings key", key, limits::MAX_SETTINGS_KEY_BYTES)?;
-    validate::id("settings key", key)
-}
-
 impl PluginHost for SyntheticHost {
     fn view_closed(&mut self, view: u64) {
         self.views.remove(&view);
@@ -76,16 +71,12 @@ impl host::Host for SyntheticHost {
         self.note(level, message);
     }
 
+    /// The mediator has checked the grant and the key's and value's bounds.
     fn settings_get(&mut self, key: String) -> Result<Option<Vec<u8>>, PluginError> {
-        check_settings_key(&key)?;
         Ok(self.settings.get(&key).cloned())
     }
 
     fn settings_set(&mut self, key: String, value: Vec<u8>) -> Result<(), PluginError> {
-        check_settings_key(&key)?;
-        if value.len() > limits::MAX_SETTINGS_VALUE_BYTES {
-            return Err(PluginError::InvalidInput("the value is too large".into()));
-        }
         let is_new = !self.settings.contains_key(&key);
         if is_new && self.settings.len() == limits::MAX_SETTINGS_KEYS {
             return Err(PluginError::InvalidInput("too many settings keys".into()));
