@@ -1,5 +1,6 @@
 //! Builds Back and Forward's menu of the tab's recent pages, which hangs under its button and
-//! jumps straight to a row (#126; the owner chose this design on 2026-10-28).
+//! jumps straight to a row, and closes it when its rows go stale (#126; the owner chose this
+//! design on 2026-10-28).
 
 use syrinx_core::HistoryDirection;
 

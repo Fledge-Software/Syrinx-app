@@ -344,8 +344,7 @@ enum AfterClose {
 }
 
 impl MenuAction {
-    /// What follows this action's close. A queued key or click must not reactivate Syrinx
-    /// after Alt Tab, so it acts only while Syrinx is `in_front`.
+    /// What follows this action's close; a key or click acts only while Syrinx is `in_front`.
     fn after_close(self, in_front: bool) -> AfterClose {
         match self {
             MenuAction::Deactivated => AfterClose::RecordDismissal,
