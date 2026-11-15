@@ -611,21 +611,7 @@ fn serve_writes(
                 write,
                 limit,
                 reply,
-            } => {
-                let result = plugins::write_within(&writer.connection, &write, limit);
-                // A connection left inside a transaction must not take another write.
-                let left_open = !writer.connection.is_autocommit();
-                // A caller that gave up on a bounded write no longer listens; nothing is lost.
-                if reply.send(result).is_err() && limit.is_none() {
-                    return Err(StoreError::ReplyAbandoned);
-                }
-                if left_open {
-                    return Err(StoreError::Database {
-                        operation: StoreOperation::Rollback,
-                        code: None,
-                    });
-                }
-            }
+            } => serve_plugin_write(&writer.connection, &write, limit, &reply)?,
             WriterRequest::Deletions { requests, reply } => {
                 let result = replay::apply_live(&mut writer.connection, &requests);
                 reply.send(result).map_err(|_| StoreError::ReplyAbandoned)?;
@@ -714,6 +700,28 @@ fn serve_writes(
             }
         }
     }
+}
+
+/// Apply one plugin write and answer it; an error stops the writer.
+fn serve_plugin_write(
+    connection: &Connection,
+    write: &PluginWrite,
+    limit: Option<plugins::WriteLimit>,
+    reply: &mpsc::SyncSender<Result<PluginWritten, StoreError>>,
+) -> Result<(), StoreError> {
+    let result = plugins::write_within(connection, write, limit);
+    let stop = must_stop(connection);
+    // A caller that gave up on a bounded write no longer listens; nothing is lost.
+    if reply.send(result).is_err() && limit.is_none() {
+        return Err(StoreError::ReplyAbandoned);
+    }
+    stop.map_or(Ok(()), Err)
+}
+
+/// Why the writer must take no further write: its connection was left inside a
+/// transaction, as a failed commit or rollback can leave it.
+fn must_stop(connection: &Connection) -> Option<StoreError> {
+    (!connection.is_autocommit()).then_some(StoreError::TransactionLeftOpen)
 }
 
 struct LeasedConnection {

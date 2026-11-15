@@ -250,14 +250,15 @@ const SQLITE_BUSY: i32 = 5;
 /// write lock waits, and the deadline is checked again before COMMIT, so a write that
 /// overran is rolled back. Only the COMMIT's own disk write can still end after the
 /// deadline. The writer stops if a plugin write ever leaves its connection inside a
-/// transaction (`serve_writes`).
+/// transaction (`must_stop`).
 pub(super) fn write_within(
     connection: &Connection,
     write: &PluginWrite,
     limit: Option<WriteLimit>,
 ) -> Result<PluginWritten, StoreError> {
+    // The owner's own write waits as every owner's write does.
     let Some(limit) = limit else {
-        return unbounded(connection, write);
+        return crate::plugins::write(connection, write);
     };
     if Instant::now() > limit.start_by {
         return Err(StoreError::Busy);
@@ -286,42 +287,4 @@ pub(super) fn finish_by<T>(
         Ok(value)
     });
     crate::records::finish_transaction(transaction, ready)
-}
-
-/// The owner's own plugin write, waiting as every owner's write does.
-fn unbounded(connection: &Connection, write: &PluginWrite) -> Result<PluginWritten, StoreError> {
-    #[cfg(test)]
-    if let Some(written) = tests_seam::leave_open(connection, write) {
-        return written;
-    }
-    crate::plugins::write(connection, write)
-}
-
-/// A seam for the writer's own test: a write under this key opens a transaction and leaves
-/// it open, as a failed commit or rollback could.
-#[cfg(test)]
-pub(super) mod tests_seam {
-    use rusqlite::Connection;
-
-    use crate::error::{StoreError, StoreOperation, database_error};
-    use crate::plugins::{PluginWrite, PluginWritten};
-
-    pub(in crate::engine) const LEAVE_OPEN_KEY: &str = "test.leave-transaction-open";
-
-    pub(super) fn leave_open(
-        connection: &Connection,
-        write: &PluginWrite,
-    ) -> Option<Result<PluginWritten, StoreError>> {
-        let PluginWrite::Setting { key, .. } = write else {
-            return None;
-        };
-        if key != LEAVE_OPEN_KEY {
-            return None;
-        }
-        let opened = connection
-            .execute_batch("BEGIN")
-            .map(|()| PluginWritten::Saved)
-            .map_err(|error| database_error(StoreOperation::BeginWrite, error));
-        Some(opened)
-    }
 }

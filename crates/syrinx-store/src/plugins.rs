@@ -25,7 +25,7 @@ pub(crate) const GRANT_TABLE: &str = "CREATE TABLE plugin_grant (
     grant_id INTEGER PRIMARY KEY NOT NULL,
     plugin_id TEXT NOT NULL REFERENCES plugin_install(plugin_id) ON DELETE CASCADE,
     capability TEXT NOT NULL CHECK(length(capability) BETWEEN 1 AND 32),
-    scope_json TEXT NOT NULL CHECK(length(scope_json) <= 4096 AND json_valid(scope_json)),
+    scope_json TEXT NOT NULL CHECK(length(scope_json) <= 65536 AND json_valid(scope_json)),
     granted_at INTEGER NOT NULL CHECK(granted_at >= 0),
     granted_for_manifest BLOB NOT NULL CHECK(length(granted_for_manifest) = 32),
     UNIQUE(plugin_id, capability),
@@ -55,6 +55,9 @@ pub(crate) const SETTING_TABLE: &str = "CREATE TABLE plugin_setting (
 pub const MAX_PLUGIN_SETTING_KEY_BYTES: usize = 64;
 pub const MAX_PLUGIN_SETTING_VALUE_BYTES: usize = 64 * 1024;
 pub const MAX_PLUGIN_SETTINGS: usize = 256;
+
+/// The largest grant scope kept, as JSON: no smaller than a whole manifest, which lists it.
+pub const MAX_PLUGIN_SCOPE_BYTES: usize = 64 * 1024;
 
 /// Whether an installed plugin may run.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -211,7 +214,7 @@ fn validate_install(install: &PluginInstall) -> Result<(), StoreError> {
 
 fn validate_grant(grant: &PluginGrant) -> Result<(), StoreError> {
     validate_name(&grant.capability, 32)?;
-    if grant.scope_json.len() > 4096 || grant.granted_at < 0 {
+    if grant.scope_json.len() > MAX_PLUGIN_SCOPE_BYTES || grant.granted_at < 0 {
         return Err(invalid());
     }
     Ok(())

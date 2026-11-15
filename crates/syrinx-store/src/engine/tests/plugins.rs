@@ -566,19 +566,60 @@ fn a_transaction_sqlite_already_ended_keeps_the_write_s_own_error() {
 }
 
 #[test]
-fn a_writer_left_inside_a_transaction_takes_no_further_write() {
+fn a_connection_left_inside_a_transaction_must_stop_the_writer() {
     let directory = TestDirectory::new();
-    let store = installed(&directory, &["notes"]);
-    let leave_open = crate::engine::plugins::tests_seam::LEAVE_OPEN_KEY;
+    let connection = directory.connection();
+    assert_eq!(crate::engine::must_stop(&connection), None);
+    // As a failed commit or rollback can leave the writer's connection.
+    connection
+        .execute_batch("BEGIN")
+        .expect("open a synthetic transaction");
     assert_eq!(
-        store.save_plugin_setting("notes".to_owned(), leave_open.to_owned(), Vec::new()),
+        crate::engine::must_stop(&connection),
+        Some(StoreError::TransactionLeftOpen)
+    );
+    connection
+        .execute_batch("ROLLBACK")
+        .expect("end the synthetic transaction");
+    close(connection);
+    directory.cleanup();
+}
+
+#[test]
+fn a_writer_left_inside_a_transaction_answers_the_write_then_stops() {
+    let directory = TestDirectory::new();
+    installed(&directory, &["notes"])
+        .shutdown()
+        .expect("close synthetic store");
+    let connection = directory.connection();
+    let setting = |key: &str| PluginWrite::Setting {
+        plugin_id: "notes".to_owned(),
+        key: key.to_owned(),
+        value: vec![1],
+    };
+    let (reply, answer) = std::sync::mpsc::sync_channel(1);
+    assert_eq!(
+        crate::engine::serve_plugin_write(&connection, &setting("notes.first"), None, &reply),
         Ok(()),
-        "the seam's write is answered before the writer stops"
+        "a write that ends its own statement keeps the writer serving"
+    );
+    assert_eq!(answer.try_recv(), Ok(Ok(PluginWritten::Saved)));
+
+    connection
+        .execute_batch("BEGIN")
+        .expect("open a synthetic transaction");
+    assert_eq!(
+        crate::engine::serve_plugin_write(&connection, &setting("notes.second"), None, &reply),
+        Err(StoreError::TransactionLeftOpen)
     );
     assert_eq!(
-        store.save_plugin_setting("notes".to_owned(), "notes.after".to_owned(), vec![1]),
-        Err(StoreError::WorkerUnavailable)
+        answer.try_recv(),
+        Ok(Ok(PluginWritten::Saved)),
+        "the write is answered before the writer stops"
     );
-    assert!(store.shutdown().is_err(), "the writer's stop is reported");
+    connection
+        .execute_batch("ROLLBACK")
+        .expect("end the synthetic transaction");
+    close(connection);
     directory.cleanup();
 }

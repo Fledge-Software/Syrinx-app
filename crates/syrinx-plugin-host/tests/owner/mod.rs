@@ -459,6 +459,28 @@ fn a_plugin_that_is_installed_but_not_running_can_be_revoked_and_removed() {
         }),
         "a disabled plugin is not loaded"
     );
+    let mut update = install_record("update");
+    update.state = PluginState::UpdateHeld;
+    store
+        .save_plugin_install(update.clone())
+        .expect("a held update");
+    let registry_update = self::registry("update", STORAGE);
+    let held = runtime.load(
+        registry_update.get("update").expect("registered"),
+        Arc::from(support::bytes(FULL)),
+    );
+    assert_eq!(
+        held,
+        Err(OwnerError::NotEnabled {
+            plugin: "update".into(),
+            held_for_update: true
+        }),
+        "a plugin whose update waits for review is not loaded"
+    );
+    assert_eq!(
+        held.expect_err("held").to_string(),
+        "update is installed but held until you review its update"
+    );
     assert_eq!(
         runtime.grant("absent", CapabilityKind::Storage, 2),
         Err(OwnerError::NotInstalled("absent".into())),
@@ -477,7 +499,11 @@ fn a_plugin_that_is_installed_but_not_running_can_be_revoked_and_removed() {
         .expect("revoked without a worker");
     assert_eq!(store.plugin_grants(), Ok(Vec::new()));
     runtime.remove("held").expect("removed without a worker");
-    assert_eq!(store.plugin_installs(), Ok(Vec::new()));
+    assert_eq!(
+        store.plugin_installs(),
+        Ok(vec![update]),
+        "only the other is left"
+    );
     assert_eq!(store.plugin_setting("held", "held.key"), Ok(None));
     assert_eq!(
         runtime.remove("held"),
@@ -619,4 +645,41 @@ fn a_store_call_past_its_budget_reaches_the_plugin_as_unavailable() {
     drop(services);
     let store = Arc::try_unwrap(store).expect("nothing else holds the store");
     store.shutdown().expect("the store closes");
+}
+
+/// An `index` request listing `feeds`, each declared as a search feed.
+fn index_request(feeds: &[String]) -> String {
+    let mut text = String::new();
+    for feed in feeds {
+        text.push_str(&format!(
+            "[[contributes.search-feeds]]\nid = \"{feed}\"\ntitle = \"Feed\"\ntiers = [\"catalogue\"]\n"
+        ));
+    }
+    let listed: Vec<String> = feeds.iter().map(|feed| format!("\"{feed}\"")).collect();
+    text.push_str(&format!(
+        "[[capabilities]]\nkind = \"index\"\nfeeds = [{}]\nreason = \"Indexes synthetic items.\"\nrequired = false\n",
+        listed.join(", ")
+    ));
+    text
+}
+
+#[test]
+fn an_index_grant_keeps_every_feed_a_valid_manifest_asks_for() {
+    let temp = TempStore::new();
+    let store = temp.open();
+    let mut runtime = start(&store);
+    // Feeds at the id limit, more than a 4 KiB scope could list, in a manifest under its own.
+    let feeds: Vec<String> = (0..80)
+        .map(|index| format!("test.feed-{index:0>54}"))
+        .collect();
+    install(&mut runtime, "test", &index_request(&feeds));
+
+    runtime
+        .grant("test", CapabilityKind::Index, 20)
+        .expect("a manifest Syrinx accepted is granted what it asks for");
+    let stored = store.plugin_grants().expect("grants");
+    assert_eq!(stored.len(), 1);
+    let scope = &stored[0].grant.scope_json;
+    assert!(feeds.iter().all(|feed| scope.contains(feed.as_str())));
+    close(runtime, store);
 }

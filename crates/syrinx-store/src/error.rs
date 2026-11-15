@@ -89,6 +89,8 @@ pub enum StoreError {
     WorkerUnavailable,
     /// A bounded call ran out of time waiting for a reader, the writer or SQLite's lock.
     Busy,
+    /// The writer's connection was left inside a transaction, so it took no further write.
+    TransactionLeftOpen,
     WorkerPanicked,
     ReplyAbandoned,
     ReaderPoisoned,

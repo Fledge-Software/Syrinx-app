@@ -29,6 +29,8 @@ const _: () = assert!(limits::MAX_SETTINGS_KEY_BYTES == syrinx_store::MAX_PLUGIN
 const _: () =
     assert!(limits::MAX_SETTINGS_VALUE_BYTES == syrinx_store::MAX_PLUGIN_SETTING_VALUE_BYTES);
 const _: () = assert!(limits::MAX_SETTINGS_KEYS == syrinx_store::MAX_PLUGIN_SETTINGS);
+// A scope lists only what its manifest names, so any accepted manifest's scope fits the store.
+const _: () = assert!(crate::manifest::MAX_MANIFEST_BYTES <= syrinx_store::MAX_PLUGIN_SCOPE_BYTES);
 
 /// Why the runtime refused or could not finish an owner's action.
 #[derive(Debug, Clone, PartialEq, Eq)]
