@@ -29,7 +29,8 @@ const DOCUMENT_ROW: u64 = 0;
 
 pub struct AdapterStore {
     index: FullText,
-    /// The revision each id was last written at by this process; reopening starts afresh.
+    /// The revision each id was last staged at by this process. Reopening starts afresh, so
+    /// it is valid only within one process, which is all the bake-off's run needs.
     revisions: HashMap<usize, u64>,
     /// Read again by `verify`, which scans the stored rows without the adapter.
     directory: PathBuf,
@@ -191,6 +192,9 @@ fn page(document: &Document, revision: u64) -> FullTextDocument {
 /// Every stored row in the folder, after checking no segment keeps deleted rows.
 fn stored_rows(directory: &Path) -> Result<Vec<StoredRow>> {
     let index = Index::open_in_dir(directory)?;
+    if !index.validate_checksum()?.is_empty() {
+        return Err("Tantivy checksum mismatch".into());
+    }
     let schema = index.schema();
     let fields = [
         schema.get_field("kind")?,

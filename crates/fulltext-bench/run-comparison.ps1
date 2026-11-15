@@ -7,6 +7,13 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+# Accept a comma-joined list too, as `powershell -File` passes one string, and refuse an
+# unknown engine before any quiet-window wait.
+$engineList = @($Engines | ForEach-Object { $_ -split ',' } | ForEach-Object { $_.Trim() } |
+    Where-Object { $_ })
+foreach ($name in $engineList) {
+    if ($name -notin @('fts5', 'tantivy', 'adapter')) { throw "Unknown engine '$name'." }
+}
 $workspace = (Resolve-Path (Join-Path $PSScriptRoot '../..')).Path
 $executable = Join-Path $workspace 'target/local/fulltext-bench.exe'
 $loadLog = Join-Path $workspace "target/$Label-load.csv"
@@ -61,8 +68,7 @@ function Write-Load($eventName, $load) {
 # Alternate engine order by repetition; both corpora use the same seed and count.
 foreach ($corpus in @('overlap', 'broad')) {
     foreach ($run in 1..3) {
-        # Accept a comma-joined list too, as `powershell -File` passes one string.
-        $order = @($Engines | ForEach-Object { $_ -split ',' })
+        $order = @($engineList)
         if ($run -eq 2) { [array]::Reverse($order) }
         foreach ($engine in $order) {
             $name = "$Label-$corpus-$engine-$run"

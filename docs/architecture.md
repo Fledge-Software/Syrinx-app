@@ -103,8 +103,9 @@ graph TD
 ```
 
 `syrinx-core`, `syrinx-ui` and `syrinx-update` depend on no other Syrinx
-crate, and nothing depends on `fulltext-bench`. Development-only dependencies are
-left out: `syrinx-app` and `syrinx-platform` also use `rusqlite` in tests.
+crate, and nothing depends on `fulltext-bench`. Development-only
+dependencies are left out: `syrinx-app` and `syrinx-platform` also use
+`rusqlite` in tests.
 
 ### syrinx-app
 
@@ -223,6 +224,7 @@ engine, `adapter`, runs the same workload through `syrinx-search`'s
 production index (#53), so its latency and start-up cost compare directly
 with #52's numbers. The gate refuses any crate that depends on it.
 
+- **Syrinx crates:** `syrinx-search`.
 - **Outside crates:** `rusqlite`, `tantivy`.
 
 ### The boundaries are checked, not hoped for

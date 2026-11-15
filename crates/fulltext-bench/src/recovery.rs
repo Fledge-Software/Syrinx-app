@@ -34,15 +34,24 @@ pub fn writer(engine: &str, directory: &Path) -> Result<()> {
     Err("writer was not killed by its parent".into())
 }
 
-/// Stages the same interrupted work through the production adapter, which commits nothing.
+/// Phantom pages the adapter's writer stages: enough distinct words to pass its 32 MB
+/// indexing budget, so Tantivy flushes an uncommitted segment to disk before the kill.
+const ADAPTER_PHANTOMS: usize = 256;
+
+/// Stages interrupted work through the production adapter, which commits nothing.
+///
+/// Unlike the tantivy engine it cannot prepare a commit from outside, so it relies on the
+/// budget flush to leave orphaned segment files for the reopen to collect.
 fn adapter_writer(directory: &Path) -> Result<()> {
     let mut store = crate::adapter_store::AdapterStore::open(directory)?;
     let phantoms: Vec<_> = [3, 1005]
         .into_iter()
-        .chain(1_000_000..1_000_064)
+        .chain(1_000_000..1_000_000 + ADAPTER_PHANTOMS)
         .map(|id| {
             let mut document = corpus::document(id);
-            document.body = "interruptedphantom ".repeat(8192);
+            document.body = (0..8192)
+                .map(|word| format!("interruptedphantom phantom{id}x{word} "))
+                .collect();
             document
         })
         .collect();
@@ -96,13 +105,7 @@ pub fn interrupt(engine: &str, directory: &Path) -> Result<()> {
     if status.success() {
         return Err("writer exited successfully instead of being killed".into());
     }
-    // The adapter cannot prepare a commit from outside, so its staged work may stay in memory.
-    if engine == "adapter" {
-        let after = crate::disk_size(directory)?;
-        println!("crash_staged_extra_bytes,{}", after.saturating_sub(before));
-        return Ok(());
-    }
-    if engine == "tantivy" {
+    if engine == "tantivy" || engine == "adapter" {
         let after = crate::disk_size(directory)?;
         if after <= before {
             return Err("no prepared segment bytes at the crash point".into());

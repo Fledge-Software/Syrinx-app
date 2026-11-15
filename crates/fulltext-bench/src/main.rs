@@ -118,9 +118,10 @@ fn run(directory: &Path, count: usize, name: &str, corpus: Corpus) -> Result<()>
     })?;
     // Time reopening apart from each engine's own, differently shaped verification.
     let mut recovered = timed("reopen", || Engine::open(name, directory))?;
+    timed("verify_after_reopen", || recovered.verify(expected))?;
     // Syrinx expires page text at every start (D40), so start-up costs a reopen and this.
     timed("startup_expiry", || recovered.expire())?;
-    timed("verify_after_reopen", || recovered.verify(expected))?;
+    recovered.verify(expected)?;
     recovered.close()?;
     let mut recovered = Engine::open(name, directory)?;
     let stale: Vec<_> = (0..2000)
