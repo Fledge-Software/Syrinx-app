@@ -18,7 +18,11 @@ warn() {
 
 package=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 bin_dir="$HOME/.local/bin"
-data_home="${XDG_DATA_HOME:-$HOME/.local/share}"
+# The XDG spec says a relative XDG_DATA_HOME is invalid; ignore it, as the app does.
+case "${XDG_DATA_HOME:-}" in
+    /*) data_home="$XDG_DATA_HOME" ;;
+    *) data_home="$HOME/.local/share" ;;
+esac
 applications="$data_home/applications"
 icons="$data_home/icons/hicolor/256x256/apps"
 program="$bin_dir/syrinx"
