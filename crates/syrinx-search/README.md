@@ -138,3 +138,10 @@ character boundary, with highlighted byte ranges. Snippet terms
 for a prefix are expanded by hand, since Tantivy's own prefix query leaves them
 out (see `docs/dev/trapstoknow.md`). Documents, hits, requests and errors
 never print ids, titles or text.
+
+Its speed is measured with the bake-off's harness, on the same synthetic
+corpora and queries as #52: `fulltext-bench NEW_FOLDER 100000 adapter broad`,
+or `crates/fulltext-bench/run-comparison.ps1 -Engines fts5,tantivy,adapter`
+on a quiet machine. The adapter has no phrase or `OR` queries, so those two
+lines read `unsupported`, and its hit counts stop at 1,000. Start-up costs the
+`reopen` and `startup_expiry` lines together.

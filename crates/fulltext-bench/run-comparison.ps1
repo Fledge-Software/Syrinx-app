@@ -1,7 +1,9 @@
 # Wait for other builds before each fresh-process synthetic measurement.
 param(
     [string]$Label = 'p1-23-comparison',
-    [int]$QuietWaitMinutes = 10
+    [int]$QuietWaitMinutes = 10,
+    # Add 'adapter' to measure the production index (#53) against the same workload.
+    [string[]]$Engines = @('fts5', 'tantivy')
 )
 
 $ErrorActionPreference = 'Stop'
@@ -59,8 +61,10 @@ function Write-Load($eventName, $load) {
 # Alternate engine order by repetition; both corpora use the same seed and count.
 foreach ($corpus in @('overlap', 'broad')) {
     foreach ($run in 1..3) {
-        $engines = if ($run -eq 2) { @('tantivy', 'fts5') } else { @('fts5', 'tantivy') }
-        foreach ($engine in $engines) {
+        # Accept a comma-joined list too, as `powershell -File` passes one string.
+        $order = @($Engines | ForEach-Object { $_ -split ',' })
+        if ($run -eq 2) { [array]::Reverse($order) }
+        foreach ($engine in $order) {
             $name = "$Label-$corpus-$engine-$run"
             $deadline = [DateTime]::UtcNow.AddMinutes($QuietWaitMinutes)
             do {

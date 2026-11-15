@@ -8,6 +8,8 @@ license = "MPL-2.0"
 
 [dependencies]
 rusqlite.workspace = true
+# The production index (#53), measured against the same workload as the two engines.
+syrinx-search = { path = "../syrinx-search" }
 tantivy.workspace = true
 
 [lints]

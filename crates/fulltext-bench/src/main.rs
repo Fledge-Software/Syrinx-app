@@ -1,5 +1,6 @@
 //! Compares disposable synthetic full-text caches; no product crate uses this harness.
 
+mod adapter_store;
 mod corpus;
 mod engine;
 mod recovery;
@@ -26,11 +27,9 @@ fn main() -> Result<()> {
             Path::new(arguments.get(3).ok_or("missing crash path")?),
         );
     }
-    let directory = PathBuf::from(
-        arguments
-            .get(1)
-            .ok_or("usage: fulltext-bench NEW_DIRECTORY [COUNT] [fts5|tantivy] [overlap|broad]")?,
-    );
+    let directory = PathBuf::from(arguments.get(1).ok_or(
+        "usage: fulltext-bench NEW_DIRECTORY [COUNT] [fts5|tantivy|adapter] [overlap|broad]",
+    )?);
     let count = arguments
         .get(2)
         .map(|value| value.parse())
@@ -40,8 +39,8 @@ fn main() -> Result<()> {
         return Err("use at least 2000 documents".into());
     }
     let engine = arguments.get(3).map(String::as_str).unwrap_or("fts5");
-    if !matches!(engine, "fts5" | "tantivy") {
-        return Err("engine must be fts5 or tantivy".into());
+    if !matches!(engine, "fts5" | "tantivy" | "adapter") {
+        return Err("engine must be fts5, tantivy or adapter".into());
     }
     let corpus = match arguments.get(4).map(String::as_str).unwrap_or("overlap") {
         "overlap" => Corpus::Overlap,
@@ -118,7 +117,9 @@ fn run(directory: &Path, count: usize, name: &str, corpus: Corpus) -> Result<()>
         recovery::interrupt(name, directory)
     })?;
     // Time reopening apart from each engine's own, differently shaped verification.
-    let recovered = timed("reopen", || Engine::open(name, directory))?;
+    let mut recovered = timed("reopen", || Engine::open(name, directory))?;
+    // Syrinx expires page text at every start (D40), so start-up costs a reopen and this.
+    timed("startup_expiry", || recovered.expire())?;
     timed("verify_after_reopen", || recovered.verify(expected))?;
     recovered.close()?;
     let mut recovered = Engine::open(name, directory)?;
@@ -141,6 +142,10 @@ fn run(directory: &Path, count: usize, name: &str, corpus: Corpus) -> Result<()>
 fn queries(engine: &Engine) -> Result<()> {
     // Measure parsing, ranking, top-20 retrieval and bounded snippets together.
     for query in corpus::QUERIES {
+        if !engine.supports(query) {
+            println!("query,{query},unsupported");
+            continue;
+        }
         let mut samples = Vec::new();
         let mut returned = 0usize;
         for _ in 0..101 {

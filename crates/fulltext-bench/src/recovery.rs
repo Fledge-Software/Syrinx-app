@@ -8,6 +8,9 @@ use std::{
 };
 
 pub fn writer(engine: &str, directory: &Path) -> Result<()> {
+    if engine == "adapter" {
+        return adapter_writer(directory);
+    }
     if engine == "tantivy" {
         let mut store = crate::tantivy_store::TantivyStore::open(directory)?;
         store.remove(5);
@@ -27,6 +30,24 @@ pub fn writer(engine: &str, directory: &Path) -> Result<()> {
         document.body = "interruptedphantom ".repeat(8192);
         store::insert(&connection, &document)?;
     }
+    signal_and_wait()?;
+    Err("writer was not killed by its parent".into())
+}
+
+/// Stages the same interrupted work through the production adapter, which commits nothing.
+fn adapter_writer(directory: &Path) -> Result<()> {
+    let mut store = crate::adapter_store::AdapterStore::open(directory)?;
+    let phantoms: Vec<_> = [3, 1005]
+        .into_iter()
+        .chain(1_000_000..1_000_064)
+        .map(|id| {
+            let mut document = corpus::document(id);
+            document.body = "interruptedphantom ".repeat(8192);
+            document
+        })
+        .collect();
+    store.stage(&[], &[5])?;
+    store.stage(&phantoms, &[])?;
     signal_and_wait()?;
     Err("writer was not killed by its parent".into())
 }
@@ -74,6 +95,12 @@ pub fn interrupt(engine: &str, directory: &Path) -> Result<()> {
     }
     if status.success() {
         return Err("writer exited successfully instead of being killed".into());
+    }
+    // The adapter cannot prepare a commit from outside, so its staged work may stay in memory.
+    if engine == "adapter" {
+        let after = crate::disk_size(directory)?;
+        println!("crash_staged_extra_bytes,{}", after.saturating_sub(before));
+        return Ok(());
     }
     if engine == "tantivy" {
         let after = crate::disk_size(directory)?;
