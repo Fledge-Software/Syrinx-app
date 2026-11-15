@@ -37,6 +37,26 @@ impl BrowserView {
         };
         self.show_menu_rows(kind, rows, opening, window, cx);
     }
+
+    /// Closes an open history menu whose rows went stale as Escape does, so the keys go back
+    /// to the page (review of #213; trap: "Keys go to the page while GPUI still shows a
+    /// caret"). Its rows would otherwise jump to the wrong page.
+    pub(in crate::ui) fn dismiss_stale_history_menu(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(action) = stale_history_close(self.open_menu_kind()) else {
+            return;
+        };
+        self.close_menu_by(action, window, cx);
+    }
+}
+
+/// The action that closes the open menu when the history menu's rows go stale: Escape's, for
+/// a history menu; any other menu stays open.
+fn stale_history_close(open: Option<MenuKind>) -> Option<MenuAction> {
+    matches!(open, Some(MenuKind::History(_))).then_some(MenuAction::Dismiss)
 }
 
 /// The menu's rows: as many pages as fit in `available` logical pixels, nearest first, then
@@ -204,6 +224,31 @@ mod tests {
 
     fn shown(face: RowFace) -> (String, Option<String>) {
         (face.label, face.host)
+    }
+
+    #[test]
+    fn a_stale_history_menu_closes_as_escape_and_gives_the_keys_back() {
+        // #214: closing it without returning focus left the keys on the main window (#213).
+        for direction in [HistoryDirection::Back, HistoryDirection::Forward] {
+            let action = stale_history_close(Some(MenuKind::History(direction)))
+                .expect("a stale history menu closes");
+            assert!(matches!(action, MenuAction::Dismiss), "{direction:?}");
+            assert_eq!(action.after_close(true), AfterClose::ReturnKeys);
+        }
+    }
+
+    #[test]
+    fn stale_history_rows_leave_any_other_menu_open() {
+        for open in [
+            None,
+            Some(MenuKind::Page),
+            Some(MenuKind::Sidebar),
+            Some(MenuKind::Downloads),
+            Some(MenuKind::Row),
+            Some(MenuKind::Confirm),
+        ] {
+            assert!(stale_history_close(open).is_none(), "{open:?}");
+        }
     }
 
     #[test]

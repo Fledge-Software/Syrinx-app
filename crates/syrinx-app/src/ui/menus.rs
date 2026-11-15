@@ -332,6 +332,33 @@ enum MenuAction {
     Download(u64, DownloadControl),
 }
 
+/// What a closing menu's action does once the menu is gone.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum AfterClose {
+    /// Remember which menu closed, so the press that closed it does not reopen it.
+    RecordDismissal,
+    /// Give the keys back where the menu took them from (`return_menu_focus`).
+    ReturnKeys,
+    Run(MenuItem),
+    Nothing,
+}
+
+impl MenuAction {
+    /// What follows this action's close. A queued key or click must not reactivate Syrinx
+    /// after Alt Tab, so it acts only while Syrinx is `in_front`.
+    fn after_close(self, in_front: bool) -> AfterClose {
+        match self {
+            MenuAction::Deactivated => AfterClose::RecordDismissal,
+            MenuAction::Dismiss if in_front => AfterClose::ReturnKeys,
+            MenuAction::Choose(item) if in_front => AfterClose::Run(item),
+            MenuAction::Dismiss
+            | MenuAction::Choose(_)
+            | MenuAction::Zoom(_)
+            | MenuAction::Download(..) => AfterClose::Nothing,
+        }
+    }
+}
+
 /// Where a requested menu opens.
 struct MenuRequest {
     generation: u64,
@@ -545,13 +572,14 @@ impl BrowserView {
             .collect()
     }
 
-    /// Closes the open menu as Escape does: the keys go back where it took them from, if
-    /// Syrinx is in front, as every other close does.
-    pub(super) fn dismiss_menu(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    /// Closes the open menu, if any, as `action` from its popup would. `MenuAction::Dismiss`
+    /// closes it as Escape does: the keys go back where it took them from, if Syrinx is in
+    /// front, as every other close does.
+    fn close_menu_by(&mut self, action: MenuAction, window: &mut Window, cx: &mut Context<Self>) {
         let Some(generation) = self.menu.as_ref().map(|menu| menu.generation) else {
             return;
         };
-        self.apply_menu_action(generation, MenuAction::Dismiss, window, cx);
+        self.apply_menu_action(generation, action, window, cx);
     }
 
     /// Which menu is open or opening, if any.
@@ -732,19 +760,16 @@ impl BrowserView {
             asked: menu.asked.clone(),
         };
         self.retire_menu(cx);
-        match action {
-            MenuAction::Deactivated => {
+        match action.after_close(in_front) {
+            AfterClose::RecordDismissal => {
                 self.menu_dismissal = Some(MenuDismissal {
                     kind,
                     at: Instant::now(),
                 });
             }
-            MenuAction::Dismiss if in_front => self.return_menu_focus(origin.returns, window, cx),
-            MenuAction::Choose(item) if in_front => self.run_menu_item(item, origin, window, cx),
-            MenuAction::Dismiss
-            | MenuAction::Choose(_)
-            | MenuAction::Zoom(_)
-            | MenuAction::Download(..) => {}
+            AfterClose::ReturnKeys => self.return_menu_focus(origin.returns, window, cx),
+            AfterClose::Run(item) => self.run_menu_item(item, origin, window, cx),
+            AfterClose::Nothing => {}
         }
         cx.notify();
     }
