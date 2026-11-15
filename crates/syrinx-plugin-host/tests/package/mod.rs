@@ -38,7 +38,7 @@ activation = ["on-command", "on-view", "on-search"]
 }
 
 /// A manifest for `plugin` declaring what the full fixture implements.
-fn manifest_text(plugin: &str) -> String {
+pub(crate) fn manifest_text(plugin: &str) -> String {
     let declarations = support::full_declarations();
     let mut text = header(plugin);
     for command in &declarations.commands {
@@ -79,7 +79,7 @@ fn signed(id: &str, version: &str) -> SignedIdentity {
 }
 
 /// Register `manifest` with signed lines that match it, reading no component at all.
-fn register<'a>(
+pub(crate) fn register<'a>(
     plugins: &'a mut PluginRegistry,
     manifest: PluginManifest,
     commands: &mut CommandRegistry,

@@ -1,7 +1,7 @@
 //! The fixed bounds the host puts on a plugin's resources and on every value it lifts.
 //!
-//! The memory cap and the call deadline are provisional: #28's Windows
-//! measurements (decision 3 of 2026-10-21) set the figures #135 uses.
+//! The memory cap is provisional until #28's Windows measurements; the deadlines and the
+//! queue size come from the synthetic workload in `docs/dev/plugin-runtime-bounds.md`.
 
 use std::time::Duration;
 
@@ -16,9 +16,16 @@ pub const TABLES: usize = 8;
 /// in host code the deadline cannot interrupt, so each is bounded too.
 pub const TABLE_ELEMENTS: usize = 64 * 1024;
 
-/// One epoch tick, and how many ticks a single export call may run.
+/// One epoch tick; each export's deadline is a whole number of ticks (`Export::deadline_ticks`).
 pub const EPOCH_TICK: Duration = Duration::from_millis(10);
-pub const CALL_DEADLINE_TICKS: u64 = 100;
+
+/// Calls waiting for one plugin's worker; one more is refused as `unavailable` at once.
+pub const PLUGIN_QUEUE_CAPACITY: usize = 64;
+/// How long one worker job may take in all: its export and every call deferred from it.
+/// A job past it is treated as stuck even if each call kept to its own deadline. It is
+/// checked between deferred calls, so a job can end up to one deferred call's deadline
+/// (at most 500 ms) after it; at 2 s, twice the longest deadline, no single call reaches it.
+pub const JOB_BUDGET: Duration = Duration::from_secs(2);
 
 /// Deferred calls drained after one export; a plugin that keeps queueing more is stopped.
 pub const MAX_DEFERRED_PER_EXPORT: usize = 1_024;

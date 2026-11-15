@@ -1,18 +1,24 @@
 //! The one wasmtime engine Syrinx configures, and compiling a component on it.
 
+use std::sync::Arc;
+
 use wasmtime::component::Component;
 use wasmtime::{Config, Engine, Strategy};
 
 use crate::HostError;
 use crate::checks;
 use crate::identity;
+use crate::manifest::PluginManifest;
 use crate::registry::RegisteredPlugin;
+use crate::ticker::{EpochTicker, InFlight};
 
 /// The engine every plugin runs on: Cranelift, epoch interruption, the default
 /// (not pooling) allocator and stack, and no on-disk cache (#137 adds Syrinx's own).
+/// Its one epoch ticker serves every plugin on the engine.
 #[derive(Clone)]
 pub struct Runtime {
     engine: Engine,
+    ticker: Arc<EpochTicker>,
 }
 
 impl Runtime {
@@ -22,11 +28,26 @@ impl Runtime {
         config.epoch_interruption(true);
         let engine =
             Engine::new(&config).map_err(|error| HostError::Malformed(format!("{error:#}")))?;
-        Ok(Self { engine })
+        let ticker = EpochTicker::start(&engine)
+            .map_err(|error| HostError::Instantiation(format!("epoch ticker: {error}")))?;
+        Ok(Self {
+            engine,
+            ticker: Arc::new(ticker),
+        })
     }
 
     pub fn engine(&self) -> &Engine {
         &self.engine
+    }
+
+    /// How many times the epoch has advanced; it stays flat while every plugin is idle.
+    pub fn epoch_ticks(&self) -> u64 {
+        self.ticker.ticks()
+    }
+
+    /// Keep the epoch advancing while the returned guard lives.
+    pub(crate) fn in_flight(&self) -> InFlight<'_> {
+        self.ticker.in_flight()
     }
 
     /// Compile a component, refusing precompiled code and anything that does
@@ -46,8 +67,17 @@ impl Runtime {
         plugin: &RegisteredPlugin,
         bytes: &[u8],
     ) -> Result<Component, HostError> {
+        self.compile_manifest(plugin.manifest(), bytes)
+    }
+
+    /// `compile_package` for a manifest the caller kept from a registered plugin.
+    pub(crate) fn compile_manifest(
+        &self,
+        manifest: &PluginManifest,
+        bytes: &[u8],
+    ) -> Result<Component, HostError> {
         let component = self.build_component(bytes)?;
-        identity::check_component(&self.engine, &component, plugin.manifest())
+        identity::check_component(&self.engine, &component, manifest)
             .map_err(HostError::Identity)?;
         checks::component_fits(&self.engine, &component)?;
         Ok(component)
