@@ -13,6 +13,7 @@ use std::thread::JoinHandle;
 use std::time::Duration;
 
 use crate::bindings::syrinx::plugin::types::Outcome;
+use crate::grants::GrantSet;
 use crate::manifest::{CapabilityKind, PluginManifest};
 use crate::registry::RegisteredPlugin;
 use crate::session::{CallResult, RequestIds, Session};
@@ -100,6 +101,8 @@ fn stopped_before_answering() -> HostError {
 pub struct Plugins<S: PluginHost> {
     runtime: Runtime,
     requests: Arc<RequestIds>,
+    /// The owner's grants, which every instance checks on each gated call.
+    grants: GrantSet,
     services: ServiceFactory<S>,
     host_version: String,
     events: Sender<PluginEvent>,
@@ -139,12 +142,14 @@ impl<S: PluginHost> Plugins<S> {
     pub fn new(
         runtime: Runtime,
         host_version: impl Into<String>,
+        grants: GrantSet,
         services: impl Fn(&PluginManifest) -> S + Send + Sync + 'static,
     ) -> (Self, Receiver<PluginEvent>) {
         let (events, received) = mpsc::channel();
         let plugins = Self {
             runtime,
             requests: Arc::new(RequestIds::default()),
+            grants,
             services: Arc::new(services),
             host_version: host_version.into(),
             events,
@@ -222,19 +227,28 @@ impl<S: PluginHost> Plugins<S> {
         Ok(())
     }
 
-    /// The owner revoked `kind`. A plugin whose manifest requires it is deactivated; an
-    /// optional one keeps running and its services answer `denied`.
+    /// The owner revoked `kind`, already withdrawn from the grant store. A plugin whose
+    /// manifest requires it is deactivated, and stays inactive until it is granted again. A
+    /// running one that held it optionally keeps running: before its next job its services
+    /// close what they opened under it and abandon its requests, and later calls to them
+    /// answer `revoked`.
     pub fn revoke(&mut self, plugin: &str, kind: CapabilityKind) -> CallResult<()> {
-        let required = self
-            .slot_mut(plugin)?
-            .manifest
-            .capabilities()
-            .iter()
-            .any(|request| request.kind == kind && request.required);
-        if !required {
+        if self.slot_mut(plugin)?.requires(kind) {
+            return self.deactivate(plugin, StopReason::CapabilityRevoked(kind));
+        }
+        if !self.is_running(plugin) {
             return Ok(());
         }
-        self.deactivate(plugin, StopReason::CapabilityRevoked(kind))
+        self.wake(plugin)
+    }
+
+    /// Queue an empty job, so an idle worker applies a revocation at the start of it. A full
+    /// queue needs no wake-up: its next job applies the revocation before running.
+    fn wake(&mut self, plugin: &str) -> CallResult<()> {
+        match self.send(plugin, |_session| Ok(())) {
+            Ok(_) | Err(HostError::Unavailable(_)) => Ok(()),
+            Err(error) => Err(error),
+        }
     }
 
     /// Deactivate every plugin and wait for each worker to exit. The workers stop side by
@@ -256,6 +270,7 @@ impl<S: PluginHost> Plugins<S> {
         if self.is_running(plugin) {
             return Ok(());
         }
+        self.check_required_grants(plugin)?;
         let NewWorker {
             worker,
             jobs,
@@ -282,6 +297,22 @@ impl<S: PluginHost> Plugins<S> {
         Ok(())
     }
 
+    /// A plugin missing a capability its manifest requires is never activated.
+    fn check_required_grants(&mut self, plugin: &str) -> CallResult<()> {
+        let grants = self.grants.clone();
+        let missing = self
+            .slot_mut(plugin)?
+            .manifest
+            .capabilities()
+            .iter()
+            .find(|request| request.required && !grants.is_granted(plugin, request.kind))
+            .map(|request| request.kind);
+        match missing {
+            Some(kind) => Err(HostError::NotGranted(kind)),
+            None => Ok(()),
+        }
+    }
+
     /// Keep a thread no slot owns any more until it is handed over or joined at shutdown.
     /// A plugin has at most one: its slot's worker took over any earlier one.
     fn park_stopping(&mut self, plugin: &str, thread: JoinHandle<()>) {
@@ -302,6 +333,7 @@ impl<S: PluginHost> Plugins<S> {
             component: Arc::clone(&slot.component),
             prepared: Arc::clone(&slot.prepared),
             runtime: self.runtime.clone(),
+            grants: self.grants.clone(),
             services: Arc::clone(&self.services),
             requests: Arc::clone(&self.requests),
             host_version: self.host_version.clone(),
@@ -353,6 +385,14 @@ impl<S: PluginHost> Plugins<S> {
 }
 
 impl<S: 'static> Slot<S> {
+    /// Whether the plugin's manifest marks `kind` required.
+    fn requires(&self, kind: CapabilityKind) -> bool {
+        self.manifest
+            .capabilities()
+            .iter()
+            .any(|request| request.kind == kind && request.required)
+    }
+
     /// A worker that is serving calls, not one that failed or was told to stop.
     fn is_running(&self) -> bool {
         let Some(worker) = self.worker.as_ref() else {

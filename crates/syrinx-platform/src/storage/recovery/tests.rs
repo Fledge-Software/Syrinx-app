@@ -139,10 +139,10 @@ fn corrupt_newest_candidate_falls_back_but_foreign_primary_never_does() {
     );
 }
 
-/// Marks a synthetic backup as written by a newer Syrinx (schema version 8, one past current).
+/// Marks a synthetic backup as written by a newer Syrinx (schema version 9, one past current).
 fn mark_newer_schema(path: &Path) {
     let mut bytes = fs::read(path).expect("read synthetic backup");
-    bytes[60..64].copy_from_slice(&8u32.to_be_bytes());
+    bytes[60..64].copy_from_slice(&9u32.to_be_bytes());
     fs::write(path, &bytes).expect("mark synthetic backup as newer");
 }
 
@@ -151,7 +151,7 @@ fn downgrade_to_flat_schema(path: &Path) {
     let connection = rusqlite::Connection::open(path).expect("open synthetic backup");
     connection
         .execute_batch(
-            "DROP TABLE site_zoom; DROP TABLE site_permissions; DROP TABLE history_deletion_state; DROP TABLE history_visits; DROP TABLE history_urls; DROP TABLE settings; DROP TABLE quick_destinations; DROP TABLE saved_layout; DROP TABLE saved_folder_state; DROP TABLE saved_folders; PRAGMA user_version = 1;",
+            "DROP TABLE plugin_folder; DROP TABLE plugin_setting; DROP TABLE plugin_grant; DROP TABLE plugin_install; DROP TABLE site_zoom; DROP TABLE site_permissions; DROP TABLE history_deletion_state; DROP TABLE history_visits; DROP TABLE history_urls; DROP TABLE settings; DROP TABLE quick_destinations; DROP TABLE saved_layout; DROP TABLE saved_folder_state; DROP TABLE saved_folders; PRAGMA user_version = 1;",
         )
         .expect("downgrade synthetic backup");
     assert!(connection.close().is_ok(), "close synthetic backup");
@@ -201,7 +201,7 @@ fn flat_schema_backup_restores_and_the_next_open_migrates_it() {
     let version: i64 = connection
         .query_row("PRAGMA user_version", [], |row| row.get(0))
         .expect("read restored schema version");
-    assert_eq!(version, 7);
+    assert_eq!(version, 8);
     assert!(
         connection.close().is_ok(),
         "close restored synthetic database"
