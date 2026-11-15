@@ -3,6 +3,7 @@
 mod benchmark;
 mod deferred_work;
 mod dependency_policy;
+mod javascript_packages;
 mod licences;
 mod network_sources;
 mod packaging;
@@ -16,7 +17,7 @@ use std::process::{Command, ExitCode, Stdio};
 
 use serde_json::Value;
 
-const USAGE: &str = "Usage: cargo xtask <check | check-deps | check-licences | check-plugin-contract | check-deferred | check-packaging | write-registration | package | sign-update <options> | bench | palette-acceptance>";
+const USAGE: &str = "Usage: cargo xtask <check | check-deps | check-licences | check-plugin-contract | check-javascript | check-deferred | check-packaging | write-registration | package | sign-update <options> | bench | palette-acceptance>";
 
 fn main() -> ExitCode {
     // Return a failing process status for every failed gate or invalid invocation.
@@ -57,6 +58,7 @@ fn run() -> Result<(), String> {
         Some("check-deps") => check_dependencies(&root),
         Some("check-licences") => check_licences(&root),
         Some("check-plugin-contract") => plugin_contract::check(&root),
+        Some("check-javascript") => javascript_packages::check(&root),
         Some("check-deferred") => check_deferred_work(&root),
         Some("check-packaging") => packaging::check(&root),
         Some("write-registration") => packaging::write_registration(&root),
@@ -186,6 +188,7 @@ fn check_workspace(root: &Path) -> Result<(), String> {
     check_dependencies(root)?;
     check_licences(root)?;
     plugin_contract::check(root)?;
+    javascript_packages::check(root)?;
     check_deferred_work(root)?;
     packaging::check(root)?;
     run_cargo(root, &["fmt", "--all", "--", "--check"])?;
