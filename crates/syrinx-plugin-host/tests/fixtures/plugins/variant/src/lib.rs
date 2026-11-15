@@ -29,6 +29,8 @@ fn command() -> Result<(), PluginError> {
     bindings::syrinx::plugin::extra::ping();
     #[cfg(feature = "widgets")]
     bindings::syrinx::plugin::host::widget_changed("variant.widget");
+    #[cfg(feature = "imports-documents")]
+    bindings::syrinx::plugin::documents::read();
     #[cfg(feature = "filesystem")]
     {
         let entries = std::fs::read_dir("/").map(|entries| entries.count());

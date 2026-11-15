@@ -1,6 +1,7 @@
 //! Contract tests for `syrinx:plugin@0.1.0`: synthetic plugins loaded by the
 //! test host, without a window. Each negative test names how it must fail.
 
+mod package;
 mod support;
 
 use syrinx_plugin_host::bindings::exports::syrinx::plugin::forms::{

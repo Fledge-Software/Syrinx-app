@@ -203,9 +203,10 @@ pub(crate) fn verify_message(
     verify_signature(point, &sha256(message)?, signature)
 }
 
-/// In-process key pairs that exist only for the duration of a test.
-#[cfg(test)]
-pub(crate) mod test_keys {
+/// In-process key pairs that exist only for the duration of a test. Other crates' tests reach
+/// them through the `test-keys` feature, which only `[dev-dependencies]` may enable.
+#[cfg(any(test, feature = "test-keys"))]
+pub mod test_keys {
     use windows::Win32::Security::Cryptography::{
         BCRYPT_ECCPUBLIC_BLOB, BCRYPT_ECDSA_PUBLIC_P256_MAGIC, BCRYPT_FLAGS, BCRYPT_KEY_HANDLE,
         BCryptExportKey, BCryptFinalizeKeyPair, BCryptGenerateKeyPair, BCryptSignHash,
@@ -213,16 +214,18 @@ pub(crate) mod test_keys {
 
     use super::{Key, Provider, check};
     use crate::error::UpdateError;
+    #[cfg(any(test, feature = "release-tool"))]
     use crate::sign::Signer;
 
     /// An ephemeral P-256 key pair; the private half never leaves CNG's memory.
-    pub(crate) struct TestKeyPair {
+    pub struct TestKeyPair {
         key: Key,
         _provider: Provider,
     }
 
     impl TestKeyPair {
-        pub(crate) fn generate() -> Result<Self, UpdateError> {
+        /// A fresh key pair that exists only in this process.
+        pub fn generate() -> Result<Self, UpdateError> {
             let provider = Provider::ecdsa_p256()?;
             let mut handle = BCRYPT_KEY_HANDLE::default();
             let status = unsafe { BCryptGenerateKeyPair(provider.handle(), &mut handle, 256, 0) };
@@ -239,7 +242,7 @@ pub(crate) mod test_keys {
         }
 
         /// The raw `X || Y` point a release would pin.
-        pub(crate) fn public_point(&self) -> Result<[u8; 64], UpdateError> {
+        pub fn public_point(&self) -> Result<[u8; 64], UpdateError> {
             let mut blob = [0u8; 72];
             let mut written = 0u32;
             let status = unsafe {
@@ -289,11 +292,12 @@ pub(crate) mod test_keys {
         }
 
         /// Sign the SHA-256 of `message`, as the portable test keys do.
-        pub(crate) fn sign_message(&self, message: &[u8]) -> Result<[u8; 64], UpdateError> {
+        pub fn sign_message(&self, message: &[u8]) -> Result<[u8; 64], UpdateError> {
             self.sign(&super::sha256(message)?)
         }
     }
 
+    #[cfg(any(test, feature = "release-tool"))]
     impl Signer for TestKeyPair {
         fn public_point(&self) -> Result<[u8; 64], UpdateError> {
             TestKeyPair::public_point(self)

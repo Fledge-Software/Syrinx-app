@@ -13,7 +13,7 @@ pub const CONTRACT_TRACK: &str = "0.1";
 pub const CONTRACT_VERSION: &str = "0.1.0";
 
 /// The interfaces every plugin exports.
-const REQUIRED_EXPORTS: &[&str] = &[
+pub(crate) const REQUIRED_EXPORTS: &[&str] = &[
     "lifecycle",
     "commands",
     "forms",

@@ -74,18 +74,20 @@ pub(crate) fn verify_message(
     Ok(key.verify(message, signature).is_ok())
 }
 
-/// In-process key pairs that exist only for the duration of a test.
-#[cfg(test)]
-pub(crate) mod test_keys {
+/// In-process key pairs that exist only for the duration of a test. Other crates' tests reach
+/// them through the `test-keys` feature, which only `[dev-dependencies]` may enable.
+#[cfg(any(test, feature = "test-keys"))]
+pub mod test_keys {
     use ring::rand::SystemRandom;
     use ring::signature::{ECDSA_P256_SHA256_FIXED_SIGNING, EcdsaKeyPair, KeyPair};
 
     use super::REFUSED;
     use crate::error::UpdateError;
+    #[cfg(any(test, feature = "release-tool"))]
     use crate::sign::Signer;
 
     /// An ephemeral P-256 key pair held only in this process's memory.
-    pub(crate) struct TestKeyPair {
+    pub struct TestKeyPair {
         pair: EcdsaKeyPair,
         random: SystemRandom,
     }
@@ -98,7 +100,8 @@ pub(crate) mod test_keys {
     }
 
     impl TestKeyPair {
-        pub(crate) fn generate() -> Result<Self, UpdateError> {
+        /// A fresh key pair that exists only in this process.
+        pub fn generate() -> Result<Self, UpdateError> {
             let random = SystemRandom::new();
             let pkcs8 = EcdsaKeyPair::generate_pkcs8(&ECDSA_P256_SHA256_FIXED_SIGNING, &random)
                 .map_err(|_| test_key_error("generating a test key"))?;
@@ -109,7 +112,7 @@ pub(crate) mod test_keys {
         }
 
         /// The raw `X || Y` point a release would pin.
-        pub(crate) fn public_point(&self) -> Result<[u8; 64], UpdateError> {
+        pub fn public_point(&self) -> Result<[u8; 64], UpdateError> {
             let encoded = self.pair.public_key().as_ref();
             if encoded.len() != 65 || encoded[0] != super::UNCOMPRESSED_TAG {
                 return Err(test_key_error("exporting a test key"));
@@ -120,7 +123,7 @@ pub(crate) mod test_keys {
         }
 
         /// Sign the SHA-256 of `message`, producing the `r || s` layout CNG uses.
-        pub(crate) fn sign_message(&self, message: &[u8]) -> Result<[u8; 64], UpdateError> {
+        pub fn sign_message(&self, message: &[u8]) -> Result<[u8; 64], UpdateError> {
             let signature = self
                 .pair
                 .sign(&self.random, message)
@@ -137,6 +140,7 @@ pub(crate) mod test_keys {
         }
     }
 
+    #[cfg(any(test, feature = "release-tool"))]
     impl Signer for TestKeyPair {
         fn public_point(&self) -> Result<[u8; 64], UpdateError> {
             TestKeyPair::public_point(self)

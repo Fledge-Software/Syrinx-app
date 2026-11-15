@@ -99,7 +99,7 @@ impl Manifest {
             return Err(manifest_error(3, ManifestProblem::MinimumAboveVersion));
         }
 
-        let files = parse_file_lines(lines)?;
+        let files = parse_file_lines(lines, 3)?;
         let manifest = Self {
             version,
             minimum_version,
@@ -117,11 +117,7 @@ impl Manifest {
             "{HEADER}\n{VERSION_FIELD}{}\n{MINIMUM_FIELD}{}\n",
             self.version, self.minimum_version
         );
-        for file in &self.files {
-            text.push_str(FILE_FIELD);
-            push_hex(&mut text, &file.sha256);
-            text.push_str(&format!(" {} {}\n", file.size, file.path.as_str()));
-        }
+        push_file_lines(&mut text, &self.files);
         text.into_bytes()
     }
 
@@ -138,8 +134,17 @@ impl Manifest {
     }
 }
 
+/// Append each entry's canonical `file <sha256> <size> <path>` line.
+pub(crate) fn push_file_lines(text: &mut String, files: &[FileEntry]) {
+    for file in files {
+        text.push_str(FILE_FIELD);
+        push_hex(text, &file.sha256);
+        text.push_str(&format!(" {} {}\n", file.size, file.path.as_str()));
+    }
+}
+
 /// Decode the text and strip its single required final newline.
-fn manifest_body(bytes: &[u8]) -> Result<&str, UpdateError> {
+pub(crate) fn manifest_body(bytes: &[u8]) -> Result<&str, UpdateError> {
     text_body(bytes).map_err(|fault| {
         let problem = match fault {
             TextFault::Encoding => ManifestProblem::Encoding,
@@ -168,7 +173,7 @@ pub(crate) fn text_body(bytes: &[u8]) -> Result<&str, TextFault> {
 }
 
 /// Read one `name value` version line at its expected position.
-fn parse_version_field(
+pub(crate) fn parse_version_field(
     line: Option<(usize, &str)>,
     number: usize,
     prefix: &str,
@@ -180,14 +185,16 @@ fn parse_version_field(
     Version::parse(value).ok_or(manifest_error(number, ManifestProblem::Version))
 }
 
-/// Read every remaining line as a sorted, unique, bounded file entry.
-fn parse_file_lines<'a>(
+/// Read every line after the `header_lines` fixed ones as a sorted, unique, bounded file entry;
+/// the update manifest and the plugin package list share this rule.
+pub(crate) fn parse_file_lines<'a>(
     lines: impl Iterator<Item = (usize, &'a str)>,
+    header_lines: usize,
 ) -> Result<Vec<FileEntry>, UpdateError> {
     let mut files: Vec<FileEntry> = Vec::new();
     let mut folded = FoldedNames::default();
     let mut total: u64 = 0;
-    let mut last_line = 3;
+    let mut last_line = header_lines;
     for (number, line) in lines {
         last_line = number;
         if files.len() == MAX_FILES {

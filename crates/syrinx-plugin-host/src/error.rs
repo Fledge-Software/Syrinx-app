@@ -2,6 +2,8 @@
 
 use std::fmt;
 
+use crate::identity::IdentityMismatch;
+
 /// A failure on the host's side of the boundary. A plugin's own typed
 /// failures stay `plugin-error` values and never become a `HostError`.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -10,6 +12,8 @@ pub enum HostError {
     Malformed(String),
     /// Native code compiled elsewhere; Syrinx only ever runs code it compiled itself.
     Precompiled,
+    /// The component's interface names disagree with its registered manifest (#134).
+    Identity(IdentityMismatch),
     /// The component targets a contract this host does not offer. Every reason is listed.
     Incompatible(Vec<String>),
     /// Linking or instantiation failed after the checks passed.
@@ -31,6 +35,7 @@ impl fmt::Display for HostError {
         match self {
             Self::Malformed(detail) => write!(formatter, "not a loadable component: {detail}"),
             Self::Precompiled => write!(formatter, "the module is precompiled native code"),
+            Self::Identity(mismatch) => write!(formatter, "{mismatch}"),
             Self::Incompatible(reasons) => {
                 write!(formatter, "incompatible component: {}", reasons.join("; "))
             }

@@ -716,12 +716,12 @@ fn a_file_cannot_double_as_a_directory() {
 }
 
 /// A fresh, uniquely named synthetic staging area under the temporary directory.
-struct Scratch {
+pub(crate) struct Scratch {
     root: PathBuf,
 }
 
 impl Scratch {
-    fn new() -> Result<Self, std::io::Error> {
+    pub(crate) fn new() -> Result<Self, std::io::Error> {
         static NEXT: AtomicU32 = AtomicU32::new(0);
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -737,7 +737,10 @@ impl Scratch {
     }
 
     /// Write the synthetic files into `staging`, returning that directory.
-    fn stage(&self, files: &BTreeMap<String, Vec<u8>>) -> Result<PathBuf, std::io::Error> {
+    pub(crate) fn stage(
+        &self,
+        files: &BTreeMap<String, Vec<u8>>,
+    ) -> Result<PathBuf, std::io::Error> {
         let staging = self.root.join("staging");
         fs::create_dir(&staging)?;
         for (name, bytes) in files {
@@ -762,7 +765,7 @@ impl Drop for Scratch {
     }
 }
 
-fn io_error(error: std::io::Error) -> UpdateError {
+pub(crate) fn io_error(error: std::io::Error) -> UpdateError {
     UpdateError::Read {
         what: "test scratch".to_owned(),
         kind: error.kind(),
