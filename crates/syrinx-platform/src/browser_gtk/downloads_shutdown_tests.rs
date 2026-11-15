@@ -298,3 +298,102 @@ fn a_cancelled_download_is_never_reported_complete() {
         "{states:?}"
     );
 }
+
+/// Downloads from the loopback `port` through the registry's own `decide`, with `folder` as the
+/// owner's Downloads folder, and returns every event it reported.
+fn download_into_folder(port: u16, folder: std::path::PathBuf) -> Vec<super::BrowserEvent> {
+    crate::gtk_thread::run(move || {
+        use gtk::glib;
+        use webkit2gtk::{DownloadExt, WebContextExt};
+        let context = webkit2gtk::WebContext::with_website_data_manager(
+            &webkit2gtk::WebsiteDataManager::new_ephemeral(),
+        );
+        let (events, mut outgoing) = futures::channel::mpsc::unbounded();
+        let registry =
+            super::Downloads(std::rc::Rc::new(std::cell::RefCell::new(super::Registry {
+                events: super::EventSink(events, None),
+                pages: std::collections::HashMap::new(),
+                popups: std::rc::Rc::default(),
+                running: std::collections::HashMap::new(),
+                held: std::collections::HashMap::new(),
+                next: 0,
+                stopped: false,
+            })));
+        let download = context
+            .download_uri(&format!("http://127.0.0.1:{port}/synthetic"))
+            .expect("native download");
+        let id = registry.register(&download);
+        let decider = registry.clone();
+        download.connect_decide_destination(move |download, suggested| {
+            decider.decide(id, download, suggested, Some(folder.clone()));
+            true
+        });
+        let finished = glib::MainLoop::new(None, false);
+        let quit = finished.clone();
+        download.connect_finished(move |_| quit.quit());
+        let deadline = finished.clone();
+        let expired = std::rc::Rc::new(std::cell::Cell::new(false));
+        let elapsed = expired.clone();
+        let timer = glib::timeout_add_local_once(std::time::Duration::from_secs(10), move || {
+            elapsed.set(true);
+            deadline.quit();
+        });
+        finished.run();
+        if !expired.get() {
+            timer.remove();
+        }
+        std::iter::from_fn(|| outgoing.try_recv().ok()).collect()
+    })
+    .expect("GTK thread")
+}
+
+/// Whether `events` report a change to `state`.
+fn reports(events: &[super::BrowserEvent], state: syrinx_core::DownloadState) -> bool {
+    events.iter().any(|event| {
+        matches!(event, super::BrowserEvent::DownloadChanged { state: seen, .. } if *seen == state)
+    })
+}
+
+#[test]
+fn a_missing_downloads_folder_is_made_private_and_the_download_completes() {
+    use std::os::unix::fs::PermissionsExt;
+    const BODY: &[u8] = b"synthetic download body";
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("loopback listener");
+    let port = listener.local_addr().expect("listener address").port();
+    std::thread::spawn(move || serve_unsized_body(listener, BODY));
+    let scratch = SyntheticFolder::new("download-missing-folder", port);
+    let downloads = scratch.0.join("Downloads");
+    let events = download_into_folder(port, downloads.clone());
+    let mode = std::fs::metadata(&downloads)
+        .expect("the folder was made")
+        .permissions()
+        .mode();
+    assert_eq!(mode & 0o777, 0o700);
+    assert_eq!(
+        std::fs::read(downloads.join("synthetic")).expect("downloaded file"),
+        BODY
+    );
+    assert!(
+        reports(&events, syrinx_core::DownloadState::Completed),
+        "{events:?}"
+    );
+}
+
+#[test]
+fn a_downloads_folder_that_cannot_be_made_refuses_the_download_visibly() {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("loopback listener");
+    let port = listener.local_addr().expect("listener address").port();
+    std::thread::spawn(move || serve_unsized_body(listener, b"unused"));
+    let scratch = SyntheticFolder::new("download-blocked-folder", port);
+    // A file stands where the folder should be.
+    let downloads = scratch.0.join("Downloads");
+    std::fs::write(&downloads, b"not a folder").expect("blocking file");
+    let events = download_into_folder(port, downloads.clone());
+    assert!(downloads.is_file(), "the blocking file is untouched");
+    let refused = syrinx_core::DownloadState::Interrupted(syrinx_core::DownloadInterruption::File);
+    assert!(reports(&events, refused), "{events:?}");
+    assert!(
+        !reports(&events, syrinx_core::DownloadState::Completed),
+        "{events:?}"
+    );
+}
