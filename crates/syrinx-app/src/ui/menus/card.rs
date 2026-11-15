@@ -102,7 +102,7 @@ pub(super) fn menu_row(
 }
 
 /// An empty space as wide as a page's icon, so a row without one lines its text up.
-pub(super) fn icon_space() -> Div {
+fn icon_space() -> Div {
     div()
         .size(px(super::sidebar_view::MONOGRAM_SIZE))
         .flex_none()
@@ -131,7 +131,7 @@ pub(super) fn title_bar_corner(window: &Window) -> Point<Pixels> {
 }
 
 /// The corner for a window `width` logical pixels wide.
-pub(super) fn corner_for_width(width: f32) -> Point<Pixels> {
+fn corner_for_width(width: f32) -> Point<Pixels> {
     point(
         px(width - caption_buttons_width() - CAPTION_GAP),
         px(TITLE_BAR_HEIGHT),
@@ -149,7 +149,7 @@ pub(super) fn kind_size(kind: MenuKind, rows: &[MenuRow]) -> gpui::Size<Pixels> 
 }
 
 /// The popup's logical size for `items` rows and `separators` lines between groups.
-pub(super) fn menu_size(items: usize, separators: usize) -> gpui::Size<Pixels> {
+fn menu_size(items: usize, separators: usize) -> gpui::Size<Pixels> {
     let height = items as f32 * ITEM_HEIGHT
         + separators as f32 * SEPARATOR_HEIGHT
         + 2. * (MENU_PADDING + MENU_BORDER);
@@ -183,7 +183,7 @@ pub(super) fn menu_rect(
 
 /// Clamps a span's start so it stays `WINDOW_MARGIN` inside `extent`, or at the margin when
 /// it cannot fit.
-pub(super) fn keep_inside(start: f32, span: f32, extent: f32) -> f32 {
+fn keep_inside(start: f32, span: f32, extent: f32) -> f32 {
     let latest = (extent - WINDOW_MARGIN - span).max(WINDOW_MARGIN);
     start.clamp(WINDOW_MARGIN, latest)
 }

@@ -4,11 +4,7 @@
 use super::*;
 
 /// Opens a requested menu outside every entity update, then hands the popup to the browser.
-pub(super) fn open_requested_menu(
-    browser: WeakEntity<BrowserView>,
-    request: MenuRequest,
-    cx: &mut App,
-) {
+fn open_requested_menu(browser: WeakEntity<BrowserView>, request: MenuRequest, cx: &mut App) {
     let Some(entity) = browser.upgrade() else {
         return; // The owner has gone, so nothing awaits this popup.
     };
@@ -78,7 +74,7 @@ pub(super) fn open_requested_menu(
 }
 
 /// Hides an active popup through its owner, then removes it.
-pub(super) fn remove_menu_window(popup: OwnedPopup, owner: isize, cx: &mut App) {
+fn remove_menu_window(popup: OwnedPopup, owner: isize, cx: &mut App) {
     if let Err(error) = hide_overlay(popup.hwnd, owner) {
         eprintln!("Cannot hide the menu: {error}");
     }
@@ -94,7 +90,7 @@ pub(super) fn remove_menu_window(popup: OwnedPopup, owner: isize, cx: &mut App) 
 
 /// Whether a press on `kind`'s button closes its menu instead of opening it: the menu is
 /// still open, or the same press closed it a moment ago by deactivating its popup.
-pub(super) fn closes_on_reclick(
+fn closes_on_reclick(
     open: Option<MenuKind>,
     dismissed: Option<MenuDismissal>,
     kind: MenuKind,
@@ -203,7 +199,7 @@ impl BrowserView {
     }
 
     /// Whether a popup opened for `generation` is still wanted.
-    pub(super) fn awaits_menu(&self, generation: u64) -> bool {
+    fn awaits_menu(&self, generation: u64) -> bool {
         !self.closing
             && self
                 .menu
@@ -212,7 +208,7 @@ impl BrowserView {
     }
 
     /// Adopts the opened popup and shows it, or closes it when the menu was closed meanwhile.
-    pub(super) fn install_menu(
+    fn install_menu(
         &mut self,
         generation: u64,
         rect: OverlayRect,
@@ -246,7 +242,7 @@ impl BrowserView {
 
     /// Places, shows and activates the popup from a task, outside any GPUI update: Windows
     /// delivers its resize, first frame and activation from these calls.
-    pub(super) fn show_menu_popup(
+    fn show_menu_popup(
         &mut self,
         generation: u64,
         hwnd: isize,
@@ -269,7 +265,7 @@ impl BrowserView {
     }
 
     /// A menu that could not take the keys closes rather than float without them.
-    pub(super) fn menu_shown(
+    fn menu_shown(
         &mut self,
         generation: u64,
         shown: Result<bool, BrowserError>,
@@ -294,7 +290,7 @@ impl BrowserView {
 
     /// The popup now has the keys, so any later deactivation is the owner leaving it, even
     /// one GPUI delivers before the popup's own activation callback has run.
-    pub(super) fn menu_activated(&self, cx: &mut Context<Self>) {
+    fn menu_activated(&self, cx: &mut Context<Self>) {
         let Some(view) = self.menu.as_ref().and_then(|menu| menu.view.clone()) else {
             return;
         };
@@ -317,7 +313,7 @@ impl BrowserView {
         }
     }
 
-    pub(super) fn is_current_menu(&self, generation: u64) -> bool {
+    fn is_current_menu(&self, generation: u64) -> bool {
         self.menu
             .as_ref()
             .is_some_and(|menu| menu.generation == generation)
@@ -347,7 +343,7 @@ impl BrowserView {
         });
     }
 
-    pub(super) fn apply_menu_action(
+    fn apply_menu_action(
         &mut self,
         generation: u64,
         action: MenuAction,
@@ -428,7 +424,7 @@ impl BrowserView {
     }
 
     /// Gives the keys to a chrome control the main window still draws; returns whether it did.
-    pub(super) fn return_keys_to_control(
+    fn return_keys_to_control(
         &mut self,
         handle: &FocusHandle,
         window: &mut Window,

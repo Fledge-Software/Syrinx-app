@@ -68,7 +68,7 @@ impl BrowserView {
     }
 
     /// Opens the Downloads flyout at its corner, replacing any open menu.
-    pub(super) fn show_downloads(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    fn show_downloads(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let position = title_bar_corner(window);
         self.show_menu(MenuKind::Downloads, position, Corner::TopRight, window, cx);
     }

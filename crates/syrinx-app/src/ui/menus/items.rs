@@ -23,7 +23,7 @@ pub(super) const SIDEBAR_ITEMS: [MenuItem; 5] = [
 
 /// The ⋯ menu's Close tab closes the tab that was active when the menu opened, never one
 /// selected since; with no tab active then, or that tab closed meanwhile, it closes nothing.
-pub(super) fn close_opened_on(
+fn close_opened_on(
     active: Option<TabId>,
     model: &syrinx_core::TabModelSnapshot,
 ) -> Option<SessionCommand> {

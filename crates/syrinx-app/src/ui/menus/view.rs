@@ -75,7 +75,7 @@ impl MenuView {
     }
 
     /// Arrows, Home and End move the selection; Enter and Space choose it; Escape closes.
-    pub(super) fn key_down(&mut self, event: &KeyDownEvent, cx: &mut Context<Self>) {
+    fn key_down(&mut self, event: &KeyDownEvent, cx: &mut Context<Self>) {
         let key = event.keystroke.key.as_str();
         if let Some(step) = MenuStep::for_key(key) {
             self.selected = step_selection(step, self.selected, &self.rows);
@@ -108,7 +108,7 @@ pub(super) fn key_action(key: &str, selected: Option<MenuItem>) -> Option<MenuAc
 
 impl MenuView {
     /// A download row's Pause, Resume and Cancel buttons.
-    pub(super) fn download_buttons(
+    fn download_buttons(
         &self,
         index: usize,
         row: &MenuRow,
@@ -143,7 +143,7 @@ impl MenuView {
     }
 
     /// The Zoom row's − / percentage / + stepper; each press zooms the page in view.
-    pub(super) fn zoom_stepper(&self, cx: &mut Context<Self>) -> Stateful<Div> {
+    fn zoom_stepper(&self, cx: &mut Context<Self>) -> Stateful<Div> {
         let menu = cx.weak_entity();
         let label = super::essentials::zoom_percent(self.zoom);
         super::essentials::zoom_stepper("menu-zoom", label, move |shortcut, _, cx| {
@@ -236,14 +236,14 @@ pub(super) fn menu_name(kind: MenuKind, rows: &[MenuRow]) -> String {
 /// Lets the pointer select a row only once it has really moved. Windows sends a mouse move
 /// when a popup appears under a still pointer; that must not replace a keyboard selection.
 #[derive(Clone, Copy, Debug, Default)]
-pub(super) struct HoverGuard {
+struct HoverGuard {
     first: Option<Point<Pixels>>,
     moved: bool,
 }
 
 impl HoverGuard {
     /// Whether a pointer move to `position` may change the selection.
-    pub(super) fn may_select(&mut self, position: Point<Pixels>) -> bool {
+    fn may_select(&mut self, position: Point<Pixels>) -> bool {
         if self.moved {
             return true;
         }
@@ -295,7 +295,7 @@ pub(super) enum MenuStep {
 }
 
 impl MenuStep {
-    pub(super) fn for_key(key: &str) -> Option<Self> {
+    fn for_key(key: &str) -> Option<Self> {
         match key {
             "down" => Some(Self::Next),
             "up" => Some(Self::Previous),
