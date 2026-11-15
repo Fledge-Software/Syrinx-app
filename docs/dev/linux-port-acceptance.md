@@ -17,6 +17,14 @@ zero failures or ignored tests. After the reviewed fixes, the full gate
 passed with **1,704 tests**, zero failures, ignored, measured or filtered
 tests across 32 suite summaries. No gate or assertion was weakened.
 
+After `main` was merged in (#230's plugin host, #216, #235) and the
+2026-11-03 review fixes, the Linux gate passed again on `1c71ca7`:
+**1,755 tests** across 35 suite summaries, zero failures or ignored tests,
+with the licence check passing for both targets and the `--smoke` run
+included. That run was local, on Ubuntu 24.04 under Xvfb with software
+rendering, a short fresh mode-0700 `XDG_RUNTIME_DIR` and scratch XDG data,
+cache and config folders. Linux has no CI job yet (#222).
+
 The sandbox makes `/run/user/1000` read-only. Both successful full runs used
 fresh mode-0700 `XDG_RUNTIME_DIR`, plus scratch `XDG_DATA_HOME`,
 `XDG_CACHE_HOME` and `XDG_CONFIG_HOME`. `DISPLAY`, `DBUS_SESSION_BUS_ADDRESS`

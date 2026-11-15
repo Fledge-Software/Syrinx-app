@@ -15,6 +15,8 @@ pub mod browser;
 pub mod calendar;
 #[cfg_attr(target_os = "linux", path = "linux/caption.rs")]
 pub mod caption;
+#[cfg(test)]
+mod conformance;
 #[cfg_attr(unix, path = "unix/disk.rs")]
 pub mod disk;
 #[cfg_attr(target_os = "linux", path = "linux/edge.rs")]
@@ -35,8 +37,10 @@ pub mod setup;
 mod storage;
 #[cfg_attr(target_os = "linux", path = "linux/window_frame.rs")]
 pub mod window_frame;
+#[cfg(target_os = "linux")]
+#[path = "linux/x11_errors.rs"]
+mod x11_errors;
 
-#[cfg(unix)]
 pub use storage::local_app_data;
 pub use storage::{
     CacheFolder, DeletionJournal, JournalError, RecoveryError, RecoveryOffer, RecoveryOutcome,

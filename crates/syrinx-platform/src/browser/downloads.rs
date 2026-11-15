@@ -22,7 +22,7 @@ use windows::{
 };
 use wry::{WebView, WebViewExtWindows};
 
-use super::{BrowserError, BrowserEvent, EventSink};
+use super::{BrowserError, BrowserEvent, EventSink, protocol::file_name};
 
 /// Download numbers are unique across every page and controller of this run.
 static NEXT_DOWNLOAD: AtomicU64 = AtomicU64::new(1);
@@ -130,7 +130,7 @@ fn watch(
     events.emit(BrowserEvent::DownloadStarted {
         download,
         tab,
-        file_name: file_name(&path),
+        file_name: file_name(Path::new(&path)),
         total,
     });
     Ok(())
@@ -307,13 +307,6 @@ fn interruption(reason: COREWEBVIEW2_DOWNLOAD_INTERRUPT_REASON) -> DownloadInter
 }
 
 /// The name of the file being saved, without its folder.
-fn file_name(path: &str) -> String {
-    Path::new(path)
-        .file_name()
-        .map(|name| name.to_string_lossy().into_owned())
-        .unwrap_or_default()
-}
-
 fn read_string(
     read: impl FnOnce(&mut PWSTR) -> windows::core::Result<()>,
 ) -> windows::core::Result<String> {
@@ -392,9 +385,9 @@ mod tests {
     #[test]
     fn only_the_file_name_leaves_the_platform() {
         assert_eq!(
-            file_name(r"C:\Users\Synthetic\Downloads\synthetic.zip"),
+            file_name(Path::new(r"C:\Users\Synthetic\Downloads\synthetic.zip")),
             "synthetic.zip"
         );
-        assert_eq!(file_name(""), "");
+        assert_eq!(file_name(Path::new("")), "");
     }
 }

@@ -20,6 +20,7 @@ use crate::bindings::exports::syrinx::plugin::search_feed::Batch;
 use crate::bindings::exports::syrinx::plugin::views::ViewRequest;
 use crate::bindings::syrinx::plugin::host::LogLevel;
 use crate::bindings::syrinx::plugin::types::{Outcome, PluginError};
+use crate::manifest::PluginManifest;
 use crate::{HostError, LoadedPlugin, Runtime, WasiState, limits, validate};
 
 /// The version the test host reports to `lifecycle.activate`.
@@ -39,6 +40,34 @@ pub struct DeclaredCommand {
     pub id: String,
     /// A command with a form is reached through `forms`, never `commands.run`.
     pub form: bool,
+}
+
+/// The test host takes what a checked manifest declares, as the real host will.
+impl From<&PluginManifest> for Declarations {
+    fn from(manifest: &PluginManifest) -> Self {
+        let commands = manifest
+            .commands()
+            .iter()
+            .map(|command| DeclaredCommand {
+                id: command.id.as_str().to_owned(),
+                form: command.form,
+            })
+            .collect();
+        Self {
+            plugin_id: manifest.id().to_owned(),
+            commands,
+            view_kinds: manifest
+                .tab_types()
+                .iter()
+                .map(|tab| tab.id.clone())
+                .collect(),
+            feeds: manifest
+                .search_feeds()
+                .iter()
+                .map(|feed| feed.id.clone())
+                .collect(),
+        }
+    }
 }
 
 impl Declarations {

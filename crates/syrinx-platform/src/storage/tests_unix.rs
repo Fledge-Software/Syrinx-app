@@ -4,13 +4,19 @@ use std::{
     fs,
     os::unix::fs::symlink,
     path::{Path, PathBuf},
-    sync::atomic::{AtomicU64, Ordering},
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
     time::{SystemTime, UNIX_EPOCH},
 };
 
 use syrinx_store::{DirectoryLease, LocationError};
 
-use super::{WindowsDirectoryLease, normal_absolute_path, sqlite_database_path};
+use super::{
+    LOCAL_DRIVE, LocationProbe, WindowsDirectoryLease, native, normal_absolute_path,
+    sqlite_database_path,
+};
 
 struct Fixture {
     root: PathBuf,
@@ -109,4 +115,45 @@ fn a_renamed_folder_fails_revalidation() {
     fs::rename(&destination, fixture.root.join("moved")).expect("move the synthetic folder");
     fs::create_dir(&destination).expect("put a stand-in at the old name");
     assert!(lease.revalidate().is_err());
+}
+
+/// Reports one synthetic folder as a mounted sync client (FUSE, as pCloud's `~/pCloudDrive`
+/// is) and everything else as the real filesystem the test runs on.
+struct MountedSyncRoot {
+    root: PathBuf,
+}
+
+impl LocationProbe for MountedSyncRoot {
+    fn drive_type(&self, root: &Path) -> Result<u32, LocationError> {
+        if root.starts_with(&self.root) {
+            // Any answer but `LOCAL_DRIVE` is a network or FUSE filesystem.
+            return Ok(LOCAL_DRIVE + 1);
+        }
+        native::NativeProbe.drive_type(root)
+    }
+
+    fn sync_roots(&self) -> Result<Vec<PathBuf>, LocationError> {
+        Ok(vec![self.root.clone()])
+    }
+}
+
+#[test]
+fn a_mounted_sync_folder_elsewhere_does_not_stop_a_local_database() {
+    let fixture = Fixture::new();
+    let mounted = fixture.root.join("pCloudDrive");
+    fs::create_dir(&mounted).expect("create the synthetic sync folder");
+    let probe = Arc::new(MountedSyncRoot {
+        root: mounted.clone(),
+    });
+    // The database sits beside the sync folder, never inside it.
+    let destination = fixture.root.join("data");
+    let lease = WindowsDirectoryLease::prepare_with_probe(&destination, probe.clone())
+        .expect("a sync folder that cannot hold the database is not a reason to refuse");
+    lease.revalidate().expect("revalidation keeps accepting it");
+    drop(lease);
+    // Inside the mounted folder the database is still refused.
+    assert_eq!(
+        WindowsDirectoryLease::prepare_with_probe(&mounted.join("data"), probe).map(|_| ()),
+        Err(LocationError::NonLocalDrive)
+    );
 }

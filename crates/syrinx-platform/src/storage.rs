@@ -11,7 +11,6 @@ mod startup;
 
 pub use cache::CacheFolder;
 pub use deletions::{DeletionJournal, JournalError, read_deletion_log};
-#[cfg(unix)]
 pub use native::local_app_data;
 pub use recovery::{RecoveryError, RecoveryOffer, RecoveryOutcome, offer_recovery};
 pub use startup::{StartupStorage, prepare_startup};
@@ -417,7 +416,14 @@ fn sync_root_identities(probe: &dyn LocationProbe) -> Result<Vec<FileIdentity>, 
     for root in probe.sync_roots()? {
         // Resolve registered roots by identity, including aliases of a checked ancestor.
         let root = normal_absolute_path(&root)?;
-        require_local_drive(&root, probe)?;
+        // Skip a root on a network or FUSE mount: an identity includes the volume, so it
+        // matches no local folder. A database inside one is refused by its own drive check
+        // (on Windows, of the drive letter its path is spelled through), not here.
+        match require_local_drive(&root, probe) {
+            Ok(()) => {}
+            Err(LocationError::NonLocalDrive) => continue,
+            Err(error) => return Err(error),
+        }
         let file = native::open_directory(&root, true)?;
         let information = native::entry_info(&file)?;
         if !information.directory || information.delete_pending {

@@ -4,11 +4,11 @@ use crate::cng;
 use crate::error::UpdateError;
 use crate::keys::{KeyId, KeySet};
 use crate::manifest::MAX_MANIFEST_BYTES;
-use crate::signature::{DetachedSignature, SignatureKind};
+use crate::signature::SignatureKind;
 use crate::statement::{MAX_STATEMENT_BYTES, Statement};
 use crate::time::{SECONDS_PER_DAY, Timestamp};
 use crate::version::Version;
-use crate::{VerifiedManifest, check_signature, verify_manifest};
+use crate::{VerifiedManifest, verify_manifest, verify_signed};
 
 /// How far ahead of the local clock a statement's `issued` time may be.
 pub const MAX_ISSUED_AHEAD_SECONDS: u64 = SECONDS_PER_DAY;
@@ -97,17 +97,13 @@ pub fn verify_statement(
     now: Timestamp,
     previous: Option<&AcceptedStatement>,
 ) -> Result<VerifiedStatement, UpdateError> {
-    if statement_bytes.len() > MAX_STATEMENT_BYTES {
-        return Err(UpdateError::TooLarge {
-            what: "latest statement",
-            limit: MAX_STATEMENT_BYTES as u64,
-        });
-    }
-    let signature = DetachedSignature::parse(signature_bytes, SignatureKind::Statement)?;
-    let key = keys
-        .find(signature.key_id())
-        .ok_or(UpdateError::UnknownKey)?;
-    check_signature(key, statement_bytes, &signature)?;
+    let key_id = verify_signed(
+        statement_bytes,
+        signature_bytes,
+        keys,
+        SignatureKind::Statement,
+        ("latest statement", MAX_STATEMENT_BYTES),
+    )?;
 
     // Only signed bytes reach the parser.
     let statement = Statement::parse(statement_bytes)?;
@@ -116,7 +112,7 @@ pub fn verify_statement(
     check_serial(&statement, &sha256, previous)?;
     Ok(VerifiedStatement {
         statement,
-        key_id: signature.key_id(),
+        key_id,
         sha256,
     })
 }

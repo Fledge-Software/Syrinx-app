@@ -26,8 +26,8 @@ struct Exception {
     reason: String,
 }
 
-/// Fails listing every third-party package in `metadata` whose licence the policy refuses.
-pub fn check(root: &Path, metadata: &Value) -> Result<(), String> {
+/// Fails listing every third-party package `target` compiles whose licence the policy refuses.
+pub fn check(root: &Path, target: &str, metadata: &Value) -> Result<(), String> {
     let policy = read_policy(root)?;
     let packages = third_party_packages(metadata)?;
     let mut refused = Vec::new();
@@ -38,16 +38,21 @@ pub fn check(root: &Path, metadata: &Value) -> Result<(), String> {
     }
     if !refused.is_empty() {
         return Err(format!(
-            "Licences not allowed by licences.toml:\n  {}",
+            "Licences not allowed by licences.toml for {target}:\n  {}",
             refused.join("\n  ")
         ));
     }
 
     println!(
-        "Licences passed: {} third-party packages checked.",
+        "Licences passed for {target}: {} third-party packages checked.",
         packages.len()
     );
     Ok(())
+}
+
+/// The licences allowed for any package; the editor's npm packages are held to the same list.
+pub fn allowed_licences(root: &Path) -> Result<Vec<String>, String> {
+    Ok(read_policy(root)?.allowed)
 }
 
 fn read_policy(root: &Path) -> Result<Policy, String> {
@@ -122,7 +127,7 @@ fn required_str<'a>(package: &'a Value, field: &str) -> Result<&'a str, String> 
 
 /// Whether an SPDX expression can be met using only allowed licences.
 /// `OR` needs one side allowed, `AND` needs both; `A WITH B` is one licence.
-fn satisfies(expression: &str, allowed: &[String]) -> bool {
+pub fn satisfies(expression: &str, allowed: &[String]) -> bool {
     let normalised = expression
         .replace('/', " OR ")
         .replace('(', " ( ")

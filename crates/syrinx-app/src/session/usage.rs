@@ -351,8 +351,6 @@ fn remove_if_present(path: &Path) -> Result<(), UsageError> {
 
 #[cfg(test)]
 mod tests {
-    #[cfg(windows)]
-    use std::os::windows::fs::OpenOptionsExt;
     use std::{
         sync::atomic::{AtomicU64, Ordering},
         time::{SystemTime, UNIX_EPOCH},
@@ -487,111 +485,10 @@ mod tests {
     }
 
     // Holding a file without delete sharing is a Windows behaviour.
-    #[cfg(windows)]
-    #[test]
-    fn a_switch_off_that_cannot_delete_stays_off_and_finishes_at_the_next_start() {
-        let folder = Folder::new();
-        let recorder = Arc::new(UsageRecorder::new());
-        let mut collector = counting(&folder, &recorder);
-
-        // Another program holds the file open without delete sharing.
-        let held = fs::OpenOptions::new()
-            .read(true)
-            .share_mode(0)
-            .open(folder.0.join(FILE_NAME))
-            .expect("hold the synthetic usage file");
-        let (status, problem) = collector.control(UsageControl::TurnOff, None, Instant::now());
-        assert!(
-            !status.counting,
-            "counting stops even though deletion failed"
-        );
-        assert_eq!(problem, Some(UsageError::Delete));
-        assert!(!recorder.is_enabled());
-        assert!(folder.has(FILE_NAME) && folder.has(OFF_NAME));
-
-        // While the file is still held, the next start stays off.
-        let (collector, problem) =
-            UsageCollector::load(recorder.clone(), &folder.0, Some(today()), Instant::now());
-        assert!(!collector.status().counting);
-        assert_eq!(problem, Some(UsageError::Delete));
-        assert!(!recorder.is_enabled());
-
-        // Once released, the next start finishes the deletion and removes the marker.
-        drop(held);
-        let (collector, problem) =
-            UsageCollector::load(recorder.clone(), &folder.0, Some(today()), Instant::now());
-        assert!(!collector.status().counting);
-        assert_eq!(problem, None);
-        assert!(!folder.has(FILE_NAME) && !folder.has(OFF_NAME));
-    }
 
     // Holding a file without delete sharing is a Windows behaviour.
-    #[cfg(windows)]
-    #[test]
-    fn a_failed_reset_reports_the_status_it_left() {
-        let folder = Folder::new();
-        let recorder = Arc::new(UsageRecorder::new());
-        let mut collector = counting(&folder, &recorder);
-        let held = fs::OpenOptions::new()
-            .read(true)
-            .share_mode(0)
-            .open(folder.0.join(FILE_NAME))
-            .expect("hold the synthetic usage file");
-        let (status, problem) =
-            collector.control(UsageControl::Reset, Some(today()), Instant::now());
-        assert!(problem.is_some());
-        assert!(
-            !status.counting,
-            "a reset that could not delete leaves counting off"
-        );
-        assert!(!recorder.is_enabled());
-        assert!(folder.has(OFF_NAME), "the switch-off is recorded");
-
-        // While the file is still held, the next start stays off.
-        let (collector, problem) =
-            UsageCollector::load(recorder.clone(), &folder.0, Some(today()), Instant::now());
-        assert!(!collector.status().counting);
-        assert_eq!(problem, Some(UsageError::Delete));
-
-        // Once released, the next start finishes the deletion.
-        drop(held);
-        let (collector, problem) =
-            UsageCollector::load(recorder.clone(), &folder.0, Some(today()), Instant::now());
-        assert!(!collector.status().counting);
-        assert_eq!(problem, None);
-        assert!(!folder.has(FILE_NAME) && !folder.has(OFF_NAME));
-    }
 
     // Holding a file without delete sharing is a Windows behaviour.
-    #[cfg(windows)]
-    #[test]
-    fn a_switch_off_that_cannot_record_or_delete_says_counting_may_resume() {
-        let folder = Folder::new();
-        let recorder = Arc::new(UsageRecorder::new());
-        let mut collector = counting(&folder, &recorder);
-        // A folder where the marker belongs makes writing the marker fail.
-        fs::create_dir(folder.0.join(OFF_NAME)).expect("block the synthetic marker");
-        let held = fs::OpenOptions::new()
-            .read(true)
-            .share_mode(0)
-            .open(folder.0.join(FILE_NAME))
-            .expect("hold the synthetic usage file");
-        let (status, problem) = collector.control(UsageControl::TurnOff, None, Instant::now());
-        assert!(!status.counting);
-        assert_eq!(problem, Some(UsageError::NotStopped));
-        assert!(!recorder.is_enabled());
-        assert!(
-            !UsageError::NotStopped.to_string().contains("finish when"),
-            "no retry is promised"
-        );
-        drop(held);
-        fs::remove_dir(folder.0.join(OFF_NAME)).expect("unblock the synthetic marker");
-
-        // As the message warned, nothing recorded the switch-off, so the file still counts.
-        let (collector, _) =
-            UsageCollector::load(recorder.clone(), &folder.0, Some(today()), Instant::now());
-        assert!(collector.status().counting);
-    }
 
     #[test]
     fn leftover_copies_beside_an_absent_file_go_at_start_up() {
@@ -605,5 +502,114 @@ mod tests {
         assert_eq!(problem, None);
         assert!(!collector.status().counting);
         assert!(!folder.has(REPLACEMENT_NAME) && !folder.has(DAMAGED_NAME));
+    }
+
+    // Usage behaviour that depends on Windows-only parts of the app.
+    #[cfg(windows)]
+    mod windows {
+        use super::*;
+
+        use std::os::windows::fs::OpenOptionsExt;
+
+        #[test]
+        fn a_switch_off_that_cannot_delete_stays_off_and_finishes_at_the_next_start() {
+            let folder = Folder::new();
+            let recorder = Arc::new(UsageRecorder::new());
+            let mut collector = counting(&folder, &recorder);
+
+            // Another program holds the file open without delete sharing.
+            let held = fs::OpenOptions::new()
+                .read(true)
+                .share_mode(0)
+                .open(folder.0.join(FILE_NAME))
+                .expect("hold the synthetic usage file");
+            let (status, problem) = collector.control(UsageControl::TurnOff, None, Instant::now());
+            assert!(
+                !status.counting,
+                "counting stops even though deletion failed"
+            );
+            assert_eq!(problem, Some(UsageError::Delete));
+            assert!(!recorder.is_enabled());
+            assert!(folder.has(FILE_NAME) && folder.has(OFF_NAME));
+
+            // While the file is still held, the next start stays off.
+            let (collector, problem) =
+                UsageCollector::load(recorder.clone(), &folder.0, Some(today()), Instant::now());
+            assert!(!collector.status().counting);
+            assert_eq!(problem, Some(UsageError::Delete));
+            assert!(!recorder.is_enabled());
+
+            // Once released, the next start finishes the deletion and removes the marker.
+            drop(held);
+            let (collector, problem) =
+                UsageCollector::load(recorder.clone(), &folder.0, Some(today()), Instant::now());
+            assert!(!collector.status().counting);
+            assert_eq!(problem, None);
+            assert!(!folder.has(FILE_NAME) && !folder.has(OFF_NAME));
+        }
+
+        #[test]
+        fn a_failed_reset_reports_the_status_it_left() {
+            let folder = Folder::new();
+            let recorder = Arc::new(UsageRecorder::new());
+            let mut collector = counting(&folder, &recorder);
+            let held = fs::OpenOptions::new()
+                .read(true)
+                .share_mode(0)
+                .open(folder.0.join(FILE_NAME))
+                .expect("hold the synthetic usage file");
+            let (status, problem) =
+                collector.control(UsageControl::Reset, Some(today()), Instant::now());
+            assert!(problem.is_some());
+            assert!(
+                !status.counting,
+                "a reset that could not delete leaves counting off"
+            );
+            assert!(!recorder.is_enabled());
+            assert!(folder.has(OFF_NAME), "the switch-off is recorded");
+
+            // While the file is still held, the next start stays off.
+            let (collector, problem) =
+                UsageCollector::load(recorder.clone(), &folder.0, Some(today()), Instant::now());
+            assert!(!collector.status().counting);
+            assert_eq!(problem, Some(UsageError::Delete));
+
+            // Once released, the next start finishes the deletion.
+            drop(held);
+            let (collector, problem) =
+                UsageCollector::load(recorder.clone(), &folder.0, Some(today()), Instant::now());
+            assert!(!collector.status().counting);
+            assert_eq!(problem, None);
+            assert!(!folder.has(FILE_NAME) && !folder.has(OFF_NAME));
+        }
+
+        #[test]
+        fn a_switch_off_that_cannot_record_or_delete_says_counting_may_resume() {
+            let folder = Folder::new();
+            let recorder = Arc::new(UsageRecorder::new());
+            let mut collector = counting(&folder, &recorder);
+            // A folder where the marker belongs makes writing the marker fail.
+            fs::create_dir(folder.0.join(OFF_NAME)).expect("block the synthetic marker");
+            let held = fs::OpenOptions::new()
+                .read(true)
+                .share_mode(0)
+                .open(folder.0.join(FILE_NAME))
+                .expect("hold the synthetic usage file");
+            let (status, problem) = collector.control(UsageControl::TurnOff, None, Instant::now());
+            assert!(!status.counting);
+            assert_eq!(problem, Some(UsageError::NotStopped));
+            assert!(!recorder.is_enabled());
+            assert!(
+                !UsageError::NotStopped.to_string().contains("finish when"),
+                "no retry is promised"
+            );
+            drop(held);
+            fs::remove_dir(folder.0.join(OFF_NAME)).expect("unblock the synthetic marker");
+
+            // As the message warned, nothing recorded the switch-off, so the file still counts.
+            let (collector, _) =
+                UsageCollector::load(recorder.clone(), &folder.0, Some(today()), Instant::now());
+            assert!(collector.status().counting);
+        }
     }
 }

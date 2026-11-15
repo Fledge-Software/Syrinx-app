@@ -417,6 +417,13 @@ style problem.
   `tiny-keccak 2.0.2` (CC0-1.0), both compile-time only and never linked
   into Syrinx; `docs/dev/dependency-audit.md`, "Linux platform layer",
   records where each comes from. This approves only those versions.
+- **Approved narrow licence exception, 2026-11-03:** the Linux build may link
+  `ring 0.17.14` (Apache-2.0 AND ISC), `untrusted 0.9.0`, `inotify 0.11.5`,
+  `inotify-sys 0.1.8` and `libloading 0.8.9` (ISC), `foldhash 0.1.5` (Zlib)
+  and `hexf-parse 0.2.1` (CC0-1.0). Each is listed in `licences.toml`, which
+  `cargo xtask check-licences` now applies to the Windows and the Linux
+  target alike. This approves only those versions, not ISC, Zlib or CC0 in
+  general.
 - **Pin GPUI and wasmtime exactly with `=`.** GPUI's snapshot releases change
   its API weekly, and a caret requirement has already broken builds (note 08,
   1.2). wasmtime stays on its 48.x long-term-support line; a security patch

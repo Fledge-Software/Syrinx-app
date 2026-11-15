@@ -668,9 +668,9 @@ proc-macro-error, proc-macro-error-attr, syn 1.0.109, system-deps,
 toml_edit 0.19.15 and 0.20.7, x11rb, x11rb-protocol. Apache-2.0: gethostname.
 MIT OR Apache-2.0 OR Zlib: xkeysym (used under MIT).
 
-**Approved narrow licence exception (owner, 2026-10-31).** Two packages are
-outside the MIT/Apache-2.0/BSD list, and both run only while compiling;
-neither is linked into Syrinx:
+**Approved narrow licence exception (owner, 2026-10-31).** Two of the 60
+added packages are outside the MIT/Apache-2.0/BSD list, and both run only
+while compiling; neither is linked into Syrinx:
 
 - `target-lexicon 0.12.16`, Apache-2.0 WITH LLVM-exception (the exception
   only adds permissions), reached through `system-deps` and `cfg-expr` in
@@ -682,6 +682,30 @@ neither is linked into Syrinx:
 The approval covers exactly these versions; a different version, or the
 same licence on another package, needs its own approval.
 
+**Packages already in the lockfile that Linux compiles (owner, 2026-11-03).**
+The 60 packages above are only those the port added to `Cargo.lock`. The
+lockfile already recorded every platform's packages, and the Linux build
+compiles 178 package versions that Windows does not (730 third-party
+packages in all, against Windows' 617). Earlier audits never judged the
+other 118 for Linux. Seven of them are outside the MIT/Apache-2.0/BSD list and link into
+Syrinx on Linux; the 2026-10-31 paragraph above wrongly implied there were
+only two outside it. The review of #226 found them, because
+`cargo xtask check-licences` then judged only the Windows target. The owner
+approved each at its exact version on 2026-11-03 (`docs/decisions.md`):
+
+- `ring 0.17.14` (Apache-2.0 AND ISC), the Unix signature check in
+  `syrinx-update`, and `untrusted 0.9.0` (ISC), which ring uses;
+- `inotify 0.11.5` and `inotify-sys 0.1.8` (ISC), through `notify 8.2.0`
+  and `gpui-component`;
+- `libloading 0.8.9` (ISC), through `ash` and GPUI's wgpu renderer;
+- `foldhash 0.1.5` (Zlib), through `hashbrown 0.15.5` and `wgpu-hal`;
+- `hexf-parse 0.2.1` (CC0-1.0), through `naga` and `wgpu`.
+
+All nine Linux exceptions are now in `licences.toml`, and
+`check-licences` judges `x86_64-unknown-linux-gnu` as well as
+`x86_64-pc-windows-msvc` on every machine, so a new Linux-only package with
+another licence fails the gate on either platform.
+
 **D9 network features (owner, 2026-10-31).** `cargo metadata` unifies
 features across every target, so two Linux-only crates show up asking for
 winapi's socket modules for their own Windows builds, which Syrinx never
@@ -690,3 +714,63 @@ compiles: `gio-sys 0.18.1` (`winsock2`, `ws2def`) and `filedescriptor
 `crates/xtask/src/dependency_policy/resolved_windows.rs`, pinned to those
 versions, on the same reasoning as `zbus` (DW-68).
 
+
+## #134: `toml` and `serde` ship in `syrinx-plugin-host`, 2026-11-10
+
+The plugin host reads each plugin's `syrinx-plugin.toml`
+(`crates/syrinx-plugin-host/src/manifest/`). A manifest is untrusted input:
+it comes from a folder the owner picks, and its bytes are parsed before
+anything about the plugin is trusted. Writing a TOML parser for that input
+would be riskier than reusing the parser the workspace already pins, so the
+host declares `toml =1.1.8` (default features off; `std`, `parse` and
+`serde`) and `serde =1.0.229` (`derive`). These are exactly the pins and
+features `xtask` has used since #28 to read `licences.toml`
+(`crates/xtask/Cargo.toml`), so no package or version enters `Cargo.lock`;
+it gains only the host's two dependency lines. What changes is that these
+crates now ship inside Syrinx instead of only in a development tool. The
+owner accepted them as shipped dependencies of the plugin host on
+2026-11-10, provided this audit was recorded.
+
+Before parsing, the host bounds a manifest to 64 KiB (`MAX_MANIFEST_BYTES`)
+and requires UTF-8. Every table is read with `deny_unknown_fields` into
+plain owned values (`manifest/raw.rs`), and nothing is deserialised into a
+type that runs code. The parser therefore sees only a small,
+size-limited text.
+
+| Package | Version | Role | Licence | Build script | Published | Newest on 2026-11-10 | RustSec |
+|---|---|---|---|---|---|---|---|
+| toml | 1.1.8+spec-1.1.0 | shipped: the parser front end | MIT OR Apache-2.0 | no | 2026-10-09 | 1.2.1 (2026-11-06) | none |
+| toml_parser | 1.1.5+spec-1.1.0 | shipped: the lexer and parser | MIT OR Apache-2.0 | no | 2026-10-09 | 1.1.5 | none |
+| toml_datetime | 1.1.2+spec-1.1.0 | shipped: date values | MIT OR Apache-2.0 | no | 2026-10-08 | 1.1.3 (2026-11-06) | none |
+| serde_spanned | 1.1.2 | shipped: spans for errors | MIT OR Apache-2.0 | no | 2026-10-08 | 1.1.3 (2026-11-06) | none |
+| winnow | 1.0.4 | shipped: parser combinators | MIT | no | 2026-07-13 | 1.0.5 (2026-11-05) | none |
+| serde | 1.0.229 | shipped: the data model | MIT OR Apache-2.0 | yes (compiler checks) | 2026-07-18 | 1.0.229 | none |
+| serde_core | 1.0.229 | shipped, through `serde` | MIT OR Apache-2.0 | yes (compiler checks) | 2026-07-18 | 1.0.229 | none |
+| serde_derive | 1.0.229 | build time: the `derive` macro | MIT OR Apache-2.0 | no | 2026-07-18 | 1.0.229 | none |
+| proc-macro2 | 1.0.107 | build time, for `serde_derive` | MIT OR Apache-2.0 | yes | 2026-07-19 | 1.0.107 | none |
+| quote | 1.0.47 | build time, for `serde_derive` | MIT OR Apache-2.0 | yes | 2026-07-19 | 1.0.47 | none |
+| syn | 3.0.6 | build time, for `serde_derive` | MIT OR Apache-2.0 | no | 2026-09-16 | 3.0.10 (2026-11-09) | none |
+| unicode-ident | 1.0.26 | build time, for `proc-macro2` | (MIT OR Apache-2.0) AND Unicode-3.0 | no | 2026-09-17 | 1.0.27 (2026-10-12) | none |
+
+How each column was found:
+
+- **Licence and build script:** read from each package's published
+  `Cargo.toml` in the local registry.
+- **Publication dates and newest versions:** from the crates.io API.
+- **RustSec:** none of the twelve packages has a directory in the RustSec
+  advisory database (`crates/<name>` in `rustsec/advisory-db`, checked
+  2026-11-10), so no advisory has ever been filed against any of them.
+
+`unicode-ident`'s Unicode-3.0 term is the owner's narrow exception of
+2026-10-10, listed in `licences.toml`. It is compiled only into the
+`derive` macro and never into Syrinx.
+
+Maintenance:
+- `toml`, `toml_parser`, `toml_datetime`, `serde_spanned` and `winnow` are
+  maintained together in the `toml-rs` project. Each had a release within
+  the last five weeks.
+- `serde` and its derive are released by their long-standing maintainer.
+
+Newer patch releases of `toml`, `toml_datetime`, `serde_spanned` and
+`winnow` exist. Moving the pins is a routine bump that would change `xtask`
+as well; it is not part of #134.

@@ -274,6 +274,15 @@ impl BrowserView {
     }
 }
 
+/// Delivers a focus check only while the document and native page child both hold focus.
+fn while_page_has_keys<T>(
+    native: probe_win32::KeyboardFocus,
+    document: Option<bool>,
+    deliver: impl FnOnce() -> T,
+) -> Option<T> {
+    (native == probe_win32::KeyboardFocus::InsideMainWindow && document == Some(true)).then(deliver)
+}
+
 /// Where focus was around one in-process `PageFocused`, for the find focus checks.
 struct PageFocusOutcome {
     chrome_had_keys: bool,
@@ -284,14 +293,14 @@ struct PageFocusOutcome {
 impl PageFocusOutcome {
     fn detail(&self) -> String {
         format!(
-            "Windows focus on the chrome: {}; find field focused before: {}, after: {}",
+            "Native keyboard focus on the chrome: {}; find field focused before: {}, after: {}",
             self.chrome_had_keys, self.field_before, self.field_after
         )
     }
 }
 
-/// Delivers WebView2's `GotFocus` for `tab` through the page-host event path, as its event
-/// loop does, and notes where Windows and GPUI focus were.
+/// Delivers the page engine's focus event through the host path and records native and
+/// GPUI focus in the same update.
 fn deliver_page_focus(
     view: &mut BrowserView,
     tab: TabId,
@@ -669,14 +678,14 @@ impl Run {
     /// page (`None` when it never did) and where Windows keyboard focus was.
     async fn escape_to_page(&mut self, focus: TabId) -> Result<EscapeOutcome, String> {
         let (pressed, gains_before) = self.with(|view, _, cx| {
-            let popup = view.palette_hwnd(cx)?;
+            let _popup = view.palette_hwnd(cx)?;
             if let Some(acceptance) = view.acceptance.as_mut() {
                 acceptance.marks.clear();
             }
             let pressed = Instant::now();
-            probe_win32::post_key(popup, Key::Escape).map_err(|error| error.to_string())?;
             Ok::<_, String>((pressed, view.focus_gains(focus)))
         })??;
+        self.post_key(Key::Escape)?;
         let at_close = self
             .wait_for(
                 Duration::from_secs(3),
@@ -770,11 +779,8 @@ impl Run {
     /// Esc posted before the popup's first frame must still close it and return focus.
     async fn check_rapid_dismissal(&mut self) -> Result<(), String> {
         let focus = self.focus_tab()?;
-        let posted = self.with(|view, window, cx| {
-            view.shortcut(BrowserShortcut::Palette, window, cx);
-            let popup = view.palette_hwnd(cx)?;
-            probe_win32::post_key(popup, Key::Escape).map_err(|error| error.to_string())
-        })?;
+        self.with(|view, window, cx| view.shortcut(BrowserShortcut::Palette, window, cx))?;
+        let posted = self.post_key(Key::Escape);
         let returned = self
             .try_wait(Duration::from_secs(3), |view, _, _| {
                 (view.palette.is_none() && focused_or_deferred(view, focus).is_some()).then_some(())
@@ -937,10 +943,7 @@ impl Run {
             return Ok(());
         };
         self.open_timed().await?;
-        self.with(|view, _, cx| {
-            let popup = view.palette_hwnd(cx)?;
-            probe_win32::post_text(popup, &query).map_err(|error| error.to_string())
-        })??;
+        self.post_text(&query)?;
         // Enter only once the full text's own reply selects the target, as the bursts do.
         let target = Target::Tab(enter);
         let selected = self.select_enter_target(how, &query, target).await?;
@@ -951,10 +954,7 @@ impl Run {
             self.report_enter_not_run(how, detail);
             return Ok(());
         }
-        self.with(|view, _, cx| {
-            let popup = view.palette_hwnd(cx)?;
-            probe_win32::post_key(popup, Key::Enter).map_err(|error| error.to_string())
-        })??;
+        self.post_key(Key::Enter)?;
         let switched = self
             .try_wait(Duration::from_secs(5), |view, _, _| {
                 let done = view.palette.is_none() && view.model.active_id == Some(enter);
@@ -1112,9 +1112,8 @@ impl Run {
         self.return_to(focus).await
     }
 
-    /// A page `GotFocus` while Windows focus stays on the chrome must leave the find field
-    /// focused (#57); one while the page really holds the keys must still clear it (P1-36).
-    /// Both events go in-process through `browser_event`, so neither needs the foreground.
+    /// A stray page-focus event preserves the find field (#57); real page focus clears
+    /// its ring (P1-36). Each event is delivered in the update that checks native focus.
     async fn check_find_keeps_focus(&mut self) -> Result<(), String> {
         let focus = self.focus_tab()?;
         let (field, kept) = self.page_focus_while_chrome_holds_keys(focus).await?;
@@ -1123,18 +1122,17 @@ impl Run {
             kept.chrome_had_keys && kept.field_before && kept.field_after,
             kept.detail(),
         );
-        let left_chrome = self.move_keys_into_page(focus).await?;
-        let cleared = self.with(|view, window, cx| {
-            window.focus(&field, cx);
-            deliver_page_focus(view, focus, &field, window, cx)
-        })?;
+        let cleared = self.move_keys_into_page(focus, &field).await?;
+        let detail = cleared.as_ref().map_or_else(
+            || "No simultaneous native page focus and document focus within 5s.".to_owned(),
+            PageFocusOutcome::detail,
+        );
         self.report.check(
             "find_ring_clears_on_real_page_focus",
-            left_chrome && !cleared.chrome_had_keys && cleared.field_before && !cleared.field_after,
-            format!(
-                "Windows focus left the chrome: {left_chrome}; {}",
-                cleared.detail()
-            ),
+            cleared.is_some_and(|outcome| {
+                !outcome.chrome_had_keys && outcome.field_before && !outcome.field_after
+            }),
+            detail,
         );
         self.with(|view, window, cx| {
             view.dismiss_find(window);
@@ -1174,17 +1172,27 @@ impl Run {
         .await
     }
 
-    /// Moves Windows focus into `tab`'s page as a click would, without GPUI's involvement;
-    /// false when it never left the chrome.
-    async fn move_keys_into_page(&mut self, tab: TabId) -> Result<bool, String> {
+    /// Requests page focus once, then delivers the ring check while native and document
+    /// focus agree. Yielding after the precondition would let chrome reclaim the keys.
+    async fn move_keys_into_page(
+        &mut self,
+        tab: TabId,
+        field: &FocusHandle,
+    ) -> Result<Option<PageFocusOutcome>, String> {
         self.with(|view, _, _| view.page_command(BrowserCommand::Focus { id: tab.get() }))?;
-        let left = self
-            .try_wait(Duration::from_secs(5), |view, _, _| {
-                let chrome = syrinx_platform::browser::chrome_has_keyboard_focus(view.parent_hwnd);
-                (!chrome).then_some(())
+        let outcome = self
+            .try_wait(Duration::from_secs(5), |view, window, cx| {
+                let native = match probe_win32::keyboard_focus(view.parent_hwnd, None) {
+                    Ok(native) => native,
+                    Err(error) => return Some(Err(error.to_string())),
+                };
+                while_page_has_keys(native, view.page_focus(tab), || {
+                    window.focus(field, cx);
+                    Ok(deliver_page_focus(view, tab, field, window, cx))
+                })
             })
             .await?;
-        Ok(left.is_some())
+        outcome.transpose()
     }
 
     /// Hides the sidebar so it can peek, and waits for the hover sampler that hiding starts
@@ -1212,6 +1220,59 @@ impl Run {
             return Ok(());
         }
         self.with(|view, window, cx| view.toggle_sidebar(window, cx))
+    }
+
+    /// Linux has no per-window Unicode message; dispatch only into this GPUI popup.
+    fn dispatch_palette_key(&mut self, key: gpui::Keystroke) -> Result<(), String> {
+        let target: AnyWindowHandle = self.with(|view, _, _| {
+            view.palette
+                .as_ref()
+                .map(|palette| palette.window.into())
+                .ok_or_else(|| "The palette closed before input dispatch.".to_owned())
+        })??;
+        self.cx
+            .update_window(target, |_, window, cx| {
+                window.dispatch_keystroke(key, cx);
+            })
+            .map_err(|error| format!("Palette input failed: {error:#}"))
+    }
+
+    /// Dispatch after the BrowserView borrow ends; key handlers may update that view.
+    fn post_key(&mut self, key: Key) -> Result<(), String> {
+        if probe_win32::DISPATCH_INPUT_IN_WINDOW {
+            let name = match key {
+                Key::Enter => "enter",
+                Key::Escape => "escape",
+                Key::Backspace => "backspace",
+            };
+            return self.dispatch_palette_key(
+                gpui::Keystroke::parse(name).map_err(|error| error.to_string())?,
+            );
+        }
+        let popup = self.with(|view, _, cx| view.palette_hwnd(cx))??;
+        probe_win32::post_key(popup, key).map_err(|error| error.to_string())
+    }
+
+    fn post_text(&mut self, text: &str) -> Result<(), String> {
+        if probe_win32::DISPATCH_INPUT_IN_WINDOW {
+            for character in text.chars() {
+                self.dispatch_palette_key(gpui::Keystroke {
+                    modifiers: gpui::Modifiers::default(),
+                    key: character.to_string(),
+                    key_char: Some(character.to_string()),
+                })?;
+            }
+            return Ok(());
+        }
+        let popup = self.with(|view, _, cx| view.palette_hwnd(cx))??;
+        probe_win32::post_text(popup, text).map_err(|error| error.to_string())
+    }
+
+    fn post_typed(&mut self, typed: Typed) -> Result<(), String> {
+        match typed {
+            Typed::Character(character) => self.post_text(character.encode_utf8(&mut [0; 4])),
+            Typed::Backspace => self.post_key(Key::Backspace),
+        }
     }
 
     /// Moves to `at` in `target`, then presses and releases the left button there.
@@ -1337,11 +1398,8 @@ impl Run {
             if index > 0 {
                 self.sleep(BURST_CADENCE).await;
             }
-            last_posted = self.with(|view, _, cx| {
-                let posted = Instant::now();
-                post_typed(view, cx, *typed)?;
-                Ok::<_, String>(posted)
-            })??;
+            last_posted = Instant::now();
+            self.post_typed(*typed)?;
         }
         let probe = self.probe.clone();
         let settled = self
@@ -1366,12 +1424,9 @@ impl Run {
     /// Posts one key to the palette and waits for the frame that shows its rows.
     async fn keystroke(&mut self, typed: Typed) -> Result<KeySample, String> {
         let probe = self.probe.clone();
-        let posted = self.with(|view, _, cx| {
-            let posted = Instant::now();
-            probe.begin_key();
-            post_typed(view, cx, typed)?;
-            Ok::<_, String>(posted)
-        })??;
+        let posted = Instant::now();
+        probe.begin_key();
+        self.post_typed(typed)?;
         let probe = self.probe.clone();
         // A timeout is a measured failure (no rows), not a reason to stop the run.
         self.try_wait(KEY_LIMIT, |_, _, _| {
@@ -1551,21 +1606,31 @@ fn left_click(at: Point<Pixels>) -> [PlatformInput; 3] {
     ]
 }
 
-/// Posts one typed key to the open palette's own window.
-fn post_typed(view: &BrowserView, cx: &mut App, typed: Typed) -> Result<(), String> {
-    let popup = view.palette_hwnd(cx)?;
-    let sent = match typed {
-        Typed::Character(character) => {
-            probe_win32::post_text(popup, character.encode_utf8(&mut [0; 4]))
-        }
-        Typed::Backspace => probe_win32::post_key(popup, Key::Backspace),
-    };
-    sent.map_err(|error| error.to_string())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_find_focus_check_rejects_lost_keys_and_a_document_without_focus() {
+        use probe_win32::KeyboardFocus::*;
+        // An earlier page-focus sample cannot authorize delivery after focus moved away.
+        for native in [Nobody, MainWindow, Popup, Elsewhere] {
+            assert_eq!(
+                while_page_has_keys(native, Some(true), || "delivered"),
+                None
+            );
+        }
+        for document in [None, Some(false)] {
+            assert_eq!(
+                while_page_has_keys(InsideMainWindow, document, || "delivered"),
+                None
+            );
+        }
+        assert_eq!(
+            while_page_has_keys(InsideMainWindow, Some(true), || "delivered"),
+            Some("delivered")
+        );
+    }
 
     #[test]
     fn a_deferral_counts_only_when_the_run_began_behind() {

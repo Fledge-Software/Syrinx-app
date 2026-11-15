@@ -76,6 +76,8 @@ pub enum UpdateError {
     Clock,
     /// A signing key is not an ECDSA P-256 key, or its stored public half is malformed.
     UnsuitableSigningKey,
+    /// A plugin package signed for one id sits where another id's package belongs.
+    WrongPlugin { expected: String, signed: String },
 }
 
 /// What is wrong with a latest-statement line.
@@ -142,6 +144,12 @@ pub enum ManifestProblem {
     TotalTooLarge,
     /// The text parses but is not the unique canonical rendering.
     NonCanonical,
+    /// A plugin package's id is not lowercase letters, digits and hyphens.
+    PluginId,
+    /// A plugin package's world is not a `syrinx:plugin` world name.
+    World,
+    /// A plugin package lists its own signed files, or precompiled `.cwasm` code.
+    ReservedPath,
 }
 
 /// Why a payload path is refused.
@@ -241,6 +249,9 @@ impl fmt::Display for UpdateError {
             Self::Clock => formatter.write_str("the local clock is outside 1970 to 9999"),
             Self::UnsuitableSigningKey => {
                 formatter.write_str("signing key is not an ECDSA P-256 key")
+            }
+            Self::WrongPlugin { expected, signed } => {
+                write!(formatter, "package is signed for {signed}, not {expected}")
             }
         }
     }

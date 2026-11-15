@@ -50,19 +50,12 @@ const DATA_FOLDER: &[&str] = if cfg!(feature = "installed") {
     &["SyrinxProductPreview"]
 };
 
-/// `%LOCALAPPDATA%`, the per-user folder that is never roamed or synced (D13).
-#[cfg(windows)]
-fn local_app_data() -> Result<PathBuf, &'static str> {
-    std::env::var_os("LOCALAPPDATA")
-        .map(PathBuf::from)
-        .ok_or("Windows local app data is unavailable.")
-}
-
-/// `$XDG_DATA_HOME`, or `~/.local/share`, as the storage guard resolves it.
-#[cfg(unix)]
-fn local_app_data() -> Result<PathBuf, &'static str> {
+/// The per-user data folder that is never roamed or synced (D13), as the storage guard
+/// resolves it: Windows' local app data, or `$XDG_DATA_HOME` (`~/.local/share`) on Linux.
+/// Keeps the storage guard's reason, which names only the step and the OS error code.
+fn local_app_data() -> Result<PathBuf, String> {
     syrinx_platform::local_app_data()
-        .map_err(|_| "The local data folder ($XDG_DATA_HOME or ~/.local/share) is unavailable.")
+        .map_err(|error| format!("The local data folder is unavailable: {error}."))
 }
 
 fn main() -> ExitCode {
@@ -78,11 +71,14 @@ fn main() -> ExitCode {
     if !smoke_requested {
         show_panics_in_a_message_box();
     }
-    let mut options = match parse_arguments(arguments).and_then(run_mode) {
+    let mut options = match parse_arguments(arguments)
+        .map_err(String::from)
+        .and_then(run_mode)
+    {
         Ok(RunMode::Browser(options)) => options,
         Ok(RunMode::Review(review)) => return run_review(review),
         Err(message) => {
-            report_startup_problem(message, smoke_requested);
+            report_startup_problem(&message, smoke_requested);
             return ExitCode::FAILURE;
         }
     };
@@ -533,7 +529,7 @@ fn link_after_marker(
     link_argument(&link)
 }
 
-fn run_mode(arguments: Arguments) -> Result<RunMode, &'static str> {
+fn run_mode(arguments: Arguments) -> Result<RunMode, String> {
     if let Some(review) = arguments.review {
         return Ok(RunMode::Review(review));
     }

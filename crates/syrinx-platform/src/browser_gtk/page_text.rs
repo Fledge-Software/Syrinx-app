@@ -1,5 +1,5 @@
-//! P1-25 on Linux: observes each page's navigation facts for the shared eligibility check, and
-//! reads an eligible page's HTML as sent; nothing is added to or run inside the page.
+//! P1-25 on Linux: observes each page's navigation facts for the shared eligibility check and
+//! taint rules. No page is read: the owner has not approved a reading method (#219).
 
 #[path = "../browser/page_text/state.rs"]
 mod state;
@@ -8,33 +8,21 @@ use std::{
     cell::{Cell, RefCell},
     collections::VecDeque,
     rc::{Rc, Weak},
-    sync::atomic::{AtomicUsize, Ordering},
-    time::{Duration, Instant, SystemTime},
+    time::Instant,
 };
 
 use gtk::glib::{self, clone::Downgrade};
-use syrinx_core::{
-    EligibleDocument, Ineligible, LeftDocument, ObservedResponse, PageTextPolicy, SentHtmlRefusal,
-    sent_html_text,
-};
+use syrinx_core::{Ineligible, LeftDocument, ObservedResponse, PageTextPolicy};
 use webkit2gtk::{URIResponseExt, WebResourceExt, WebView, WebViewExt};
 
-use super::{BrowserEvent, CapturedText, DiscardReason, EventSink, PageTextOutcome};
+use super::{BrowserEvent, EventSink, PageTextOutcome};
 use state::{Rules, Start, TextState, without_fragment};
 
-/// WebKitGTK has no host-side DOM snapshot, so Linux could only read a page's HTML as the
-/// server sent it, a method the owner has not approved (docs/page-text-indexing.md, candidate
-/// 4's fallback). Until then every capture that falls due reports capture as off.
-pub(super) const READS_SENT_HTML: bool = false;
-/// The most pages read at once; a capture beyond it is skipped as busy, as on Windows.
-const READERS: usize = 2;
 /// The method recorded when the request that began a navigation was not seen; it fails closed
 /// as a form submission would.
 const UNSEEN_METHOD: &str = "UNSEEN";
 /// The most recent navigation requests kept for matching.
 const ASKED_RECORDS: usize = 8;
-
-static READING: AtomicUsize = AtomicUsize::new(0);
 
 /// The capture policy (`None` means off) and the last exclusion lists, which keep deciding
 /// taint while capture is off; shared by every page.
@@ -55,11 +43,6 @@ impl TextContext {
 
     fn policy(&self) -> Option<Rc<PageTextPolicy>> {
         self.policy.borrow().clone()
-    }
-
-    /// The policy a due capture is judged by: none, so capture off, until reading is approved.
-    fn reading_policy(&self) -> Option<Rc<PageTextPolicy>> {
-        self.policy().filter(|_| READS_SENT_HTML)
     }
 
     fn exclusions(&self) -> Option<Rc<PageTextPolicy>> {
@@ -347,12 +330,14 @@ impl PageText {
         });
     }
 
-    /// Judges and reads a document whose settle delay has passed.
+    /// Judges a document whose settle delay has passed. Reading a page is not approved on
+    /// Linux (#219, `docs/dev/linux-page-text-proposal.md`), so it is judged with capture off
+    /// and only the reason it was not read is reported.
     fn tick(&self) {
         let Some(scheduled) = self.0.state.borrow_mut().take_due(Instant::now()) else {
             return;
         };
-        // A page whose web process stopped answering is read once it answers again.
+        // A page whose web process stopped answering is judged once it answers again.
         if self
             .0
             .view
@@ -362,92 +347,12 @@ impl PageText {
             self.0.state.borrow_mut().defer();
             return;
         }
-        let policy = self.0.context.reading_policy();
-        let verdict = self.0.state.borrow().judge(policy.as_deref(), scheduled);
-        let visited_at = self.0.state.borrow().visited().and_then(wall_clock);
-        match verdict {
-            Err(reason) => self.emit(PageTextOutcome::Ineligible(reason)),
-            Ok(document) => self.read(document, visited_at),
-        }
-    }
-
-    /// The one place a page's body is read; it announces its target first, as on Windows.
-    fn read(&self, document: EligibleDocument, visited_at: Option<SystemTime>) {
-        let Some(view) = self.0.view.upgrade() else {
-            return;
+        let reason = match self.0.state.borrow().judge(None, scheduled) {
+            Err(reason) => reason,
+            // Unreachable without a policy; reported as capture off all the same.
+            Ok(_) => Ineligible::CaptureOff,
         };
-        if !document.is_current(self.0.state.borrow().generation()) {
-            self.emit(PageTextOutcome::Ineligible(Ineligible::Stale));
-            return;
-        }
-        // A navigation that never committed leaves the previous document on screen.
-        let shown = view.uri().map(String::from).unwrap_or_default();
-        let Some(resource) = view
-            .main_resource()
-            .filter(|_| without_fragment(&shown) == without_fragment(document.address()))
-        else {
-            self.emit(PageTextOutcome::NotCommitted);
-            return;
-        };
-        self.emit(PageTextOutcome::Requested {
-            address: document.address().to_owned(),
-        });
-        self.0.state.borrow_mut().call_started();
-        let text = self.clone();
-        let started = Instant::now();
-        resource.data(None::<&gtk::gio::Cancellable>, move |body| {
-            text.arrived(body, document, started, visited_at);
-        });
-    }
-
-    /// Drops the body unread if the tab changed or capture was switched off; otherwise
-    /// parses it off the interface thread.
-    fn arrived(
-        &self,
-        body: Result<Vec<u8>, glib::Error>,
-        document: EligibleDocument,
-        started: Instant,
-        visited_at: Option<SystemTime>,
-    ) {
-        let generation = self.0.state.borrow_mut().call_finished(Instant::now());
-        self.schedule();
-        let current = self.0.context.reading_policy().is_some() && document.is_current(generation);
-        let outcome = match body {
-            Err(_) => PageTextOutcome::Failed,
-            Ok(_) if !current => PageTextOutcome::Superseded,
-            Ok(body) => match self.parse(body, document, started.elapsed(), visited_at) {
-                Ok(()) => return,
-                Err(outcome) => outcome,
-            },
-        };
-        self.emit(outcome);
-    }
-
-    /// Parses on a short-lived thread; at most `READERS` run at once.
-    fn parse(
-        &self,
-        body: Vec<u8>,
-        document: EligibleDocument,
-        call_time: Duration,
-        visited_at: Option<SystemTime>,
-    ) -> Result<(), PageTextOutcome> {
-        if READING.fetch_add(1, Ordering::AcqRel) >= READERS {
-            READING.fetch_sub(1, Ordering::AcqRel);
-            return Err(PageTextOutcome::Discarded(DiscardReason::Busy));
-        }
-        let (id, events) = (self.0.id, self.0.events.clone());
-        let spawned = std::thread::Builder::new()
-            .name("syrinx-page-text".into())
-            .spawn(move || {
-                let outcome = captured(body, &document, call_time, visited_at);
-                READING.fetch_sub(1, Ordering::AcqRel);
-                events.emit(BrowserEvent::PageText { id, outcome });
-            });
-        if spawned.is_err() {
-            READING.fetch_sub(1, Ordering::AcqRel);
-            return Err(PageTextOutcome::Failed);
-        }
-        Ok(())
+        self.emit(PageTextOutcome::Ineligible(reason));
     }
 
     fn emit(&self, outcome: PageTextOutcome) {
@@ -458,79 +363,12 @@ impl PageText {
     }
 }
 
-/// Steps 10 and 11 on the body, with the measurements Windows reports.
-fn captured(
-    body: Vec<u8>,
-    document: &EligibleDocument,
-    call_time: Duration,
-    visited_at: Option<SystemTime>,
-) -> PageTextOutcome {
-    let started = Instant::now();
-    let response_bytes = body.len();
-    let read = sent_html_text(&body);
-    drop(body);
-    match read {
-        Ok(read) => PageTextOutcome::Captured(CapturedText {
-            address: document.address().to_owned(),
-            text: read.text,
-            documents: 1,
-            truncated: read.truncated,
-            response_bytes,
-            call_time,
-            parse_time: started.elapsed(),
-            visited_at,
-        }),
-        Err(refusal) => PageTextOutcome::Discarded(discard_reason(refusal)),
-    }
-}
-
-fn discard_reason(refusal: SentHtmlRefusal) -> DiscardReason {
-    match refusal {
-        SentHtmlRefusal::TooLarge => DiscardReason::TooLarge,
-        SentHtmlRefusal::NotUtf8 => DiscardReason::Malformed,
-        SentHtmlRefusal::SignInOrPayment => DiscardReason::SignInOrPayment,
-    }
-}
-
-/// The wall-clock time of a monotonic instant; `None` if the clock cannot express it.
-fn wall_clock(instant: Instant) -> Option<SystemTime> {
-    SystemTime::now().checked_sub(instant.elapsed())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn reading_stays_off_until_the_owner_approves_it() {
-        let context = TextContext::default();
-        let policy = PageTextPolicy::new::<&str>(&[]).expect("synthetic policy");
-        context.set_policy(Some(policy));
-        assert!(context.policy().is_some(), "facts are still observed");
-        assert!(
-            context.reading_policy().is_none(),
-            "but every capture is judged off"
-        );
-    }
-
-    #[test]
-    fn a_refused_body_maps_to_the_windows_discard_reasons() {
-        assert_eq!(
-            discard_reason(SentHtmlRefusal::SignInOrPayment),
-            DiscardReason::SignInOrPayment
-        );
-        assert_eq!(
-            discard_reason(SentHtmlRefusal::TooLarge),
-            DiscardReason::TooLarge
-        );
-        assert_eq!(
-            discard_reason(SentHtmlRefusal::NotUtf8),
-            DiscardReason::Malformed
-        );
-    }
-
-    #[test]
-    fn a_body_is_read_into_captured_text() {
+    fn a_due_capture_is_judged_with_capture_off() {
         let policy = PageTextPolicy::new::<&str>(&[]).expect("synthetic policy");
         let address = "https://plain.example.test/page";
         let mut state = TextState::default();
@@ -557,19 +395,11 @@ mod tests {
         state.source_changed(address.to_owned(), true, rules, now);
         state.navigation_completed(1, true, rules, now);
         let scheduled = state
-            .take_due(now + Duration::from_secs(3))
+            .take_due(now + std::time::Duration::from_secs(3))
             .expect("a capture falls due");
-        let document = state.judge(Some(&policy), scheduled).expect("eligible");
-        let outcome = captured(
-            b"<p>Synthetic words</p>".to_vec(),
-            &document,
-            Duration::ZERO,
-            None,
+        assert_eq!(
+            state.judge(None, scheduled).err(),
+            Some(Ineligible::CaptureOff)
         );
-        let PageTextOutcome::Captured(text) = outcome else {
-            panic!("expected captured text");
-        };
-        assert_eq!(text.text, "Synthetic words");
-        assert_eq!(text.address, address);
     }
 }

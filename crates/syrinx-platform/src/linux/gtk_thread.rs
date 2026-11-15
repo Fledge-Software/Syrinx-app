@@ -47,6 +47,11 @@ pub(crate) fn post(job: impl FnOnce() + Send + 'static) -> Result<(), GtkUnavail
     Ok(())
 }
 
+/// Starts GTK if it has not started, and waits until it has initialised.
+pub(crate) fn ensure_started() -> Result<(), GtkUnavailable> {
+    start().map(|_| ())
+}
+
 fn start() -> Result<ThreadId, GtkUnavailable> {
     *GTK.get_or_init(|| {
         let (started, ready) = mpsc::sync_channel(1);
@@ -72,6 +77,11 @@ fn serve(started: mpsc::SyncSender<Result<ThreadId, GtkUnavailable>>) {
         .map(|()| thread::current().id())
         .map_err(|_| GtkUnavailable);
     let initialised = outcome.is_ok();
+    // GDK installed its X error handler during `gtk::init`; Syrinx's goes in front of it
+    // before any GDK error trap can save and restore it (`linux/x11_errors.rs`).
+    if initialised {
+        crate::x11_errors::ErrorTrap::install();
+    }
     if started.send(outcome).is_err() || !initialised {
         return;
     }

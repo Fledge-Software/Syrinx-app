@@ -523,7 +523,8 @@ fn section_summary(running: &str) -> String {
 fn section_summary(running: &str) -> String {
     format!(
         "{running}. Syrinx doesn't update itself on Linux yet: download new versions from {} \
-         and run their install.sh.",
+         and run their install.sh. Linux packages are not signed yet, so their checksums show \
+         only that a download is complete, not who made it.",
         update_host()
     )
 }

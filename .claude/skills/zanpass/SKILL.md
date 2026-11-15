@@ -22,8 +22,8 @@ One command. Every kind of work goes down the same path:
               for next steps. Never into main without explicit permission.
 ```
 
-This one skill replaces `/suprpas` and the earlier `/fledgepass` and holds
-everything `/zanpass` used to do. The primary workers are the Zan skills
+This one skill replaces `/fledgepass` and `/suprpas` and holds everything
+they used to do. The primary workers are the Fledge skills
 `/planissues`, `/bughunt`, `/issuecoder`, `/prreviewer` and `/designflow`,
 with all the skills they stack.
 
@@ -62,13 +62,13 @@ Read `$ARGUMENTS` (or, under `/goal`, the goal message) first:
    `DOCS/LOCAL-DEV.md` if present. Its check commands (typecheck, lint,
    test, build) are `verify` for every worker. Note the project kind (web
    app, native app, backend, game) and whether it uses Supabase.
-5. **Locate the worker skills.** The Zan skills are user-invocable only, so
+5. **Locate the worker skills.** The Fledge skills are user-invocable only, so
    the Skill tool can't start them. You and your workers run each one by
    reading its `SKILL.md` and following it. Look in this order:
    `../<name>/SKILL.md` next to this file;
    `<repo>/.claude/skills/<name>/`; `~/.claude/skills/<name>/`. If none is
-   found, clone ZanderOfficial/zans-skills (read access) and run its
-   `install.sh` with no argument, which installs into this container's
+   found, clone Fledge-Software/Fledge-Dev-Docs (read access) and run its
+   `fledge-skills/install.sh` with no argument, which installs into this container's
    `~/.claude`. Never install into the product repository's tree during a
    run, and never commit `.claude/` from one. Record the absolute paths of
    `planissues`, `bughunt`, `issuecoder`, `prreviewer`, `prreviewall` and
@@ -725,7 +725,8 @@ Say what you assumed.
 
 **Orient.**
 1. Attach the repo with `add_repo` (access "push") if it isn't in the
-   session, and clone it. Attach the docs repository with read access, or
+   session, and clone it. Attach Fledge-Software/Fledge-Dev-Docs (the docs
+   repository) with read access, or
    with push access only if phase E will write a plan.
 2. Run `toolchain_setup` outside the repo.
 3. Locate the skills as in step 0.

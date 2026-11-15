@@ -1,8 +1,8 @@
 # SPDX-License-Identifier: MPL-2.0
 #
 # The licence policy `cargo xtask check-licences` enforces on every third-party
-# package Windows compiles from Cargo.lock (#28, G4 in docs/decisions.md,
-# 2026-10-26). It follows AGENTS.md, "Dependencies and licence": permissive
+# package Windows or Linux compiles from Cargo.lock (#28, G4 in
+# docs/decisions.md, 2026-10-26; Linux since 2026-11-03). It follows AGENTS.md, "Dependencies and licence": permissive
 # licences or whole MPL-2.0 files, and no GPL. A package that offers a choice
 # ("MIT OR Apache-2.0") passes when one choice is allowed; Syrinx elects that one.
 # Anything else is listed below by exact name and version with the owner
@@ -361,3 +361,64 @@ name = "zlib-rs"
 version = "0.6.8"
 licence = "Zlib"
 reason = "approved for the integrated preview at this version 2026-10-10"
+
+# The Linux build's packages outside the list above, at these exact versions.
+# target-lexicon 0.12.16 and tiny-keccak 2.0.2 were approved on 2026-10-31 as
+# compile-time-only exceptions; the rest link into Syrinx on Linux and were
+# approved on 2026-11-03 (docs/decisions.md, "Linux-only licences";
+# docs/dev/dependency-audit.md, "Linux platform layer"). Windows compiles none
+# of them except as recorded above.
+
+[[exceptions]]
+name = "target-lexicon"
+version = "0.12.16"
+licence = "Apache-2.0 WITH LLVM-exception"
+reason = "Linux build-script dependency of system-deps and cfg-expr, approved 2026-10-31"
+
+[[exceptions]]
+name = "tiny-keccak"
+version = "2.0.2"
+licence = "CC0-1.0"
+reason = "Linux compile-time dependency of const-random-macro, approved 2026-10-31"
+
+[[exceptions]]
+name = "ring"
+version = "0.17.14"
+licence = "Apache-2.0 AND ISC"
+reason = "Linux update-signature check in syrinx-update, ISC approved for this version 2026-11-03"
+
+[[exceptions]]
+name = "untrusted"
+version = "0.9.0"
+licence = "ISC"
+reason = "Linux, through ring, ISC approved for this version 2026-11-03"
+
+[[exceptions]]
+name = "inotify"
+version = "0.11.5"
+licence = "ISC"
+reason = "Linux, through notify and gpui-component, ISC approved for this version 2026-11-03"
+
+[[exceptions]]
+name = "inotify-sys"
+version = "0.1.8"
+licence = "ISC"
+reason = "Linux, through inotify, ISC approved for this version 2026-11-03"
+
+[[exceptions]]
+name = "libloading"
+version = "0.8.9"
+licence = "ISC"
+reason = "Linux, through ash and GPUI's wgpu renderer, ISC approved for this version 2026-11-03"
+
+[[exceptions]]
+name = "foldhash"
+version = "0.1.5"
+licence = "Zlib"
+reason = "Linux, through hashbrown 0.15 and wgpu-hal, Zlib approved for this version 2026-11-03"
+
+[[exceptions]]
+name = "hexf-parse"
+version = "0.2.1"
+licence = "CC0-1.0"
+reason = "Linux, through naga and GPUI's wgpu renderer, CC0 approved for this version 2026-11-03"

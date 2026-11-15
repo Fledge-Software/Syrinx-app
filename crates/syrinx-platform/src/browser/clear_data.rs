@@ -67,7 +67,7 @@ pub(super) fn clear(
 
 /// Keeps WebView2's HRESULT so a failure can be named; it carries no page content.
 fn clear_error(error: windows::core::Error) -> BrowserError {
-    BrowserError::ClearData {
+    BrowserError::ClearDataHresult {
         code: error.code().0,
     }
 }
@@ -76,7 +76,7 @@ fn clear_error(error: windows::core::Error) -> BrowserError {
 fn pump_error(error: webview2_com::Error) -> BrowserError {
     match error {
         webview2_com::Error::WindowsError(error) => clear_error(error),
-        _ => BrowserError::ClearData {
+        _ => BrowserError::ClearDataHresult {
             code: E_UNEXPECTED.0,
         },
     }
@@ -89,9 +89,9 @@ fn hidden_controller(
     let (send, receive) = mpsc::channel();
     let completion = CreateCoreWebView2ControllerCompletedHandler::create(Box::new(
         move |status, controller| {
-            let result = status
-                .map_err(clear_error)
-                .and_then(|()| controller.ok_or(BrowserError::ClearData { code: E_POINTER.0 }));
+            let result = status.map_err(clear_error).and_then(|()| {
+                controller.ok_or(BrowserError::ClearDataHresult { code: E_POINTER.0 })
+            });
             send.send(result)
                 .map_err(|_| windows::core::Error::from(E_UNEXPECTED))
         },

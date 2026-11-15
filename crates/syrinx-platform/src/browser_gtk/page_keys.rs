@@ -1,10 +1,4 @@
-//! Lets a page's X11 windows take key presses only while the page holds X11 focus.
-//!
-//! X11 gives a key to the window under the pointer when that window lies inside the focused
-//! one. The page sits inside Syrinx's window, so with the chrome focused and the pointer over
-//! the page, the page took the owner's typing for the find bar or the address field. With no
-//! page window selecting keys, the server passes them up to Syrinx's window as real events
-//! (a forwarded copy is not enough: input methods such as fcitx drop synthetic keys).
+//! Keeps real X11 key ownership and GTK focus in sync for pages embedded in foreign windows.
 
 use std::{
     ffi::{c_uint, c_ulong},
@@ -12,7 +6,11 @@ use std::{
     rc::Rc,
 };
 
-use gtk::{gdk, prelude::*};
+use gtk::{
+    gdk, glib,
+    glib::translate::{IntoGlibPtr, ToGlibPtrMut},
+    prelude::*,
+};
 use x11_dl::xlib;
 
 /// How far up the window tree a focus owner is looked for before giving up.
@@ -28,8 +26,9 @@ pub(super) struct KeyRouting {
 pub(super) struct ClickFocus(Rc<RouteState>);
 
 impl ClickFocus {
+    /// The owner clicked the page, so Syrinx is the application they are using.
     pub(super) fn focus(&self) {
-        self.0.focus();
+        self.0.take_focus();
     }
 }
 
@@ -38,6 +37,7 @@ struct RouteState {
     display: *mut xlib::Display,
     container: c_ulong,
     window: gdk::Window,
+    host: glib::WeakRef<gtk::Window>,
 }
 
 impl KeyRouting {
@@ -47,12 +47,14 @@ impl KeyRouting {
         display: *mut xlib::Display,
         container: c_ulong,
         window: gdk::Window,
+        host: &gtk::Window,
     ) -> Self {
         let state = Rc::new(RouteState {
             xlib,
             display,
             container,
             window,
+            host: host.downgrade(),
         });
         state.update();
         // Display-wide, as focus can move between any of Syrinx's windows.
@@ -91,7 +93,24 @@ impl Drop for KeyRouting {
 }
 
 impl RouteState {
+    /// Syrinx's own request: the page takes the keys only while Syrinx already holds them, so
+    /// another application's typing never lands in it (owner, 2026-10-12).
     fn focus(&self) {
+        if !super::x11::syrinx_in_foreground() {
+            self.update();
+            return;
+        }
+        self.take_focus();
+    }
+
+    /// Focuses the container inside a GDK error trap: a minimised window cannot take focus,
+    /// and the BadMatch that X then sends would otherwise end the process.
+    fn take_focus(&self) {
+        let display = self.window.display();
+        let trap = display.downcast_ref::<gdkx11::X11Display>();
+        if let Some(display) = trap {
+            display.error_trap_push();
+        }
         unsafe {
             (self.xlib.XSetInputFocus)(
                 self.display,
@@ -101,15 +120,52 @@ impl RouteState {
             );
             (self.xlib.XFlush)(self.display);
         }
+        let error = trap.map_or(0, |display| display.error_trap_pop());
+        if error != 0 {
+            eprintln!("Syrinx could not give the page the keys (X error {error}).");
+        }
         self.update();
     }
 
     fn update(&self) {
         let page_has_keys = self.focus_inside();
+        // X11 can target the window under the pointer, so only the focused page selects keys.
         select_keys(&self.window, page_has_keys);
         // Native windows inside (the view's own) never select keys: GTK routes every key
         // through the toplevel window, and one selecting them would take the chrome's.
         self.deselect_keys_inside(self.container, MAX_DEPTH);
+        self.sync_toolkit_focus(page_has_keys);
+    }
+
+    fn sync_toolkit_focus(&self, native_focus: bool) {
+        let Some(host) = self.host.upgrade() else {
+            return;
+        };
+        let Some(focused) = foreign_focus_change(
+            self.window.window_type(),
+            native_focus,
+            host.has_toplevel_focus(),
+        ) else {
+            return;
+        };
+        // GDK drops focus events for foreign windows; mirror the real X11 state into GTK.
+        let mut event = gdk::Event::new(gdk::EventType::FocusChange);
+        let raw: *mut gdk::ffi::GdkEvent = event.to_glib_none_mut().0;
+        // SAFETY: this is a FocusChange event; it owns the cloned window reference until freed.
+        unsafe {
+            (*raw).focus_change.window = self.window.clone().into_glib_ptr();
+            (*raw).focus_change.send_event = 1;
+            (*raw).focus_change.in_ = i16::from(focused);
+        }
+        if let Some(keyboard) = self
+            .window
+            .display()
+            .default_seat()
+            .and_then(|seat| seat.keyboard())
+        {
+            event.set_device(Some(&keyboard));
+        }
+        host.event(&event);
     }
 
     fn deselect_keys_inside(&self, window: c_ulong, depth: usize) {
@@ -241,9 +297,52 @@ fn key_events(events: gdk::EventMask, selected: bool) -> gdk::EventMask {
     }
 }
 
+/// Foreign wrappers need GTK notifications only when their real X11 focus state differs.
+fn foreign_focus_change(
+    window_type: gdk::WindowType,
+    native_focus: bool,
+    toolkit_focus: bool,
+) -> Option<bool> {
+    if window_type != gdk::WindowType::Foreign || native_focus == toolkit_focus {
+        return None;
+    }
+    Some(native_focus)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn foreign_window_focus_follows_native_ownership_in_both_directions() {
+        let mut toolkit_focus = false;
+        let mut delivered = Vec::new();
+        // X11 enters the page, stays within it, then leaves for the palette or chrome.
+        for native_focus in [false, true, true, false, false] {
+            if let Some(focused) =
+                foreign_focus_change(gdk::WindowType::Foreign, native_focus, toolkit_focus)
+            {
+                toolkit_focus = focused;
+                delivered.push(focused);
+            }
+            assert_eq!(toolkit_focus, native_focus);
+        }
+        assert_eq!(delivered, [true, false]);
+    }
+
+    #[test]
+    fn gdk_owned_windows_keep_their_existing_focus_delivery() {
+        for window_type in [
+            gdk::WindowType::Root,
+            gdk::WindowType::Toplevel,
+            gdk::WindowType::Child,
+            gdk::WindowType::Temp,
+            gdk::WindowType::Offscreen,
+        ] {
+            assert_eq!(foreign_focus_change(window_type, true, false), None);
+            assert_eq!(foreign_focus_change(window_type, false, true), None);
+        }
+    }
 
     #[test]
     fn only_xi2_focus_events_count_as_focus_changes() {

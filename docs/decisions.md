@@ -17,6 +17,22 @@ Since 2026-10-16 open deferred work is tracked by GitHub issue number
 instead (`docs/dev/deferred-work.md`); where an item became an issue, the
 entry names it.
 
+## 2026-11-03
+
+- **Linux-only licences (owner, 2026-11-03).** The owner's choice, given in
+  the review session of #226 and relayed by its chair: "Approve all", as
+  narrow exceptions at these exact versions: ISC for `ring 0.17.14`,
+  `untrusted 0.9.0`, `inotify 0.11.5`, `inotify-sys 0.1.8` and
+  `libloading 0.8.9`; Zlib for `foldhash 0.1.5`; CC0-1.0 for
+  `hexf-parse 0.2.1`; and entering the 2026-10-31 approvals of
+  `target-lexicon 0.12.16` and `tiny-keccak 2.0.2` in `licences.toml`. The
+  approval also covers making `cargo xtask check-licences` judge the Linux
+  target as well as Windows. It approves nothing else: another version, or
+  the same licence on another package, needs its own approval. The review
+  found these packages because the licence gate judged only
+  `x86_64-pc-windows-msvc`, so the Linux build linked them unchecked.
+  Details are in `docs/dev/dependency-audit.md`, "Linux platform layer".
+
 ## 2026-11-02
 
 - **Linux site permissions use the top-level site's delegation (owner,

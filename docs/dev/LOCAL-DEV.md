@@ -81,6 +81,7 @@ do not silently download a toolchain or change a Windows security setting.
 cargo xtask check-deps
 cargo xtask check-licences
 cargo xtask check-plugin-contract
+cargo xtask check-javascript
 cargo xtask check-deferred
 cargo xtask check-packaging
 cargo fmt --all -- --check
@@ -91,13 +92,25 @@ cargo test --package syrinx-update --features release-tool --profile local --off
 cargo run --package syrinx-app --profile local --offline --locked -- --smoke
 ```
 
-The first four lines show the standalone equivalents of the checks that
+The first six lines show the standalone equivalents of the checks that
 `xtask` runs internally (`crates/xtask/src/main.rs`, `check_workspace`).
-`check-licences` holds every third-party package Windows compiles to the
-allowed licences or an exact-version approval in `licences.toml` (#28, G4).
+`check-licences` holds every third-party package that Windows
+(`x86_64-pc-windows-msvc`) or Linux (`x86_64-unknown-linux-gnu`) compiles to
+the allowed licences or an exact-version approval in `licences.toml` (#28,
+G4), whichever machine runs the gate.
 `check-plugin-contract` parses `wit/v0_1`, the `syrinx:plugin@0.1.0`
 contract, with the parser wasmtime 48 uses, so a WIT mistake fails the gate
 rather than every plugin's build.
+`check-javascript` holds the editor's npm packages to their audit
+(decision 12 of 2026-10-24): every package in `editor/package-lock.json`
+must be listed, with the same licence and integrity hash, in
+`docs/dev/codemirror-audit.md`, and a committed `editor/dist/syrinx-editor.js`
+must match the bundle hash recorded there. It also refuses any other tracked
+npm manifest or lockfile, any `editor/dist/` file but the bundle and its
+`THIRD-PARTY-NOTICES.txt`, an `editor/.npmrc` other than the audited settings
+(which keep `ignore-scripts=true`), and an install script the audit has not
+accepted. It reads the repository and
+`git ls-files` only, and needs no network or Node.js.
 
 `rust-toolchain.toml` pins Rust 1.97.1 with the `wasm32-wasip2` target
 (G7, 2026-10-26); inside this repository it overrides the machine's default
@@ -166,6 +179,24 @@ GNOME, KDE) Syrinx runs through XWayland: GTK can embed a page only inside an
 X11 window, so GPUI is built with its X11 backend alone and GDK is limited to
 X11 (`syrinx-platform/src/linux/gtk_thread.rs`).
 
+WebKitGTK's audio and video pipeline also requires GStreamer media plugins,
+which may be optional dependencies of the system WebKitGTK package:
+
+| Distribution | Media runtime packages |
+| --- | --- |
+| Arch / Omarchy | `gstreamer gst-plugins-base gst-plugins-good gst-plugins-bad gst-libav` |
+| Debian / Ubuntu | `gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-plugins-bad gstreamer1.0-libav` |
+| Fedora | `gstreamer1 gstreamer1-plugins-base gstreamer1-plugins-good gstreamer1-plugins-bad-free gstreamer1-plugin-libav` |
+
+Check `gst-inspect-1.0 autoaudiosink` when the tool is available
+(`gstreamer1.0-tools` on Debian/Ubuntu). The element comes from the good set;
+its presence alone does not prove all codecs or audio devices work. See
+[the runtime requirements and package references](../installing.md#linux-2026-10-31).
+The coordinator's `a01b28d` media run aborted WebKitWebProcess because this
+element was missing, even for synthetic video. Treat that as a missing
+runtime prerequisite; preserve the fixture and let the owner install the
+packages. Never install system packages or disable the sandbox to pass it.
+
 What differs from Windows:
 
 - **Pages** render in WebKitGTK, driven directly through `webkit2gtk`
@@ -192,11 +223,13 @@ What differs from Windows:
 - **Page text** follows the same eligibility check and taint rules as on
   Windows (`browser_gtk/page_text.rs` shares `page_text/state.rs`), but
   WebKitGTK has no host-side DOM snapshot. The only no-script method is
-  reading the page's HTML as the server sent it (`syrinx_core::sent_html_text`),
-  which misses text built by scripts and cannot see style-sheet hiding or a
-  password field added by script. The owner has not approved that method, so
-  `READS_SENT_HTML` is off: every due capture reports `Ineligible(CaptureOff)`
-  and Settings says nothing is kept on Linux.
+  reading the page's HTML as the server sent it, which misses text built by
+  scripts and cannot see style-sheet hiding or a password field added by
+  script. The owner has not approved that method (#219), so Linux has no
+  reader: `READS_PAGE_TEXT` is false, every due capture reports
+  `Ineligible(CaptureOff)`, and Settings says nothing is kept on Linux. The
+  reader that was written for it is kept for #219 at `ad1cf78`
+  (`docs/dev/linux-page-text-proposal.md`, "The reader at ad1cf78").
 - **Hidden pages** are not suspended: WebKitGTK has no `TrySuspend`. A hidden
   page's view is unmapped, so WebKit marks it hidden and throttles its timers
   and drawing itself. Syrinx never discards a hidden page to save memory,

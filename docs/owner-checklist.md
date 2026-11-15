@@ -282,3 +282,14 @@ method. For each kind:
 
 The authored-page method and engine-source limitation are in
 `docs/dev/linux-permission-delegation.md`. No account or real page is needed.
+
+### 11. Landing checks for the Linux port (#226)
+
+Before approving #226, work through
+[#241](https://github.com/Fledge-Software/Syrinx-app/issues/241):
+
+- Windows tab switches (sidebar, Ctrl Tab, a menu, the download flyout): the
+  page gets the keys and nothing flickers;
+- a link from another program while Syrinx is behind;
+- the reparenting X11 check, if a GNOME or KDE X11 session is available;
+- confirmation of the coordinator-recorded part of the 2026-10-31 decision.

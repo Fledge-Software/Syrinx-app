@@ -1,4 +1,4 @@
-//! What one tab has observed about its current document, kept apart from WebView2 so the
+//! What one tab has observed about its current document, kept apart from the engine so the
 //! scheduling and exit rules can be tested without a window.
 
 use std::{
@@ -65,7 +65,8 @@ pub(super) struct Rules<'a> {
     pub(super) capture: bool,
 }
 
-/// What `NavigationStarting` reported for one hop.
+/// What the engine reported for one hop as its navigation started (WebView2's
+/// `NavigationStarting`, WebKit's load start or provisional address change).
 pub(super) struct Start {
     pub(super) address: String,
     pub(super) redirected: bool,
@@ -94,6 +95,8 @@ impl TextState {
         }
     }
 
+    // Only the Windows reader asks for these; Linux reads no page yet (#219).
+    #[cfg(windows)]
     pub(super) fn generation(&self) -> u64 {
         self.generation
     }
@@ -124,7 +127,7 @@ impl TextState {
         });
     }
 
-    /// Withdraws Syrinx's request: WebView2 refused it, or Syrinx went back, forward, reloaded
+    /// Withdraws Syrinx's request: the engine refused it, or Syrinx went back, forward, reloaded
     /// or stopped instead.
     pub(super) fn syrinx_navigation_cancelled(&mut self) {
         self.syrinx_requested = None;
@@ -303,6 +306,7 @@ impl TextState {
     }
 
     /// When the visit behind the scheduled capture happened; a deferred capture keeps it.
+    #[cfg(any(windows, test))]
     pub(super) fn visited(&self) -> Option<Instant> {
         self.visited
     }
@@ -331,11 +335,13 @@ impl TextState {
         }
     }
 
+    #[cfg(any(windows, test))]
     pub(super) fn call_started(&mut self) {
         self.in_flight = true;
     }
 
     /// Ends the call and returns the generation now, for step 8's check on arrival.
+    #[cfg(any(windows, test))]
     pub(super) fn call_finished(&mut self, now: Instant) -> u64 {
         self.in_flight = false;
         self.last_capture = Some(now);

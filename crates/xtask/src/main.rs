@@ -3,6 +3,7 @@
 mod benchmark;
 mod deferred_work;
 mod dependency_policy;
+mod javascript_packages;
 mod licences;
 mod network_sources;
 mod packaging;
@@ -16,7 +17,7 @@ use std::process::{Command, ExitCode, Stdio};
 
 use serde_json::Value;
 
-const USAGE: &str = "Usage: cargo xtask <check | check-deps | check-licences | check-plugin-contract | check-deferred | check-packaging | write-registration | package | sign-update <options> | bench | palette-acceptance>";
+const USAGE: &str = "Usage: cargo xtask <check | check-deps | check-licences | check-plugin-contract | check-javascript | check-deferred | check-packaging | write-registration | package | sign-update <options> | bench | palette-acceptance>";
 
 fn main() -> ExitCode {
     // Return a failing process status for every failed gate or invalid invocation.
@@ -57,6 +58,7 @@ fn run() -> Result<(), String> {
         Some("check-deps") => check_dependencies(&root),
         Some("check-licences") => check_licences(&root),
         Some("check-plugin-contract") => plugin_contract::check(&root),
+        Some("check-javascript") => javascript_packages::check(&root),
         Some("check-deferred") => check_deferred_work(&root),
         Some("check-packaging") => packaging::check(&root),
         Some("write-registration") => packaging::write_registration(&root),
@@ -71,12 +73,9 @@ fn run() -> Result<(), String> {
     }
 }
 
-/// Release signing, the registration table and the Win32 palette harness exist only on Windows.
+/// The registration table describes Windows registry keys; Linux packages use per-user scripts.
 fn refuse_windows_only_elsewhere(command: &OsString) -> Result<(), String> {
-    let windows_only = matches!(
-        command.to_str(),
-        Some("palette-acceptance" | "write-registration")
-    );
+    let windows_only = matches!(command.to_str(), Some("write-registration"));
     if windows_only && !cfg!(windows) {
         return Err(format!(
             "`cargo xtask {}` builds or drives the Windows app and runs only on Windows.",
@@ -117,8 +116,8 @@ fn cargo_command(root: &Path) -> Command {
     command
 }
 
-/// The Windows target Syrinx ships for; the licence check reads the graph compiled for it.
-const WINDOWS_TARGET: &str = "x86_64-pc-windows-msvc";
+/// The targets Syrinx ships for; the licence check reads the graph compiled for each.
+const SHIPPED_TARGETS: [&str; 2] = ["x86_64-pc-windows-msvc", "x86_64-unknown-linux-gnu"];
 
 /// Cargo's locked, offline, all-features metadata, with `extra` options such as a target filter.
 fn cargo_metadata(root: &Path, extra: &[&str]) -> Result<Value, String> {
@@ -161,9 +160,13 @@ fn check_dependencies(root: &Path) -> Result<(), String> {
 }
 
 fn check_licences(root: &Path) -> Result<(), String> {
-    // Judge what Windows compiles; the lockfile also records other platforms' packages.
-    let metadata = cargo_metadata(root, &["--filter-platform", WINDOWS_TARGET])?;
-    licences::check(root, &metadata)
+    // Judge what each shipped target compiles, whichever machine runs the gate; the lockfile
+    // also records packages for platforms Syrinx does not ship.
+    for target in SHIPPED_TARGETS {
+        let metadata = cargo_metadata(root, &["--filter-platform", target])?;
+        licences::check(root, target, &metadata)?;
+    }
+    Ok(())
 }
 
 fn check_deferred_work(root: &Path) -> Result<(), String> {
@@ -185,6 +188,7 @@ fn check_workspace(root: &Path) -> Result<(), String> {
     check_dependencies(root)?;
     check_licences(root)?;
     plugin_contract::check(root)?;
+    javascript_packages::check(root)?;
     check_deferred_work(root)?;
     packaging::check(root)?;
     run_cargo(root, &["fmt", "--all", "--", "--check"])?;
@@ -220,6 +224,20 @@ fn check_workspace(root: &Path) -> Result<(), String> {
         ],
     )?;
 
+    // Linux proves native page lifecycles and palette behavior on the real X11 display.
+    if cfg!(target_os = "linux") {
+        // Every Linux entry point compiles this shared module; execute its unit tests once.
+        run_cargo(root, &fixture_step("test", "page_close"))?;
+        for fixture in [
+            "page_close",
+            "cookie_persistence",
+            "navigation_history_spike",
+        ] {
+            run_cargo(root, &fixture_step("run", fixture))?;
+        }
+        palette_acceptance::run(root)?;
+    }
+
     println!("Local gate passed.");
     Ok(())
 }
@@ -233,6 +251,19 @@ fn workspace_step<'a>(command: &'a str, extra: &[&'a str], tail: &[&'a str]) -> 
     arguments.extend(extra);
     arguments.extend(GATE_OPTIONS);
     arguments.extend(tail);
+    arguments
+}
+
+/// A Linux fixture build or unit run with the same offline graph as the workspace gate.
+fn fixture_step<'a>(command: &'a str, fixture: &'a str) -> Vec<&'a str> {
+    let mut arguments = vec![
+        command,
+        "--package",
+        "syrinx-platform",
+        "--example",
+        fixture,
+    ];
+    arguments.extend(GATE_OPTIONS);
     arguments
 }
 
@@ -280,6 +311,36 @@ fn run_cargo_with(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fixture_units_select_the_example_test_harness_with_gate_options() {
+        assert_eq!(
+            fixture_step("test", "page_close"),
+            [
+                "test",
+                "--package",
+                "syrinx-platform",
+                "--example",
+                "page_close",
+                "--profile",
+                "local",
+                "--offline",
+                "--locked",
+            ]
+        );
+        for fixture in [
+            "page_close",
+            "cookie_persistence",
+            "navigation_history_spike",
+        ] {
+            let arguments = fixture_step("run", fixture);
+            assert_eq!(
+                &arguments[..5],
+                ["run", "--package", "syrinx-platform", "--example", fixture]
+            );
+            assert!(arguments.ends_with(&GATE_OPTIONS));
+        }
+    }
 
     #[test]
     fn the_workspace_steps_build_without_the_release_tool() {

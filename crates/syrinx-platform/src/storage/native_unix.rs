@@ -1,4 +1,4 @@
-//! Holds the storage guard's checked handles on Linux and macOS through POSIX descriptors.
+//! Holds the storage guard's checked handles on Linux through POSIX descriptors.
 
 use std::{
     ffi::{CString, OsStr},
@@ -59,23 +59,15 @@ pub(super) fn local_data_directory() -> Result<PathBuf, LocationError> {
     Ok(local_app_data()?.join("Syrinx").join("data"))
 }
 
-/// The per-user, non-synced data folder: XDG on Linux, Application Support on macOS.
+/// The per-user, non-synced data folder: `XDG_DATA_HOME`, or `~/.local/share`.
 pub fn local_app_data() -> Result<PathBuf, LocationError> {
-    #[cfg(target_os = "macos")]
+    if let Some(data) = std::env::var_os("XDG_DATA_HOME").map(PathBuf::from)
+        && data.is_absolute()
     {
-        let home = home_directory().ok_or(LocationError::InvalidPath)?;
-        Ok(home.join("Library").join("Application Support"))
+        return Ok(data);
     }
-    #[cfg(not(target_os = "macos"))]
-    {
-        if let Some(data) = std::env::var_os("XDG_DATA_HOME").map(PathBuf::from)
-            && data.is_absolute()
-        {
-            return Ok(data);
-        }
-        let home = home_directory().ok_or(LocationError::InvalidPath)?;
-        Ok(home.join(".local").join("share"))
-    }
+    let home = home_directory().ok_or(LocationError::InvalidPath)?;
+    Ok(home.join(".local").join("share"))
 }
 
 fn home_directory() -> Option<PathBuf> {
@@ -244,26 +236,8 @@ pub(super) fn entry_info(file: &File) -> Result<EntryInfo, LocationError> {
 }
 
 pub(super) fn final_path(file: &File) -> Result<PathBuf, LocationError> {
-    #[cfg(target_os = "macos")]
-    {
-        let mut buffer = vec![0u8; libc::PATH_MAX as usize];
-        if unsafe { libc::fcntl(file.as_raw_fd(), libc::F_GETPATH, buffer.as_mut_ptr()) } != 0 {
-            return Err(io_error(
-                LocationOperation::ResolvePath,
-                io::Error::last_os_error(),
-            ));
-        }
-        let length = buffer
-            .iter()
-            .position(|byte| *byte == 0)
-            .unwrap_or(buffer.len());
-        Ok(PathBuf::from(OsStr::from_bytes(&buffer[..length])))
-    }
-    #[cfg(not(target_os = "macos"))]
-    {
-        std::fs::read_link(format!("/proc/self/fd/{}", file.as_raw_fd()))
-            .map_err(|error| io_error(LocationOperation::ResolvePath, error))
-    }
+    std::fs::read_link(format!("/proc/self/fd/{}", file.as_raw_fd()))
+        .map_err(|error| io_error(LocationOperation::ResolvePath, error))
 }
 
 pub(super) fn io_error(operation: LocationOperation, error: io::Error) -> LocationError {
@@ -389,7 +363,6 @@ fn rename_retained(
     Ok(())
 }
 
-#[cfg(target_os = "linux")]
 fn rename_paths(from: &CString, to: &CString, replace: bool) -> bool {
     let flags = if replace { 0 } else { libc::RENAME_NOREPLACE };
     unsafe {
@@ -401,12 +374,6 @@ fn rename_paths(from: &CString, to: &CString, replace: bool) -> bool {
             flags,
         ) == 0
     }
-}
-
-#[cfg(target_os = "macos")]
-fn rename_paths(from: &CString, to: &CString, replace: bool) -> bool {
-    let flags = if replace { 0 } else { libc::RENAME_EXCL };
-    unsafe { libc::renamex_np(from.as_ptr(), to.as_ptr(), flags) == 0 }
 }
 
 fn remove_identity(
@@ -477,7 +444,6 @@ fn is_local_filesystem(path: &Path) -> Result<bool, LocationError> {
     Ok(is_local_kind(&status))
 }
 
-#[cfg(target_os = "linux")]
 fn is_local_kind(status: &libc::statfs) -> bool {
     // NFS, SMB/CIFS, FUSE (sync clients and network mounts), AFS, Ceph and 9p.
     const REMOTE_MAGIC: [i64; 9] = [
@@ -496,14 +462,8 @@ fn is_local_kind(status: &libc::statfs) -> bool {
 }
 
 /// `f_type`'s width differs between C libraries and architectures.
-#[cfg(target_os = "linux")]
 fn signed<Kind: Into<i64>>(kind: Kind) -> i64 {
     kind.into()
-}
-
-#[cfg(target_os = "macos")]
-fn is_local_kind(status: &libc::statfs) -> bool {
-    status.f_flags & libc::MNT_LOCAL as u32 != 0
 }
 
 fn c_name(component: &OsStr) -> Result<CString, LocationError> {

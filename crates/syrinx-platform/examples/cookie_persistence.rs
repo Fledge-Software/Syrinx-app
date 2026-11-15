@@ -14,8 +14,18 @@ fn main() -> std::process::ExitCode {
 }
 
 /// The fixture drives WebView2, which exists only on Windows.
-#[cfg(not(windows))]
+#[cfg(not(any(windows, target_os = "linux")))]
 fn main() -> std::process::ExitCode {
     eprintln!("This fixture drives WebView2 and runs only on Windows.");
     std::process::ExitCode::FAILURE
+}
+
+// WebView2's COM-specific suites stay on Windows; Linux's host checks and limits
+// are recorded in docs/dev/linux-native-checks.md and implemented below.
+#[cfg(target_os = "linux")]
+mod linux;
+
+#[cfg(target_os = "linux")]
+fn main() -> std::process::ExitCode {
+    linux::main("cookie_persistence")
 }

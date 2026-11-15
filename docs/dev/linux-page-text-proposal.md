@@ -9,7 +9,17 @@ date: 2026-11-02
 
 Linux needs an explicit choice because WebKitGTK does not provide the host-side DOM snapshot that the owner approved for Windows in P1-25 (`docs/page-text-indexing.md`). Reading the document response is a different method with weaker visibility and sensitive-form checks. Treating it as an interchangeable implementation would silently change the owner's privacy expectations.
 
-The recommendation is to keep capture off while the owner considers these limits. If the owner wants this fallback, first approve a synthetic feasibility run against the cases below, followed by review of its evidence. Approval of this proposal would not itself enable capture for daily browsing. `READS_SENT_HTML` in `crates/syrinx-platform/src/browser_gtk/page_text.rs` remains `false`; no implementation or dependency change is included here.
+The recommendation is to keep capture off while the owner considers these limits. If the owner wants this fallback, first approve a synthetic feasibility run against the cases below, followed by review of its evidence. Approval of this proposal would not itself enable capture for daily browsing. Linux has no reader today: `READS_PAGE_TEXT` in `crates/syrinx-platform/src/browser_gtk/mod.rs` is `false`, and no implementation or dependency change is included here.
+
+## The reader at ad1cf78
+
+A reader for this method was written during the port and kept switched off behind a `READS_SENT_HTML = false` flag. The review of #226 removed it on 2026-11-03, because the owner has not approved the method and the house rules allow no dead code. It is kept in history at commit `ad1cf78` on `linux-port`, so #219 can restore it rather than rewrite it:
+
+- `crates/syrinx-core/src/page_text/sent_html.rs`: `sent_html_text`, its refusals (`SentHtmlRefusal`), the 8 MiB `SENT_HTML_LIMIT_BYTES` bound and its parser tests, plus `is_sign_in_or_card_field` and `bounded_page_text`, which it shared with the Windows snapshot reader (`crates/syrinx-platform/src/browser/page_text/snapshot.rs`, then edited to call them);
+- `crates/syrinx-core/src/bookmark_import/tokenizer.rs`: the quote-aware mode (`Tokenizer::quoted`, `skip_raw_text`) that only this reader used, and the `pub(crate)` visibility it needed there and in `text.rs` and `bookmark_import.rs`;
+- `crates/syrinx-platform/src/browser_gtk/page_text.rs`, lines 329–500: the `schedule` → `tick` → `read` → `arrived` → `parse` → `captured` path that fetched the main resource's body with `WebResource::data` and parsed it on a short-lived thread, at most two at once.
+
+The observation and taint tracking that Linux needs today stay in `browser_gtk/page_text.rs`; a capture that falls due is judged with capture off.
 
 ## What the method reads
 
@@ -17,7 +27,7 @@ A main resource is the response that supplies a tab's own document, rather than 
 
 “As sent” means the document response data that WebKit exposes, before page scripts modify the document object model (DOM). It does not mean a capture of raw compressed HTTP packets. A cached or service-worker response also needs its own eligibility evidence; this proposal does not assume that the bytes came directly from the origin server.
 
-The dormant Linux path already calls the shared Rust reader in `crates/syrinx-core/src/page_text/sent_html.rs`. It retains ordinary response text, decodes the supported HTML entities and collapses whitespace. It omits scripts, styles, the document head, embedded-frame markup, form-field values, editable regions and known hidden subtrees. A password field or a payment-card autocomplete marker present in the response makes it discard the document.
+The reader kept at `ad1cf78` (above) retains ordinary response text, decodes the supported HTML entities and collapses whitespace. It omits scripts, styles, the document head, embedded-frame markup, form-field values, editable regions and known hidden subtrees. A password field or a payment-card autocomplete marker present in the response makes it discard the document.
 
 ## What it misses, and why that matters
 
