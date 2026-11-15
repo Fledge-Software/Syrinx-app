@@ -12,9 +12,9 @@ use super::site_zoom::{VersionSixScripts, permissions_database};
 use super::{TestDirectory, close, fixture};
 use crate::plugins::{PluginWrite, PluginWritten};
 use crate::{
-    EncodingField, FolderAccess, MAX_PLUGIN_SETTING_KEY_BYTES, MAX_PLUGIN_SETTING_VALUE_BYTES,
-    MAX_PLUGIN_SETTINGS, PluginFolder, PluginGrant, PluginInstall, PluginState, Store, StoreError,
-    StoreOperation, schema,
+    EncodingField, FolderAccess, MAX_PLUGIN_SCOPE_BYTES, MAX_PLUGIN_SETTING_KEY_BYTES,
+    MAX_PLUGIN_SETTING_VALUE_BYTES, MAX_PLUGIN_SETTINGS, PluginFolder, PluginGrant, PluginInstall,
+    PluginState, Store, StoreError, StoreOperation, schema,
 };
 
 fn user_version(connection: &Connection) -> i64 {
@@ -429,6 +429,14 @@ fn the_setting_table_checks_the_same_bounds_the_store_refuses_before_writing() {
 }
 
 #[test]
+fn the_grant_table_checks_the_same_scope_bound_the_store_refuses_before_writing() {
+    assert!(
+        crate::plugins::GRANT_TABLE
+            .contains(&format!("length(scope_json) <= {MAX_PLUGIN_SCOPE_BYTES}"))
+    );
+}
+
+#[test]
 fn a_bounded_read_uses_a_free_reader_and_answers_busy_when_none_frees_in_time() {
     let directory = TestDirectory::new();
     let store = installed(&directory, &["notes"]);
@@ -592,34 +600,51 @@ fn a_writer_left_inside_a_transaction_answers_the_write_then_stops() {
         .shutdown()
         .expect("close synthetic store");
     let connection = directory.connection();
-    let setting = |key: &str| PluginWrite::Setting {
-        plugin_id: "notes".to_owned(),
-        key: key.to_owned(),
-        value: vec![1],
-    };
-    let (reply, answer) = std::sync::mpsc::sync_channel(1);
-    assert_eq!(
-        crate::engine::serve_plugin_write(&connection, &setting("notes.first"), None, &reply),
-        Ok(()),
-        "a write that ends its own statement keeps the writer serving"
-    );
-    assert_eq!(answer.try_recv(), Ok(Ok(PluginWritten::Saved)));
-
+    schema::configure_connection(&connection).expect("configure synthetic connection");
     connection
         .execute_batch("BEGIN")
         .expect("open a synthetic transaction");
-    assert_eq!(
-        crate::engine::serve_plugin_write(&connection, &setting("notes.second"), None, &reply),
-        Err(StoreError::TransactionLeftOpen)
-    );
+    let mut writer = super::super::LeasedConnection {
+        connection,
+        lease: directory.lease(),
+    };
+    let (requests, received) = std::sync::mpsc::sync_channel(1);
+    let (reply, answer) = std::sync::mpsc::sync_channel(1);
+    let write = PluginWrite::Setting {
+        plugin_id: "notes".to_owned(),
+        key: "notes.key".to_owned(),
+        value: vec![1],
+    };
+    requests
+        .send(super::super::WriterRequest::Plugin {
+            write,
+            limit: None,
+            reply,
+        })
+        .expect("queue a synthetic plugin write");
+
+    // The writer loop itself must stop after that write, while its queue is still open. A
+    // writer that carried on would wait for more; closing the queue then ends it, and fails.
+    let (done, finished) = std::sync::mpsc::channel();
+    let serving = &mut writer;
+    thread::scope(|scope| {
+        scope.spawn(move || {
+            let stopped = super::super::serve_writes(serving, received);
+            done.send(stopped).expect("the test is listening");
+        });
+        let stopped = finished.recv_timeout(Duration::from_secs(30));
+        drop(requests);
+        assert_eq!(stopped, Ok(Err(StoreError::TransactionLeftOpen)));
+    });
     assert_eq!(
         answer.try_recv(),
         Ok(Ok(PluginWritten::Saved)),
         "the write is answered before the writer stops"
     );
-    connection
+    writer
+        .connection
         .execute_batch("ROLLBACK")
         .expect("end the synthetic transaction");
-    close(connection);
+    close(writer.connection);
     directory.cleanup();
 }
