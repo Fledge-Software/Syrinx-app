@@ -154,12 +154,18 @@ fn is_local_alias(canonical: &Path) -> bool {
     }
 }
 
-/// A server name that is this computer: a loopback name, a loopback address (IPv4 in any form
-/// `inet_aton` reads, such as `127.1`, `2130706433` or `0x7f000001`; `::1`; an IPv4-mapped
-/// `::ffff:127.*`; and Windows' `*.ipv6-literal.net` names for them), or its own NetBIOS name. Its LAN address and its DNS name are not caught here; only
-/// comparing file identities closes those (the PR's "For the owner", item 2).
+/// A server name that is this computer: a loopback name, a loopback address, or its own
+/// NetBIOS name, with one trailing dot allowed (`localhost.`). A loopback address is IPv4 in
+/// any form `inet_aton` reads (`127.1`, `2130706433`, `0x7f000001`), `::1`, an IPv4-mapped
+/// `::ffff:127.*`, or Windows' `*.ipv6-literal.net` names for them. Its LAN address and its
+/// DNS name are not caught here; only comparing file identities closes those (the PR's
+/// "For the owner", item 2).
 fn is_this_computer(server: &OsStr) -> bool {
     let server = server.to_string_lossy().to_ascii_lowercase();
+    let server = match server.strip_suffix('.') {
+        Some(name) if !name.is_empty() => name.to_owned(),
+        _ => server,
+    };
     if matches!(server.as_str(), "localhost" | "." | "?") {
         return true;
     }

@@ -453,7 +453,10 @@ fn a_plugin_that_is_installed_but_not_running_can_be_revoked_and_removed() {
             registry.get("held").expect("registered"),
             Arc::from(support::bytes(FULL))
         ),
-        Err(OwnerError::NotEnabled(PluginState::Disabled)),
+        Err(OwnerError::NotEnabled {
+            plugin: "held".into(),
+            held_for_update: false
+        }),
         "a disabled plugin is not loaded"
     );
     assert_eq!(

@@ -465,7 +465,11 @@ fn a_bounded_write_ready_after_its_deadline_is_rolled_back_not_committed() {
     let now = Instant::now();
     for (key, deadline, expected) in [
         ("notes.late", now, Err(StoreError::Busy)),
-        ("notes.early", now + Duration::from_secs(60), Ok(())),
+        (
+            "notes.early",
+            now + Duration::from_secs(60),
+            Ok(PluginWritten::Saved),
+        ),
     ] {
         let transaction = Transaction::new_unchecked(&connection, TransactionBehavior::Immediate)
             .expect("begin a synthetic write");
@@ -474,9 +478,14 @@ fn a_bounded_write_ready_after_its_deadline_is_rolled_back_not_committed() {
             key: key.to_owned(),
             value: vec![1],
         };
-        crate::plugins::write(&transaction, &write).expect("written inside the transaction");
+        let written = crate::plugins::write(&transaction, &write);
         assert_eq!(
-            crate::engine::plugins::commit_by(&connection, transaction, deadline),
+            written,
+            Ok(PluginWritten::Saved),
+            "written inside the transaction"
+        );
+        assert_eq!(
+            crate::engine::plugins::finish_by(transaction, written, deadline),
             expected
         );
     }
@@ -535,18 +544,41 @@ fn bounded_writes_behind_a_held_lock_fail_and_never_land_later() {
 }
 
 #[test]
-fn only_a_failed_rollback_counts_as_leaving_the_writer_inside_a_transaction() {
-    let rollback = StoreError::Database {
-        operation: StoreOperation::Rollback,
-        code: Some(1),
-    };
-    let left_open = crate::engine::plugins::left_open;
-    assert_eq!(left_open(&Err(rollback.clone())), Some(rollback));
-    assert_eq!(left_open(&Err(StoreError::Busy)), None);
-    let write_failed = StoreError::Database {
-        operation: StoreOperation::Write,
-        code: Some(19),
-    };
-    assert_eq!(left_open(&Err(write_failed)), None);
-    assert_eq!(left_open(&Ok(PluginWritten::Saved)), None);
+fn a_transaction_sqlite_already_ended_keeps_the_write_s_own_error() {
+    let directory = TestDirectory::new();
+    let connection = directory.connection();
+    let transaction = Transaction::new_unchecked(&connection, TransactionBehavior::Immediate)
+        .expect("begin a synthetic write");
+    // As SQLite does itself after a full disk or an I/O error.
+    transaction
+        .execute_batch("ROLLBACK")
+        .expect("end the synthetic transaction");
+    let failed: Result<(), StoreError> = Err(StoreError::TooManyRecords);
+    let later = Instant::now() + Duration::from_secs(60);
+    assert_eq!(
+        crate::engine::plugins::finish_by(transaction, failed, later),
+        Err(StoreError::TooManyRecords),
+        "no rollback failure replaces the original error"
+    );
+    assert!(connection.is_autocommit());
+    close(connection);
+    directory.cleanup();
+}
+
+#[test]
+fn a_writer_left_inside_a_transaction_takes_no_further_write() {
+    let directory = TestDirectory::new();
+    let store = installed(&directory, &["notes"]);
+    let leave_open = crate::engine::plugins::tests_seam::LEAVE_OPEN_KEY;
+    assert_eq!(
+        store.save_plugin_setting("notes".to_owned(), leave_open.to_owned(), Vec::new()),
+        Ok(()),
+        "the seam's write is answered before the writer stops"
+    );
+    assert_eq!(
+        store.save_plugin_setting("notes".to_owned(), "notes.after".to_owned(), vec![1]),
+        Err(StoreError::WorkerUnavailable)
+    );
+    assert!(store.shutdown().is_err(), "the writer's stop is reported");
+    directory.cleanup();
 }

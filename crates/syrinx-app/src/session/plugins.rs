@@ -164,6 +164,7 @@ mod tests {
             ("USERPROFILE", tree.folder("Users/owner")),
             ("HOME", tree.folder("home/owner")),
         ];
+        assert_eq!(named.len(), SYSTEM_FOLDERS.len(), "one folder per variable");
         let mut deny = DenyList::new();
         protect_named(&mut deny, &SYSTEM_FOLDERS, |variable| {
             named

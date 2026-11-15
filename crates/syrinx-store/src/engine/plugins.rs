@@ -249,15 +249,15 @@ const SQLITE_BUSY: i32 = 5;
 /// its start time has passed, and otherwise runs in its own transaction: only taking the
 /// write lock waits, and the deadline is checked again before COMMIT, so a write that
 /// overran is rolled back. Only the COMMIT's own disk write can still end after the
-/// deadline. A rollback that fails twice leaves the connection inside a transaction, which
-/// the writer treats as fatal (`left_open`).
+/// deadline. The writer stops if a plugin write ever leaves its connection inside a
+/// transaction (`serve_writes`).
 pub(super) fn write_within(
     connection: &Connection,
     write: &PluginWrite,
     limit: Option<WriteLimit>,
 ) -> Result<PluginWritten, StoreError> {
     let Some(limit) = limit else {
-        return crate::plugins::write(connection, write);
+        return unbounded(connection, write);
     };
     if Instant::now() > limit.start_by {
         return Err(StoreError::Busy);
@@ -265,54 +265,63 @@ pub(super) fn write_within(
     bounded(connection, limit.deadline, |connection| {
         let transaction = Transaction::new_unchecked(connection, TransactionBehavior::Immediate)
             .map_err(|error| database_error(StoreOperation::BeginWrite, error))?;
-        let written = match crate::plugins::write(&transaction, write) {
-            Ok(written) => written,
-            Err(error) => {
-                roll_back(connection, transaction)?;
-                return Err(error);
-            }
-        };
-        commit_by(connection, transaction, limit.deadline)?;
-        Ok(written)
+        let written = crate::plugins::write(&transaction, write);
+        finish_by(transaction, written, limit.deadline)
     })
 }
 
-/// Commit `transaction` only while `deadline` has not passed; otherwise roll it back and
-/// answer `Busy`. Only the COMMIT's own disk write can still end after the deadline.
-pub(super) fn commit_by(
-    connection: &Connection,
+/// Commit `transaction` with `written` only while `deadline` has not passed; otherwise roll
+/// it back and answer `Busy`. As every store transaction does (`records::finish_transaction`),
+/// a transaction SQLite already ended keeps the original error, and a failed rollback is
+/// reported beside it. Only the COMMIT's own disk write can still end after the deadline.
+pub(super) fn finish_by<T>(
     transaction: Transaction<'_>,
+    written: Result<T, StoreError>,
     deadline: Instant,
-) -> Result<(), StoreError> {
-    if Instant::now() >= deadline {
-        roll_back(connection, transaction)?;
-        return Err(StoreError::Busy);
-    }
-    transaction
-        .commit()
-        .map_err(|error| database_error(StoreOperation::Commit, error))
+) -> Result<T, StoreError> {
+    let ready = written.and_then(|value| {
+        if Instant::now() >= deadline {
+            return Err(StoreError::Busy);
+        }
+        Ok(value)
+    });
+    crate::records::finish_transaction(transaction, ready)
 }
 
-/// Roll `transaction` back, trying a plain `ROLLBACK` once more if that fails. A second
-/// failure is reported as a rollback error, which stops the writer (`left_open`).
-fn roll_back(connection: &Connection, transaction: Transaction<'_>) -> Result<(), StoreError> {
-    if transaction.rollback().is_ok() {
-        return Ok(());
+/// The owner's own plugin write, waiting as every owner's write does.
+fn unbounded(connection: &Connection, write: &PluginWrite) -> Result<PluginWritten, StoreError> {
+    #[cfg(test)]
+    if let Some(written) = tests_seam::leave_open(connection, write) {
+        return written;
     }
-    connection
-        .execute_batch("ROLLBACK")
-        .map_err(|error| database_error(StoreOperation::Rollback, error))
+    crate::plugins::write(connection, write)
 }
 
-/// The error that leaves the writer connection inside a transaction, if `result` is one.
-pub(super) fn left_open(result: &Result<PluginWritten, StoreError>) -> Option<StoreError> {
-    match result {
-        Err(
-            error @ StoreError::Database {
-                operation: StoreOperation::Rollback,
-                ..
-            },
-        ) => Some(error.clone()),
-        _ => None,
+/// A seam for the writer's own test: a write under this key opens a transaction and leaves
+/// it open, as a failed commit or rollback could.
+#[cfg(test)]
+pub(super) mod tests_seam {
+    use rusqlite::Connection;
+
+    use crate::error::{StoreError, StoreOperation, database_error};
+    use crate::plugins::{PluginWrite, PluginWritten};
+
+    pub(in crate::engine) const LEAVE_OPEN_KEY: &str = "test.leave-transaction-open";
+
+    pub(super) fn leave_open(
+        connection: &Connection,
+        write: &PluginWrite,
+    ) -> Option<Result<PluginWritten, StoreError>> {
+        let PluginWrite::Setting { key, .. } = write else {
+            return None;
+        };
+        if key != LEAVE_OPEN_KEY {
+            return None;
+        }
+        let opened = connection
+            .execute_batch("BEGIN")
+            .map(|()| PluginWritten::Saved)
+            .map_err(|error| database_error(StoreOperation::BeginWrite, error));
+        Some(opened)
     }
 }

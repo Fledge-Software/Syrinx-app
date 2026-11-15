@@ -46,8 +46,12 @@ pub enum OwnerError {
     AlreadyAdded(String),
     /// The plugin is installed but was not loaded this session, so its manifest is unknown.
     NotLoaded(String),
-    /// The plugin is installed, but disabled or held for an update, so it is not loaded.
-    NotEnabled(PluginState),
+    /// The plugin is installed, but disabled or held until its update is reviewed, so it is
+    /// not loaded.
+    NotEnabled {
+        plugin: String,
+        held_for_update: bool,
+    },
     /// The plugin's manifest does not ask for this capability.
     NotRequested(CapabilityKind),
     /// No plugin may hold a full-trust capability until Forge's slices.
@@ -80,14 +84,17 @@ impl fmt::Display for OwnerError {
             Self::AlreadyAdded(plugin) => {
                 write!(formatter, "{plugin} is already loaded this session")
             }
-            Self::NotEnabled(PluginState::Disabled) => {
-                write!(formatter, "the plugin is installed but disabled")
-            }
-            Self::NotEnabled(PluginState::UpdateHeld) => write!(
+            Self::NotEnabled {
+                plugin,
+                held_for_update: false,
+            } => write!(formatter, "{plugin} is installed but disabled"),
+            Self::NotEnabled {
+                plugin,
+                held_for_update: true,
+            } => write!(
                 formatter,
-                "the plugin is installed but held until you review its update"
+                "{plugin} is installed but held until you review its update"
             ),
-            Self::NotEnabled(PluginState::Enabled) => write!(formatter, "the plugin is enabled"),
             Self::NotLoaded(plugin) => {
                 write!(
                     formatter,
@@ -209,7 +216,10 @@ impl OwnerRuntime {
             .record(&id)?
             .ok_or_else(|| OwnerError::NotInstalled(id.clone()))?;
         if record.state != PluginState::Enabled {
-            return Err(OwnerError::NotEnabled(record.state));
+            return Err(OwnerError::NotEnabled {
+                plugin: id,
+                held_for_update: record.state == PluginState::UpdateHeld,
+            });
         }
         self.running()?.plugins.add(plugin, component)?;
         let added = Added {

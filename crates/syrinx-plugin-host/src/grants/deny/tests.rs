@@ -199,6 +199,26 @@ fn loopback_addresses_are_recognised_in_the_spellings_windows_accepts() {
     }
 }
 
+#[test]
+fn this_computers_names_are_recognised_with_or_without_a_trailing_dot() {
+    for server in [
+        "localhost",
+        "localhost.",
+        "LOCALHOST.",
+        ".",
+        "?",
+        "127.0.0.1.",
+    ] {
+        assert!(
+            super::is_this_computer(std::ffi::OsStr::new(server)),
+            "{server}"
+        );
+    }
+    assert!(!super::is_this_computer(std::ffi::OsStr::new(
+        "files.example.test."
+    )));
+}
+
 #[cfg(windows)]
 #[test]
 fn this_computers_shares_and_device_paths_are_refused_as_aliases() {
@@ -207,6 +227,8 @@ fn this_computers_shares_and_device_paths_are_refused_as_aliases() {
     assert!(alias(r"\\localhost\notes"));
     assert!(alias(r"\\127.0.0.1\notes"));
     assert!(alias(r"\\127.1\notes"));
+    assert!(alias(r"\\127.0.0.1.\notes"));
+    assert!(alias(r"\\localhost.\notes"));
     assert!(alias(r"\\?\UNC\files.example.test\ADMIN$"));
     assert!(alias(r"\\?\GLOBALROOT\Device\HarddiskVolume1\Users"));
     assert!(alias(r"\\.\C:\Users"));
