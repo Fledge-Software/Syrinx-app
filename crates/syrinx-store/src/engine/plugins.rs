@@ -124,9 +124,10 @@ impl Store {
         })
     }
 
-    /// As `save_plugin_setting`, answering within `budget`. `Busy` is true: the writer starts
-    /// the write only within the first half of the budget, and rolls it back if the budget
-    /// has passed when it is ready to commit.
+    /// As `save_plugin_setting`, answering within `budget`. The writer starts the write only
+    /// within the first half of the budget, and rolls it back if the budget has passed when
+    /// it is ready to commit; only the COMMIT's own disk write can still end after the
+    /// deadline, so in that last moment a write answered `Busy` may have landed.
     pub fn save_plugin_setting_within(
         &self,
         plugin_id: String,
@@ -247,8 +248,9 @@ const SQLITE_BUSY: i32 = 5;
 /// Apply a plugin write on the writer connection. A bounded one is refused unstarted once
 /// its start time has passed, and otherwise runs in its own transaction: only taking the
 /// write lock waits, and the deadline is checked again before COMMIT, so a write that
-/// overran is rolled back and its caller's `Busy` is true. Only the COMMIT's own disk write
-/// can still end after the deadline.
+/// overran is rolled back. Only the COMMIT's own disk write can still end after the
+/// deadline. A rollback that fails twice leaves the connection inside a transaction, which
+/// the writer treats as fatal (`left_open`).
 pub(super) fn write_within(
     connection: &Connection,
     write: &PluginWrite,
@@ -263,22 +265,54 @@ pub(super) fn write_within(
     bounded(connection, limit.deadline, |connection| {
         let transaction = Transaction::new_unchecked(connection, TransactionBehavior::Immediate)
             .map_err(|error| database_error(StoreOperation::BeginWrite, error))?;
-        let written = crate::plugins::write(&transaction, write)?;
-        commit_by(transaction, limit.deadline)?;
+        let written = match crate::plugins::write(&transaction, write) {
+            Ok(written) => written,
+            Err(error) => {
+                roll_back(connection, transaction)?;
+                return Err(error);
+            }
+        };
+        commit_by(connection, transaction, limit.deadline)?;
         Ok(written)
     })
 }
 
 /// Commit `transaction` only while `deadline` has not passed; otherwise roll it back and
-/// answer `Busy`, so a caller told `Busy` is never wrong about its write.
-pub(super) fn commit_by(transaction: Transaction<'_>, deadline: Instant) -> Result<(), StoreError> {
+/// answer `Busy`. Only the COMMIT's own disk write can still end after the deadline.
+pub(super) fn commit_by(
+    connection: &Connection,
+    transaction: Transaction<'_>,
+    deadline: Instant,
+) -> Result<(), StoreError> {
     if Instant::now() >= deadline {
-        transaction
-            .rollback()
-            .map_err(|error| database_error(StoreOperation::Rollback, error))?;
+        roll_back(connection, transaction)?;
         return Err(StoreError::Busy);
     }
     transaction
         .commit()
         .map_err(|error| database_error(StoreOperation::Commit, error))
+}
+
+/// Roll `transaction` back, trying a plain `ROLLBACK` once more if that fails. A second
+/// failure is reported as a rollback error, which stops the writer (`left_open`).
+fn roll_back(connection: &Connection, transaction: Transaction<'_>) -> Result<(), StoreError> {
+    if transaction.rollback().is_ok() {
+        return Ok(());
+    }
+    connection
+        .execute_batch("ROLLBACK")
+        .map_err(|error| database_error(StoreOperation::Rollback, error))
+}
+
+/// The error that leaves the writer connection inside a transaction, if `result` is one.
+pub(super) fn left_open(result: &Result<PluginWritten, StoreError>) -> Option<StoreError> {
+    match result {
+        Err(
+            error @ StoreError::Database {
+                operation: StoreOperation::Rollback,
+                ..
+            },
+        ) => Some(error.clone()),
+        _ => None,
+    }
 }

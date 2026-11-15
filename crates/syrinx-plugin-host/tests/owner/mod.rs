@@ -453,8 +453,13 @@ fn a_plugin_that_is_installed_but_not_running_can_be_revoked_and_removed() {
             registry.get("held").expect("registered"),
             Arc::from(support::bytes(FULL))
         ),
-        Err(OwnerError::NotInstalled("held".into())),
+        Err(OwnerError::NotEnabled(PluginState::Disabled)),
         "a disabled plugin is not loaded"
+    );
+    assert_eq!(
+        runtime.grant("absent", CapabilityKind::Storage, 2),
+        Err(OwnerError::NotInstalled("absent".into())),
+        "no install record at all"
     );
     assert_eq!(
         runtime.grant("held", CapabilityKind::Storage, 2),

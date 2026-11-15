@@ -10,7 +10,7 @@ use rusqlite_migration::{M, Migrations};
 
 use super::site_zoom::{VersionSixScripts, permissions_database};
 use super::{TestDirectory, close, fixture};
-use crate::plugins::PluginWrite;
+use crate::plugins::{PluginWrite, PluginWritten};
 use crate::{
     EncodingField, FolderAccess, MAX_PLUGIN_SETTING_KEY_BYTES, MAX_PLUGIN_SETTING_VALUE_BYTES,
     MAX_PLUGIN_SETTINGS, PluginFolder, PluginGrant, PluginInstall, PluginState, Store, StoreError,
@@ -476,7 +476,7 @@ fn a_bounded_write_ready_after_its_deadline_is_rolled_back_not_committed() {
         };
         crate::plugins::write(&transaction, &write).expect("written inside the transaction");
         assert_eq!(
-            crate::engine::plugins::commit_by(transaction, deadline),
+            crate::engine::plugins::commit_by(&connection, transaction, deadline),
             expected
         );
     }
@@ -532,4 +532,21 @@ fn bounded_writes_behind_a_held_lock_fail_and_never_land_later() {
     assert_eq!(store.plugin_setting("notes", "notes.second"), Ok(None));
     store.shutdown().expect("close synthetic store");
     directory.cleanup();
+}
+
+#[test]
+fn only_a_failed_rollback_counts_as_leaving_the_writer_inside_a_transaction() {
+    let rollback = StoreError::Database {
+        operation: StoreOperation::Rollback,
+        code: Some(1),
+    };
+    let left_open = crate::engine::plugins::left_open;
+    assert_eq!(left_open(&Err(rollback.clone())), Some(rollback));
+    assert_eq!(left_open(&Err(StoreError::Busy)), None);
+    let write_failed = StoreError::Database {
+        operation: StoreOperation::Write,
+        code: Some(19),
+    };
+    assert_eq!(left_open(&Err(write_failed)), None);
+    assert_eq!(left_open(&Ok(PluginWritten::Saved)), None);
 }

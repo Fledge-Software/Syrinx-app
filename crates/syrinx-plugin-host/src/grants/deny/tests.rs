@@ -23,9 +23,12 @@ impl Tree {
         Self(root)
     }
 
-    /// Create and return `relative` under the tree.
+    /// Create and return `relative` (segments separated by `/`) under the tree, joined one
+    /// segment at a time so the path uses the platform's own separator.
     fn folder(&self, relative: &str) -> PathBuf {
-        let path = self.0.join(relative);
+        let path = relative
+            .split('/')
+            .fold(self.0.clone(), |path, segment| path.join(segment));
         fs::create_dir_all(&path).expect("a synthetic folder");
         path
     }
@@ -128,7 +131,12 @@ fn link_folder(target: &Path, link: &Path) {
             .arg(target)
             .output()
             .expect("cmd starts");
-        assert!(made.status.success(), "mklink /J made a synthetic junction");
+        assert!(
+            made.status.success(),
+            "mklink /J made no synthetic junction: {}{}",
+            String::from_utf8_lossy(&made.stdout),
+            String::from_utf8_lossy(&made.stderr)
+        );
     }
 }
 
@@ -162,10 +170,14 @@ fn a_folder_protected_through_a_linked_parent_is_refused_by_its_real_path() {
 }
 
 #[test]
-fn loopback_addresses_are_recognised_in_every_spelling() {
+fn loopback_addresses_are_recognised_in_the_spellings_windows_accepts() {
     for server in [
         "127.0.0.1",
         "127.1.2.3",
+        "127.1",
+        "2130706433",
+        "0x7f000001",
+        "0177.0.0.1",
         "::1",
         "[::1]",
         "0--1.ipv6-literal.net",
@@ -177,6 +189,9 @@ fn loopback_addresses_are_recognised_in_every_spelling() {
     }
     for server in [
         "192.0.2.1",
+        "3221225985",
+        "0x7f",
+        "128.1",
         "2001-db8--1.ipv6-literal.net",
         "files.example.test",
     ] {
@@ -191,6 +206,7 @@ fn this_computers_shares_and_device_paths_are_refused_as_aliases() {
     assert!(alias(r"\\?\UNC\localhost\C$\Users"));
     assert!(alias(r"\\localhost\notes"));
     assert!(alias(r"\\127.0.0.1\notes"));
+    assert!(alias(r"\\127.1\notes"));
     assert!(alias(r"\\?\UNC\files.example.test\ADMIN$"));
     assert!(alias(r"\\?\GLOBALROOT\Device\HarddiskVolume1\Users"));
     assert!(alias(r"\\.\C:\Users"));

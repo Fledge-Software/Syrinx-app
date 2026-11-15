@@ -46,6 +46,8 @@ pub enum OwnerError {
     AlreadyAdded(String),
     /// The plugin is installed but was not loaded this session, so its manifest is unknown.
     NotLoaded(String),
+    /// The plugin is installed, but disabled or held for an update, so it is not loaded.
+    NotEnabled(PluginState),
     /// The plugin's manifest does not ask for this capability.
     NotRequested(CapabilityKind),
     /// No plugin may hold a full-trust capability until Forge's slices.
@@ -78,6 +80,14 @@ impl fmt::Display for OwnerError {
             Self::AlreadyAdded(plugin) => {
                 write!(formatter, "{plugin} is already loaded this session")
             }
+            Self::NotEnabled(PluginState::Disabled) => {
+                write!(formatter, "the plugin is installed but disabled")
+            }
+            Self::NotEnabled(PluginState::UpdateHeld) => write!(
+                formatter,
+                "the plugin is installed but held until you review its update"
+            ),
+            Self::NotEnabled(PluginState::Enabled) => write!(formatter, "the plugin is enabled"),
             Self::NotLoaded(plugin) => {
                 write!(
                     formatter,
@@ -197,8 +207,10 @@ impl OwnerRuntime {
         }
         let record = self
             .record(&id)?
-            .filter(|install| install.state == PluginState::Enabled)
             .ok_or_else(|| OwnerError::NotInstalled(id.clone()))?;
+        if record.state != PluginState::Enabled {
+            return Err(OwnerError::NotEnabled(record.state));
+        }
         self.running()?.plugins.add(plugin, component)?;
         let added = Added {
             manifest: plugin.manifest().clone(),
@@ -332,10 +344,13 @@ impl OwnerRuntime {
         }
     }
 
+    /// The plugin as loaded this session; otherwise whether the store knows it at all.
     fn added(&self, plugin: &str) -> Result<&Added, OwnerError> {
-        self.added
-            .get(plugin)
-            .ok_or_else(|| OwnerError::NotLoaded(plugin.to_owned()))
+        if let Some(added) = self.added.get(plugin) {
+            return Ok(added);
+        }
+        self.require_record(plugin)?;
+        Err(OwnerError::NotLoaded(plugin.to_owned()))
     }
 
     /// The store's install record for `plugin`, in any state.

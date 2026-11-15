@@ -613,9 +613,14 @@ fn serve_writes(
                 reply,
             } => {
                 let result = plugins::write_within(&writer.connection, &write, limit);
+                let fatal = plugins::left_open(&result);
                 // A caller that gave up on a bounded write no longer listens; nothing is lost.
                 if reply.send(result).is_err() && limit.is_none() {
                     return Err(StoreError::ReplyAbandoned);
+                }
+                // A connection stuck inside a transaction must not take another write.
+                if let Some(error) = fatal {
+                    return Err(error);
                 }
             }
             WriterRequest::Deletions { requests, reply } => {
