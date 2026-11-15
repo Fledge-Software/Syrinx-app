@@ -200,8 +200,8 @@ def measure_syrinx(binary, scratch, environment, server, base, options):
 def measure_reference(scratch, server, base, options):
     if options.reference == "none":
         return {"status": "not requested"}
-    browser = shutil.which(options.reference)
-    if browser is None:
+    browser = "/usr/bin/chromium" if options.reference == "chromium" else shutil.which(options.reference)
+    if browser is None or not Path(browser).is_file():
         return {"status": "not installed", "browser": options.reference}
     reference = scratch / "reference"
     reference.mkdir()
@@ -212,13 +212,15 @@ def measure_reference(scratch, server, base, options):
         profile.mkdir()
         command = [browser, "--no-remote", "--profile", str(profile)] + urls
     else:
-        command = [browser, f"--user-data-dir={reference / 'profile'}", "--no-first-run",
+        # Match Syrinx's XWayland backend; never probe native Wayland for this comparison.
+        command = [browser, "--ozone-platform=x11", f"--user-data-dir={reference / 'profile'}", "--no-first-run",
                    "--no-default-browser-check", "--disable-background-networking", "--disable-sync",
                    "--disable-component-update", "--disable-default-apps"] + urls
     with application(command, environment, reference / "browser.log", native_close=False) as process:
         wait_for(lambda: all(page_ready(server, f"reference-{number}") for number in range(10)), process, "ten reference documents")
         time.sleep(options.settle)
         return {"status": "measured", "browser": options.reference,
+                "display_backend": "x11 (XWayland)" if options.reference == "chromium" else "browser default",
                 "ten_tabs": memory_summary(list(snapshot(process.pid).values()))}
 
 

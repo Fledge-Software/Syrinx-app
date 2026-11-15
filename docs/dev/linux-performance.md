@@ -6,26 +6,33 @@ coordinator must collect the real figures outside the agent sandbox.
 [Issue #218](https://github.com/Fledge-Software/Syrinx-app/issues/218) owns
 that run and any subsequent patch proposal.
 
-## Status, 2026-11-02
+## Status, 2026-11-03
 
 The script's Syrinx path passed a native software-rendered validation run:
 fresh profiles, mapped-window and document-ready timing, ordinary window
-closure, one uncontrolled CPU sample, and ten loaded synthetic tabs. Eight
+closure, one uncontrolled CPU sample, and ten loaded synthetic tabs. Nine
 accounting, state and cleanup tests passed. **Focused, unfocused, minimized, reference-browser
 and hardware acceptance figures have not been collected.** A one-second
 software sample is a script check, not an idle-CPU result for this machine.
 
-The reference Chromium launch selected native Wayland and failed to connect
-with its scratch runtime directory. Its display backend and sandbox were
-left unchanged. The coordinator's choice of reference display setup is
-pending; no reference comparison is claimed from that failed trial.
+The initial reference trial selected native Wayland and failed to connect;
+no comparison is claimed from it. On 2026-11-03 the coordinator authorized
+Chromium 154 at `/usr/bin/chromium` with **`--ozone-platform=x11`**, the same
+inherited `DISPLAY` as Syrinx, and a fresh `--user-data-dir` beneath the
+results' scratch folder. Syrinx itself uses XWayland (X11 compatibility under
+Wayland), so this is the like-for-like comparison, not a display workaround.
+Native Wayland is not tried. The browser and agent sandboxes stay unchanged.
+A software-rendered validation on 2026-11-03 reached X11 and loaded all ten
+authored reference documents. This confirms the launch/profile path only;
+it supplies no real-machine comparison. The coordinator still supplies
+every hardware figure outside the sandbox.
 
 | Hardware result | Recorded value |
 | --- | --- |
 | Focused idle CPU | Pending coordinator run. |
 | Unfocused idle CPU | Pending coordinator run. |
 | Minimized idle CPU | Pending coordinator run, or an explicit unsupported-compositor result. |
-| Ten-tab Syrinx and reference memory | Pending coordinator run with the reference display setup resolved. |
+| Ten-tab Syrinx and reference memory | Pending coordinator run with Chromium explicitly on XWayland. |
 | Startup | Pending coordinator run. |
 
 ## Run it
@@ -38,7 +45,7 @@ and scale settings. Do not run against an existing profile.
 
 ```sh
 cargo build --offline --locked --profile local -p syrinx-app
-python3 scripts/linux/measure.py --binary target/local/syrinx --reference none
+python3 scripts/linux/measure.py --binary target/local/syrinx --reference chromium
 ```
 
 The script creates fresh data/cache/config locations, fresh browser profiles
@@ -61,10 +68,12 @@ fresh profile and XDG locations, loads the same ten authored documents,
 waits for all ten to report readiness and measures the whole process tree.
 Chromium's first-run, sync, default-app and background/component-update
 features are disabled in this synthetic reference invocation; its sandbox
-is never disabled. Firefox uses a separate non-remote profile. The reference
-session is terminated after measurement. Reference-display failure remains
-a reported failure until the coordinator selects its setup; do not make a
-silent backend or socket substitution.
+is never disabled. Chromium always uses `/usr/bin/chromium` and
+`--ozone-platform=x11`; its profile is a fresh `reference/profile` under the
+current result directory. Firefox uses a separate non-remote profile. The
+reference session is terminated after measurement. If Chromium cannot reach
+X11 inside the agent sandbox, that validation step is marked **coordinator
+run**; it is not retried on native Wayland or with a sandbox change.
 
 Cleanup records process start-time identities, attempts ordinary Syrinx
 window closure and verifies descendant exit. A failed probe or timeout still
@@ -90,6 +99,9 @@ setting. See [PR_SET_CHILD_SUBREAPER(2)](https://man7.org/linux/man-pages/man2/P
   proportional share and is preferable for the comparison. If even one
   process's PSS cannot be read, the total is unavailable, with a missing count;
   it is never replaced by zero or presented as a complete partial total.
+  Exited, unreaped (zombie) children have no address space and are excluded;
+  a process disappearing during the read triggers a bounded fresh snapshot.
+  An exited root is an error, never an empty zero-memory measurement.
 - Each browser loads the same ten static synthetic documents, each with 256
   identical paragraphs and one authored readiness fetch. There is no polling,
   account, permission request, external asset or host-injected script.
@@ -152,7 +164,8 @@ were not suppressed or attributed solely to smoke mode.
 
 The full Linux `cargo xtask check` passed on this branch: 1,704 tests passed,
 zero failed, ignored, measured or filtered out, followed by `Local gate passed.`
-The eight Python regression tests were also run separately. The gate used
+The original eight Python regression tests were also run separately; the
+XWayland follow-up adds a ninth for an exited, unreaped process. The gate used
 fresh scratch runtime/data/cache/config directories and retained the inherited
 display, session bus, input method and scale.
 
