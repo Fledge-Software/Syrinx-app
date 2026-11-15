@@ -20,3 +20,5 @@
 *.ico binary
 # The Linux package's shell scripts and desktop entry must keep LF line endings.
 /packaging/linux/** text eol=lf
+# Preserve the committed editor bundle byte for byte, so its recorded SHA-256 holds.
+/editor/dist/** -text
