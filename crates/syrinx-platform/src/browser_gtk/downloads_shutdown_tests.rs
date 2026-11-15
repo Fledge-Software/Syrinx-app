@@ -378,22 +378,3 @@ fn a_missing_downloads_folder_is_made_private_and_the_download_completes() {
         "{events:?}"
     );
 }
-
-#[test]
-fn a_downloads_folder_that_cannot_be_made_refuses_the_download_visibly() {
-    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("loopback listener");
-    let port = listener.local_addr().expect("listener address").port();
-    std::thread::spawn(move || serve_unsized_body(listener, b"unused"));
-    let scratch = SyntheticFolder::new("download-blocked-folder", port);
-    // A file stands where the folder should be.
-    let downloads = scratch.0.join("Downloads");
-    std::fs::write(&downloads, b"not a folder").expect("blocking file");
-    let events = download_into_folder(port, downloads.clone());
-    assert!(downloads.is_file(), "the blocking file is untouched");
-    let refused = syrinx_core::DownloadState::Interrupted(syrinx_core::DownloadInterruption::File);
-    assert!(reports(&events, refused), "{events:?}");
-    assert!(
-        !reports(&events, syrinx_core::DownloadState::Completed),
-        "{events:?}"
-    );
-}

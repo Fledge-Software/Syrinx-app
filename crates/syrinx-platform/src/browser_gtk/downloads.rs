@@ -144,6 +144,7 @@ impl Downloads {
     /// A download Syrinx cannot place is refused and shown as a file error, with the cause logged.
     fn decide(&self, id: u64, download: &Download, suggested: &str, folder: Option<PathBuf>) {
         let Some(folder) = folder else {
+            self.drop_running(id);
             download.cancel();
             return;
         };
@@ -157,6 +158,7 @@ impl Downloads {
             return;
         }
         let Some(path) = fresh_path(&folder, suggested) else {
+            self.drop_running(id);
             download.cancel();
             return;
         };
@@ -176,7 +178,13 @@ impl Downloads {
     fn refuse(&self, id: u64, download: &Download) {
         let refused = DownloadState::Interrupted(DownloadInterruption::File);
         self.report(changed(id, download, refused));
+        self.drop_running(id);
         download.cancel();
+    }
+
+    /// A download that never got a destination has no `finished` handler to leave the registry.
+    fn drop_running(&self, id: u64) {
+        self.0.borrow_mut().running.remove(&id);
     }
 
     /// Reports the download's start, now or once its popup has a tab.
@@ -363,10 +371,12 @@ fn downloads_folder() -> Option<PathBuf> {
 /// existing folder, or a link to one, is used as it is.
 fn ensure_folder(folder: &Path) -> std::io::Result<()> {
     use std::os::unix::fs::DirBuilderExt;
-    if folder.is_dir() {
-        return Ok(());
+    match std::fs::DirBuilder::new().mode(0o700).create(folder) {
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists && folder.is_dir() => {
+            Ok(())
+        }
+        result => result,
     }
-    std::fs::DirBuilder::new().mode(0o700).create(folder)
 }
 
 /// A fresh path in `folder` for the server's suggested name, never replacing a file.
