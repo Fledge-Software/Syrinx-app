@@ -113,7 +113,7 @@ impl fmt::Display for InstanceError {
             ),
             Self::SocketPathTooLong { length, limit } => write!(
                 formatter,
-                "Syrinx's link socket path is {length} bytes, but Linux allows at most {limit}. \
+                "Syrinx's link socket path is {length} bytes, but this system allows at most {limit}.\
                  Its runtime folder (XDG_RUNTIME_DIR, or the temporary folder when that is unset \
                  or not private) is too long; point XDG_RUNTIME_DIR at a shorter private folder."
             ),

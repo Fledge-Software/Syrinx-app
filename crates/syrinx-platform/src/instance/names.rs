@@ -216,6 +216,7 @@ mod unix_tests {
         .to_string();
         assert!(message.contains("120") && message.contains("107"));
         assert!(message.contains("XDG_RUNTIME_DIR"));
+        assert!(!message.contains('/'));
     }
 
     #[test]
