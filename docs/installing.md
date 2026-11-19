@@ -665,7 +665,7 @@ home):
    temporary name and a rename, so a running Syrinx keeps its file.
 4. It writes `~/.local/share/applications/syrinx.desktop` last, with `Exec=`
    naming the installed program by its full path, because `~/.local/bin` is
-   not on every PATH. `$XDG_DATA_HOME` replaces `~/.local/share` when set.
+   not on every PATH. An absolute `$XDG_DATA_HOME` replaces `~/.local/share`; a relative one is ignored, as the app ignores it.
 
 It does not make Syrinx the default browser and does not declare it a link
 handler: the entry has no `MimeType=` line. Syrinx accepts a link only after

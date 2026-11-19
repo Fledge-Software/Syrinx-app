@@ -12,7 +12,11 @@ fail() {
 [ -n "${HOME:-}" ] || fail "HOME is not set."
 
 bin_dir="$HOME/.local/bin"
-data_home="${XDG_DATA_HOME:-$HOME/.local/share}"
+# The XDG spec says a relative XDG_DATA_HOME is invalid; ignore it, as the app does.
+case "${XDG_DATA_HOME:-}" in
+    /*) data_home="$XDG_DATA_HOME" ;;
+    *) data_home="$HOME/.local/share" ;;
+esac
 entry="$data_home/applications/syrinx.desktop"
 icon="$data_home/icons/hicolor/256x256/apps/syrinx.png"
 program="$bin_dir/syrinx"
