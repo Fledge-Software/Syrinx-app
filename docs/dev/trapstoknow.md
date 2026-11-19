@@ -732,7 +732,9 @@ i5-4460 / HD 4600; no budget changed.
   its own name to `XDG_RUNTIME_DIR`; Linux's `sockaddr_un.sun_path` is only
   108 bytes including the terminator. Placing runtime below a long benchmark
   results folder failed with "Syrinx's link channel failed" before the main
-  window opened. The measurement runner uses a private, short
+  window opened. Since #227, `instance/names.rs` checks the length first and
+  startup says how many bytes the path has and the limit, without printing
+  the path; it never falls back to another folder. The measurement runner uses a private, short
   `/tmp/sx-runtime-*` directory while retaining its results elsewhere. Source:
   `instance/pipe_unix.rs`, Linux `unix(7)` and the first software-rendered
   measurement-script trial (observed, 2026-11-02).
