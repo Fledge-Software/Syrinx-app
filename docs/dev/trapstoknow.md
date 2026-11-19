@@ -1005,9 +1005,10 @@ i5-4460 / HD 4600; no budget changed.
 **Observed, 2026-11-02:** sharing `CARGO_TARGET_DIR` between worktrees selected
 an `xtask` executable compiled in another worktree. `workspace_root` in
 `crates/xtask/src/main.rs` uses compile-time `CARGO_MANIFEST_DIR`, so the
-child commands checked that other source tree. Use a private target directory
-for each worktree, and check the compiler source paths before recording a
-branch's gate. An exit status alone does not identify which tree was checked.
+child commands checked that other source tree. Since #232, `xtask` compares
+that compiled-in tree with the workspace enclosing its current directory and
+fails with both paths when they differ; run from outside any workspace it still
+uses its own tree. Still use a private target directory for each worktree.
 
 - **A zombie still has `/proc/<pid>/stat`, but no readable address space.**
   Chromium's reference trial reached all ten authored pages, then reading an

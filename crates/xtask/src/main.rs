@@ -97,12 +97,50 @@ fn unicode_arguments(arguments: Vec<OsString>) -> Result<Vec<String>, String> {
 }
 
 fn workspace_root() -> Result<PathBuf, String> {
-    // Resolve from this crate, independent of the caller's current directory.
-    Path::new(env!("CARGO_MANIFEST_DIR"))
+    // The tree this executable was built from, and the tree the caller is standing in.
+    let built_from = Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .and_then(Path::parent)
+        .ok_or_else(|| "xtask must live under the workspace's crates directory.".to_owned())?;
+    let working_directory = env::current_dir()
+        .map_err(|error| format!("Cannot read the current directory: {error}."))?;
+    choose_workspace_root(built_from, &working_directory)
+}
+
+/// Refuse to check a source tree other than the one the caller is in (#232).
+fn choose_workspace_root(built_from: &Path, working_directory: &Path) -> Result<PathBuf, String> {
+    // Outside any workspace, the tree this executable was built from is the only answer.
+    let Some(calling_root) = enclosing_workspace(working_directory) else {
+        return Ok(built_from.to_path_buf());
+    };
+    if same_directory(&calling_root, built_from) {
+        return Ok(built_from.to_path_buf());
+    }
+    Err(format!(
+        "This xtask was built from {}, but you are in the workspace at {}. Rebuild it there \
+         (give each worktree its own CARGO_TARGET_DIR) instead of checking another tree.",
+        built_from.display(),
+        calling_root.display()
+    ))
+}
+
+/// The nearest folder at or above `start` whose Cargo.toml declares a workspace.
+fn enclosing_workspace(start: &Path) -> Option<PathBuf> {
+    start
+        .ancestors()
+        .find(|folder| {
+            std::fs::read_to_string(folder.join("Cargo.toml"))
+                .is_ok_and(|manifest| manifest.lines().any(|line| line.trim() == "[workspace]"))
+        })
         .map(Path::to_path_buf)
-        .ok_or_else(|| "xtask must live under the workspace's crates directory.".to_owned())
+}
+
+/// Compare folders by identity, so symbolic links and `..` do not cause a false mismatch.
+fn same_directory(first: &Path, second: &Path) -> bool {
+    match (first.canonicalize(), second.canonicalize()) {
+        (Ok(first), Ok(second)) => first == second,
+        _ => first == second,
+    }
 }
 
 fn cargo_command(root: &Path) -> Command {
@@ -311,6 +349,47 @@ fn run_cargo_with(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A scratch workspace folder with a nested crate folder, removed by the caller.
+    fn scratch_workspace(name: &str) -> PathBuf {
+        let root = env::temp_dir().join(format!("syrinx-xtask-root-{name}-{}", std::process::id()));
+        std::fs::create_dir_all(root.join("crates/inner")).unwrap();
+        std::fs::write(root.join("Cargo.toml"), "[workspace]\nmembers = []\n").unwrap();
+        root
+    }
+
+    #[test]
+    fn a_gate_built_in_another_tree_refuses_to_check_this_one() {
+        let built_from = scratch_workspace("built");
+        let calling = scratch_workspace("calling");
+        let message = choose_workspace_root(&built_from, &calling.join("crates/inner"))
+            .expect_err("a mismatched tree must fail");
+        assert!(message.contains("built from"), "{message}");
+        assert!(
+            message.contains(&calling.display().to_string()),
+            "{message}"
+        );
+        std::fs::remove_dir_all(built_from).unwrap();
+        std::fs::remove_dir_all(calling).unwrap();
+    }
+
+    #[test]
+    fn the_gate_runs_from_any_folder_of_its_own_tree_or_from_outside_one() {
+        let built_from = scratch_workspace("same");
+        let inside = built_from.join("crates/inner");
+        assert_eq!(
+            choose_workspace_root(&built_from, &inside).unwrap(),
+            built_from
+        );
+        let outside = env::temp_dir().join(format!("syrinx-xtask-outside-{}", std::process::id()));
+        std::fs::create_dir_all(&outside).unwrap();
+        assert_eq!(
+            choose_workspace_root(&built_from, &outside).unwrap(),
+            built_from
+        );
+        std::fs::remove_dir_all(built_from).unwrap();
+        std::fs::remove_dir_all(outside).unwrap();
+    }
 
     #[test]
     fn fixture_units_select_the_example_test_harness_with_gate_options() {
