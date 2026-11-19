@@ -128,6 +128,42 @@ jobs:
             target/screenshots/
           if-no-files-found: error
 
+  # Runs from the tag the Windows job pushed, so the tarball names the same release commit.
+  linux:
+    name: Package Linux and add it to the GitHub release
+    needs: [plan, release]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    permissions:
+      contents: write
+    env:
+      VERSION: ${{ needs.plan.outputs.version }}
+      TAG: v${{ needs.plan.outputs.version }}
+      GH_TOKEN: ${{ github.token }}
+    outputs:
+      tarball: ${{ steps.package.outputs.tarball }}
+      sha256: ${{ steps.package.outputs.sha256 }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: v${{ needs.plan.outputs.version }}
+          fetch-depth: 0
+
+      # GPUI's X11 backend, WebKitGTK 4.1 and bindgen's libclang (docs/dev/LOCAL-DEV.md, "On Linux").
+      - name: Install the Linux build libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            pkg-config libclang-dev libwebkit2gtk-4.1-dev libgtk-3-dev libsoup-3.0-dev \
+            libxkbcommon-dev libxkbcommon-x11-dev libx11-dev libx11-xcb-dev libxcb1-dev \
+            libwayland-dev libfontconfig-dev libfreetype-dev libvulkan-dev
+
+      - uses: ./.github/actions/setup-rust
+
+      - id: package
+        name: Build the Linux tarball and add it to the release
+        run: .github/scripts/package-linux-release.sh "$VERSION" "$TAG"
+
   site:
     name: Publish the release on syrinxapp.dev
     needs: [plan, release]
