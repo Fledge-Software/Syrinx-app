@@ -26,6 +26,8 @@ gh release upload "$tag" "target/package/$tarball"
 gh release upload "$tag" target/package/SHA256SUMS.txt --clobber
 
 sha256=$(sha256sum "target/package/$tarball" | cut -d' ' -f1)
+size=$(awk -v bytes="$(stat -c %s "target/package/$tarball")" 'BEGIN { printf "%.1f MB", bytes / 1048576 }')
 echo "tarball=$tarball" >> "$GITHUB_OUTPUT"
+echo "size=$size" >> "$GITHUB_OUTPUT"
 echo "sha256=$sha256" >> "$GITHUB_OUTPUT"
 echo "Added $tarball (SHA-256 $sha256) to $tag"
