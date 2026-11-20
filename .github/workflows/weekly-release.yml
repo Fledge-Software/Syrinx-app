@@ -143,6 +143,7 @@ jobs:
     outputs:
       tarball: ${{ steps.package.outputs.tarball }}
       sha256: ${{ steps.package.outputs.sha256 }}
+      size: ${{ steps.package.outputs.size }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -166,7 +167,7 @@ jobs:
 
   site:
     name: Publish the release on syrinxapp.dev
-    needs: [plan, release]
+    needs: [plan, release, linux]
     # Visitors cannot download from a private repository, so the site waits until it is public.
     if: needs.plan.outputs.public == 'true'
     runs-on: ubuntu-latest
@@ -207,7 +208,10 @@ jobs:
             --sha256 "${{ needs.release.outputs.sha256 }}" \
             --size "${{ needs.release.outputs.size }}" \
             --notes "$INPUTS/release-notes.md" \
-            --screenshots "$INPUTS/screenshots"
+            --screenshots "$INPUTS/screenshots" \
+            --linux-download "$RELEASES/download/v$VERSION/${{ needs.linux.outputs.tarball }}" \
+            --linux-sha256 "${{ needs.linux.outputs.sha256 }}" \
+            --linux-size "${{ needs.linux.outputs.size }}"
           pnpm build
 
       - name: Push to the site's main branch (Vercel deploys it)
