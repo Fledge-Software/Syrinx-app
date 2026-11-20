@@ -6,7 +6,8 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::{Mutex, OnceLock};
 
-use syrinx_plugin_host::test_host::{Declarations, DeclaredCommand};
+use syrinx_plugin_host::manifest::CapabilityKind;
+use syrinx_plugin_host::test_host::{Declarations, DeclaredCommand, SyntheticGrants};
 
 /// A fixture: a package of the fixture workspace, built with at most one feature.
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
@@ -53,7 +54,7 @@ fn fixture_workspace() -> PathBuf {
 }
 
 /// Build one fixture with the workspace's pinned toolchain, offline and locked.
-/// Its twin is `full_component` in crates/syrinx-app/tests/plugin_package_load.rs; change both.
+/// Its twin is crates/syrinx-app/tests/support/plugin_fixture.rs; change both.
 fn build(fixture: Fixture) -> Vec<u8> {
     let target_dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join("plugin-fixtures");
     let mut command = Command::new(env!("CARGO"));
@@ -85,6 +86,15 @@ fn build(fixture: Fixture) -> Vec<u8> {
     std::fs::read(&wasm).expect("the fixture's component was written")
 }
 
+/// Grants the full fixture, plugin `test`, what its `echo` uses (its settings and its feed),
+/// as the owner would at install.
+pub fn fixture_grants() -> SyntheticGrants {
+    let grants = SyntheticGrants::new();
+    grants.grant("test", CapabilityKind::Storage);
+    grants.grant("test", CapabilityKind::Index);
+    grants
+}
+
 /// What the full fixture's manifest would declare.
 pub fn full_declarations() -> Declarations {
     let command = |id: &str, form: bool| DeclaredCommand {
@@ -93,6 +103,7 @@ pub fn full_declarations() -> Declarations {
     };
     let mut commands: Vec<DeclaredCommand> = [
         "test.echo",
+        "test.recall",
         "test.fail",
         "test.spin",
         "test.grow",

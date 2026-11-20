@@ -8,10 +8,13 @@ mod synthetic;
 
 use std::sync::Arc;
 
-pub use synthetic::{SYNTHETIC_NOW, SyntheticHost, ViewRecord};
+/// The test host's grant store: the host's own `GrantSet`, empty at first, so plugin
+/// repositories can test what their plugin does when a capability is `denied` or `revoked`.
+pub use crate::grants::GrantSet as SyntheticGrants;
+pub use crate::views::ViewRecord;
+pub use synthetic::{SYNTHETIC_NOW, SyntheticHost};
 
 use crate::bindings::syrinx::plugin::host::LogLevel;
-use crate::manifest::CapabilityKind;
 pub use crate::session::{CallResult, Declarations, DeclaredCommand};
 use crate::session::{Mediator, RequestIds, Session};
 use crate::{LoadedPlugin, PreparedPlugin, Runtime};
@@ -23,11 +26,20 @@ pub const HOST_VERSION: &str = "0.1.0-test-host";
 pub type TestHost = Session<SyntheticHost>;
 
 impl Session<SyntheticHost> {
-    /// Check the declarations and the component, then instantiate it.
+    /// Check the declarations and the component, then instantiate it with nothing granted.
     pub fn load(bytes: &[u8], declarations: Declarations) -> CallResult<Self> {
+        Self::load_with_grants(bytes, declarations, SyntheticGrants::new())
+    }
+
+    /// As `load`, under `grants`; keep a clone to grant or revoke while the plugin runs.
+    pub fn load_with_grants(
+        bytes: &[u8],
+        declarations: Declarations,
+        grants: SyntheticGrants,
+    ) -> CallResult<Self> {
         let runtime = Runtime::new()?;
         let prepared = Self::prepare(&runtime, bytes)?;
-        Self::from_prepared(&runtime, &prepared, declarations)
+        Self::from_prepared(&runtime, &prepared, declarations, grants)
     }
 
     /// Compile a component and resolve its imports once, to instantiate it many times.
@@ -39,19 +51,16 @@ impl Session<SyntheticHost> {
         LoadedPlugin::prepare(runtime, &component)
     }
 
-    /// Instantiate a prepared component under checked declarations. The test host grants
-    /// `storage`, so a plugin's settings can be tested; the owner's grants arrive with #136.
+    /// Instantiate a prepared component under checked declarations and synthetic grants,
+    /// which the host checks on every gated call as it checks the owner's.
     pub fn from_prepared(
         runtime: &Runtime,
         prepared: &PreparedPlugin<Mediator<SyntheticHost>>,
         declarations: Declarations,
+        grants: SyntheticGrants,
     ) -> CallResult<Self> {
         declarations.check()?;
-        let services = Mediator::new(
-            SyntheticHost::new(),
-            declarations,
-            vec![CapabilityKind::Storage],
-        );
+        let services = Mediator::new(SyntheticHost::new(), declarations, grants);
         let plugin = LoadedPlugin::from_prepared(runtime, prepared, services)?;
         Ok(Session::new(
             plugin,
@@ -63,8 +72,7 @@ impl Session<SyntheticHost> {
     /// The view's interface reads what the plugin posted to it, oldest first;
     /// `None` when the view is not open.
     pub fn take_view_events(&mut self, view: u64) -> Option<Vec<String>> {
-        let record = self.services_mut().views.get_mut(&view)?;
-        Some(std::mem::take(&mut record.events))
+        self.services_mut().book.take_view_events(view)
     }
 
     pub fn logs(&self) -> &[(LogLevel, String)] {
@@ -72,10 +80,10 @@ impl Session<SyntheticHost> {
     }
 
     pub fn view(&self, view: u64) -> Option<&ViewRecord> {
-        self.services().views.get(&view)
+        self.services().book.view(view)
     }
 
     pub fn changed_feeds(&self) -> &[String] {
-        &self.services().changed_feeds
+        self.services().book.changed_feeds()
     }
 }

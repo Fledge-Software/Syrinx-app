@@ -10,12 +10,18 @@ license.workspace = true
 [dependencies]
 # Plugin command ids follow the same rule as Syrinx's own (syrinx_core::CommandId).
 syrinx-core = { path = "../syrinx-core" }
+# The application's grant store and plugin settings (#136); only `syrinx-app` turns it on, so
+# plugin repositories testing against the test host never build SQLite.
+syrinx-store = { path = "../syrinx-store", optional = true }
 serde_json.workspace = true
 # Reads `syrinx-plugin.toml` (#134); the same pins and features xtask already locks and audits.
 serde = { version = "=1.0.229", features = ["derive"] }
 toml = { version = "=1.1.8", default-features = false, features = ["std", "parse", "serde"] }
 # Exactly the audited configuration (docs/dev/wasmtime-audit.md); no `async`, no wasmtime-wasi (G1, G3).
 wasmtime = { version = "=48.0.7", default-features = false, features = ["runtime", "cranelift", "component-model", "std", "parallel-compilation", "anyhow"] }
+
+[features]
+store = ["dep:syrinx-store"]
 
 [lints]
 workspace = true

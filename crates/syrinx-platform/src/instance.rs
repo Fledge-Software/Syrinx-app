@@ -76,6 +76,8 @@ pub enum InstanceError {
     Queue,
     /// Unix only: the private folder for the lock and socket could not be created.
     RuntimeFolder(std::io::ErrorKind),
+    /// Unix only: the socket's full path is longer than `sockaddr_un.sun_path` can hold.
+    SocketPathTooLong { length: usize, limit: usize },
 }
 
 impl fmt::Display for InstanceError {
@@ -108,6 +110,12 @@ impl fmt::Display for InstanceError {
             Self::RuntimeFolder(kind) => write!(
                 formatter,
                 "Syrinx cannot create its private runtime folder ({kind})."
+            ),
+            Self::SocketPathTooLong { length, limit } => write!(
+                formatter,
+                "Syrinx's link socket path is {length} bytes, but this system allows at most {limit}.\
+                 Its runtime folder (XDG_RUNTIME_DIR, or the temporary folder when that is unset \
+                 or not private) is too long; point XDG_RUNTIME_DIR at a shorter private folder."
             ),
         }
     }
