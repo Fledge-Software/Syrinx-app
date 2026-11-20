@@ -12,9 +12,9 @@ use futures::channel::mpsc::UnboundedSender;
 use gpui::{
     App, AppContext, Context, Div, Entity, InteractiveElement, IntoElement, KeyBinding,
     ParentElement, Render, ScrollHandle, Stateful, StatefulInteractiveElement, Styled,
-    Subscription, Window, actions, div, px,
+    Subscription, Window, actions, div,
 };
-use gpui_component::input::{Input, InputEvent, InputState, MoveDown, MoveUp};
+use gpui_component::input::{InputEvent, InputState, MoveDown, MoveUp};
 use syrinx_core::usage::{Feature, Timing, UsageRecorder};
 use syrinx_core::{CommandAction, CommandContext, CommandRegistry};
 use syrinx_platform::browser::BrowserShortcut;
@@ -24,15 +24,11 @@ pub use display::arrange;
 
 use choices::PaletteChoices;
 use commands::{CommandMatcher, CommandMatches};
-use display::Preview;
 use query::{Chip, ParsedQuery, View};
 
 use crate::{acceptance::PresentProbe, session::SessionError, text_field, theme, ui};
 
 actions!(palette, [Dismiss, NextResult, PreviousResult, SearchWeb]);
-
-/// The preview pane is drawn only when the popup is at least this wide.
-const PREVIEW_MIN_WIDTH: f32 = 720.;
 
 pub enum PaletteEvent {
     Query {
@@ -47,6 +43,8 @@ pub enum PaletteEvent {
     Activate(Target),
     Run(CommandAction),
     Shortcut(BrowserShortcut),
+    /// What the popup lists changed its height, so the browser refits the popup (#265).
+    Resized,
     Closed,
     /// A press in Syrinx's chrome ended the entry; focus stays where that press put it (#172).
     ClickedAway,
@@ -60,7 +58,7 @@ impl PaletteEvent {
             | Self::Run(_)
             | Self::Closed
             | Self::ClickedAway => true,
-            Self::Query { .. } | Self::Shortcut(_) => false,
+            Self::Query { .. } | Self::Shortcut(_) | Self::Resized => false,
         }
     }
 }
@@ -95,6 +93,10 @@ pub struct PaletteView {
     command_problem: Option<String>,
     context: CommandContext,
     chip: Chip,
+    /// Tab in the query shows the scope chips for the open entry; they start hidden (#265).
+    scopes_shown: bool,
+    /// The height the browser was last told to fit, so only a change is reported.
+    announced_height: f32,
     view: View,
     scroll: ScrollHandle,
     native: PaletteNative,
@@ -152,6 +154,8 @@ impl PaletteView {
             command_problem,
             context: CommandContext::default(),
             chip: Chip::default(),
+            scopes_shown: false,
+            announced_height: 0.,
             view: View::Everything,
             scroll: ScrollHandle::new(),
             native,
@@ -176,6 +180,7 @@ impl PaletteView {
         self.opening = Some(entry.opened);
         self.choices.reset();
         self.chip = Chip::default();
+        self.scopes_shown = false;
         self.view = View::Everything;
         self.scroll = ScrollHandle::new();
         self.input.update(cx, |input, cx| {
@@ -188,6 +193,34 @@ impl PaletteView {
         if let Some(problem) = &self.command_problem {
             self.choices.status = problem.clone();
         }
+        // The browser shows the popup at this height, so only later changes are reported.
+        self.announced_height = self.wanted_height();
+    }
+
+    /// The popup height that fits what is drawn now: the bar alone, or the bar and its rows.
+    pub fn wanted_height(&self) -> f32 {
+        render::height(self)
+    }
+
+    /// Asks the browser to refit the popup when what is drawn changed its height.
+    fn announce_height(&mut self) {
+        let wanted = self.wanted_height();
+        if (wanted - self.announced_height).abs() < 0.5 {
+            return;
+        }
+        self.announced_height = wanted;
+        self.emit(PaletteEvent::Resized);
+    }
+
+    /// Shows the scope chips for the open entry; whether this call was the one that did.
+    fn show_scopes(&mut self, cx: &mut Context<Self>) -> bool {
+        if self.scopes_shown {
+            return false;
+        }
+        self.scopes_shown = true;
+        self.announce_height();
+        cx.notify();
+        true
     }
 
     /// Whether an entry is open, so its keys and replies still mean something.
@@ -320,6 +353,7 @@ impl PaletteView {
             return true;
         }
         self.scroll_to_selection();
+        self.announce_height();
         cx.notify();
         true
     }
@@ -376,6 +410,7 @@ impl PaletteView {
         let text = self.input.read(cx).value().to_string();
         let Some(event) = self.choices.submission(text, force_search) else {
             // A waiting Enter shows its status until the reply applies it.
+            self.announce_height();
             cx.notify();
             return;
         };
@@ -388,6 +423,7 @@ impl PaletteView {
             PaletteEvent::Activate(target @ Target::Command(_)) => {
                 let Some(command) = self.commands.command(target) else {
                     self.choices.status = "This command is no longer available.".to_owned();
+                    self.announce_height();
                     cx.notify();
                     return;
                 };
@@ -433,28 +469,6 @@ impl PaletteView {
         };
         let child = render::child_index(&self.choices, row);
         self.scroll.scroll_to_item(child);
-    }
-
-    fn preview(&self) -> Option<Preview> {
-        let selected = self.choices.selected?;
-        if selected == 0
-            && let Some(address) = &self.choices.address
-        {
-            return Some(Preview::address(&self.choices.entry, address));
-        }
-        if selected == 0 && self.choices.web_search {
-            return Some(Preview::search(&self.choices.entry));
-        }
-        let hit = self.choices.selected_hit()?;
-        let Some(command) = self.commands.command(hit.target) else {
-            return Some(Preview::page(hit));
-        };
-        let plugin = match &command.scope {
-            syrinx_core::CommandScope::Plugin { plugin } => Some(plugin.as_str()),
-            syrinx_core::CommandScope::Browser => None,
-        };
-        let shortcut = command.shortcut.as_ref().map(syrinx_core::Shortcut::label);
-        Some(Preview::command(hit, plugin, shortcut))
     }
 }
 
@@ -503,18 +517,11 @@ impl Render for PaletteView {
             cx.defer(move |_| usage.time(Timing::PaletteOpenToPaint, opened.elapsed()));
         }
         let tokens = theme::current();
-        let wide = f32::from(window.viewport_size().width) >= PREVIEW_MIN_WIDTH;
-        let list = render::list(self, wide, cx);
-        let mut body = div()
-            .flex()
-            .flex_1()
-            .min_h_0()
-            .border_t_1()
-            .border_color(theme::rgba(tokens.panel_divider))
-            .child(list);
-        if wide {
-            body = body.child(render::preview(self.preview()));
-        }
+        // One bar; the scope chips, rows and status line appear only when there are any (#265).
+        let bar = render::bar(&self.input);
+        let chips = self.scopes_shown.then(|| render::chips(self, cx));
+        let list = render::list(self, cx);
+        let notice = render::notice(&self.choices.status);
         crate::controls::watch_pointer(div())
             .id("palette")
             .role(gpui::Role::Dialog)
@@ -579,27 +586,20 @@ impl Render for PaletteView {
             .on_action(cx.listener(|this, _: &ui::Reload, _, _| {
                 this.emit(PaletteEvent::Shortcut(BrowserShortcut::Reload));
             }))
-            // Tab leaves the query for the scope chips.
-            .on_action(|_: &ui::FocusNextControl, window, cx| window.focus_next(cx))
+            // The first Tab shows the scope chips; the next one moves to them.
+            .on_action(cx.listener(|this, _: &ui::FocusNextControl, window, cx| {
+                if !this.show_scopes(cx) {
+                    window.focus_next(cx);
+                }
+            }))
             .on_action(|_: &ui::FocusPreviousControl, window, cx| window.focus_prev(cx))
             .child(
                 self.query_container(window, cx)
-                    .child(
-                        div()
-                            .h(px(56.))
-                            .px_4()
-                            .flex()
-                            .items_center()
-                            .gap_3()
-                            .child(div().flex_1().child(
-                                Input::new(&self.input).aria_label(text_field::PALETTE_QUERY.label),
-                            ))
-                            .child(render::key_hint("Esc")),
-                    )
-                    .child(render::chips(self, cx))
-                    .child(body),
+                    .child(bar)
+                    .children(chips)
+                    .children(list),
             )
-            .child(render::footer(&self.choices.status))
+            .children(notice)
     }
 }
 

@@ -1,10 +1,11 @@
-//! Draws the palette's chips, rows, preview and footer from `syrinx-ui`'s tokens (design: Palette board).
+//! Draws the palette's bar, rows, scope chips and status line from `syrinx-ui`'s tokens (#265).
 
 use gpui::{
-    AnyElement, Context, Div, FontWeight, HighlightStyle, Hsla, InteractiveElement, IntoElement,
-    ParentElement, Role, Stateful, StatefulInteractiveElement, Styled, StyledText, Toggled, div,
-    prelude::FluentBuilder, px,
+    AnyElement, Context, Div, Entity, FontWeight, HighlightStyle, Hsla, InteractiveElement,
+    IntoElement, ParentElement, Role, Stateful, StatefulInteractiveElement, Styled, StyledText,
+    Toggled, div, prelude::FluentBuilder, px,
 };
+use gpui_component::input::{Input, InputState};
 use syrinx_search::{SearchHit, Target};
 use syrinx_ui::metrics::{radius, text};
 
@@ -12,18 +13,93 @@ use super::{
     PaletteView,
     choices::PaletteChoices,
     display::{
-        Highlighted, Preview, ROW_TEXT_LIMIT, Section, address_label, highlight, row_title,
-        search_label,
+        Highlighted, ROW_TEXT_LIMIT, Section, address_label, highlight, row_title, search_label,
     },
     query::{Chip, View},
 };
 use crate::controls::control;
+use crate::text_field;
 use crate::theme::{self, rgba};
 
-const LIST_WIDTH: f32 = 440.;
-const ROW_HEIGHT: f32 = 38.;
+/// The query bar, which is all an empty palette shows.
+const BAR_HEIGHT: f32 = 52.;
+const ROW_HEIGHT: f32 = 36.;
+const ROW_GAP: f32 = 2.;
 const HEADER_HEIGHT: f32 = 28.;
+/// The header's `mt_1`.
+const HEADER_MARGIN: f32 = 4.;
+const LIST_PADDING: f32 = 6.;
+/// The rows scroll past this, so a long list cannot grow the popup without limit.
+const LIST_MAX_HEIGHT: f32 = 372.;
+/// Room for the two-line "No plugins yet" message.
+const EMPTY_STATE_HEIGHT: f32 = 96.;
+const CHIP_HEIGHT: f32 = 26.;
+/// The chip row's `pb_3`.
+const CHIP_ROW_PADDING: f32 = 12.;
+const NOTICE_HEIGHT: f32 = 30.;
 const TRAILING_WIDTH: f32 = 180.;
+
+/// The popup height that fits what `view` draws, borders and dividers included.
+pub(super) fn height(view: &PaletteView) -> f32 {
+    let mut height = 2. + BAR_HEIGHT;
+    if view.scopes_shown {
+        height += CHIP_HEIGHT + CHIP_ROW_PADDING;
+    }
+    let list = list_height(&view.choices, empty_message(view.view).is_some());
+    if list > 0. {
+        height += 1. + list.min(LIST_MAX_HEIGHT);
+    }
+    if !view.choices.status.is_empty() {
+        height += NOTICE_HEIGHT;
+    }
+    height
+}
+
+/// How tall the rows and their section headers are together; zero when nothing is listed.
+fn list_height(choices: &PaletteChoices, explains_empty: bool) -> f32 {
+    let rows = choices.row_count();
+    if rows == 0 {
+        return if explains_empty {
+            EMPTY_STATE_HEIGHT
+        } else {
+            0.
+        };
+    }
+    let headers = (0..choices.results.len())
+        .filter(|&index| starts_section(&choices.results, index))
+        .count();
+    let gaps = (rows + headers - 1) as f32 * ROW_GAP;
+    2. * LIST_PADDING
+        + rows as f32 * ROW_HEIGHT
+        + headers as f32 * (HEADER_HEIGHT + HEADER_MARGIN)
+        + gaps
+}
+
+/// The one bar: a search mark and the query field, drawn without a frame of its own.
+pub(super) fn bar(input: &Entity<InputState>) -> Div {
+    let tokens = theme::current();
+    div()
+        .h(px(BAR_HEIGHT))
+        .flex_shrink_0()
+        .px_4()
+        .flex()
+        .items_center()
+        .gap_3()
+        .child(
+            div()
+                .flex_shrink_0()
+                .text_size(px(text::SUBTITLE))
+                .text_color(rgba(tokens.text_muted))
+                .child("⌕"),
+        )
+        .child(
+            div().flex_1().min_w_0().child(
+                Input::new(input)
+                    .appearance(false)
+                    .aria_label(text_field::PALETTE_QUERY.label),
+            ),
+        )
+}
 
 /// The position of `row` among the list's children, which also include section headers.
 pub(super) fn child_index(choices: &PaletteChoices, row: usize) -> usize {
@@ -61,7 +137,7 @@ pub(super) fn chips(view: &PaletteView, cx: &mut Context<PaletteView>) -> Div {
         } else {
             Toggled::False
         })
-        .h(px(26.))
+        .h(px(CHIP_HEIGHT))
         .px_3()
         .rounded(px(13.))
         .border_1()
@@ -92,7 +168,12 @@ pub(super) fn chips(view: &PaletteView, cx: &mut Context<PaletteView>) -> Div {
     row
 }
 
-pub(super) fn list(view: &PaletteView, wide: bool, cx: &mut Context<PaletteView>) -> Div {
+/// The rows under the bar, or nothing when there is nothing to list or explain.
+pub(super) fn list(view: &PaletteView, cx: &mut Context<PaletteView>) -> Option<Div> {
+    let explanation = empty_state(view.view);
+    if view.choices.row_count() == 0 && explanation.is_none() {
+        return None;
+    }
     let tokens = theme::current();
     let mut rows = div()
         .id("results")
@@ -101,10 +182,10 @@ pub(super) fn list(view: &PaletteView, wide: bool, cx: &mut Context<PaletteView>
         .flex_1()
         .min_h_0()
         .px(px(10.))
-        .py(px(6.))
+        .py(px(LIST_PADDING))
         .flex()
         .flex_col()
-        .gap(px(2.))
+        .gap(px(ROW_GAP))
         .overflow_y_scroll()
         .track_scroll(&view.scroll);
     if let Some(address) = &view.choices.address {
@@ -118,19 +199,19 @@ pub(super) fn list(view: &PaletteView, wide: bool, cx: &mut Context<PaletteView>
         }
         rows = rows.child(result_row(view, index, hit, cx));
     }
-    if view.choices.results.is_empty() && view.choices.lead_rows() == 0 {
-        rows = rows.children(empty_state(view.view));
+    if view.choices.row_count() == 0 {
+        rows = rows.children(explanation);
     }
-    let column = div().flex().flex_col().min_h_0().child(rows);
-    if wide {
-        column
-            .w(px(LIST_WIDTH))
-            .flex_shrink_0()
-            .border_r_1()
+    Some(
+        div()
+            .flex()
+            .flex_col()
+            .flex_1()
+            .min_h_0()
+            .border_t_1()
             .border_color(rgba(tokens.panel_divider))
-    } else {
-        column.flex_1()
-    }
+            .child(rows),
+    )
 }
 
 /// The typed row for a complete address: Enter goes there (2026-10-25).
@@ -340,7 +421,7 @@ fn section_header(section: Section) -> Div {
     div()
         .h(px(HEADER_HEIGHT))
         .flex_shrink_0()
-        .mt_1()
+        .mt(px(HEADER_MARGIN))
         .px(px(10.))
         .flex()
         .items_center()
@@ -350,16 +431,19 @@ fn section_header(section: Section) -> Div {
         .child(section.label().to_uppercase())
 }
 
-fn empty_state(view: View) -> Option<Div> {
-    let (title, detail) = match view {
-        View::PluginActions => (
+/// The title and detail shown in place of rows, for a view that is empty for a known reason.
+fn empty_message(view: View) -> Option<(&'static str, &'static str)> {
+    match view {
+        View::PluginActions => Some((
             "No plugins yet",
             "Plugin actions appear here once the plugin runtime is installed.",
-        ),
-        View::Everything | View::Tabs | View::Commands | View::Bookmarks | View::History => {
-            return None;
-        }
-    };
+        )),
+        View::Everything | View::Tabs | View::Commands | View::Bookmarks | View::History => None,
+    }
+}
+
+fn empty_state(view: View) -> Option<Div> {
+    let (title, detail) = empty_message(view)?;
     let tokens = theme::current();
     Some(
         div()
@@ -378,91 +462,30 @@ fn empty_state(view: View) -> Option<Div> {
     )
 }
 
-pub(super) fn preview(preview: Option<Preview>) -> Div {
+/// One quiet line for a problem or a wait; routine progress is not shown at all.
+pub(super) fn notice(status: &str) -> Option<Div> {
+    if status.is_empty() {
+        return None;
+    }
     let tokens = theme::current();
-    let pane = div()
-        .flex_1()
-        .min_w_0()
-        .px(px(24.))
-        .py(px(20.))
-        .flex()
-        .flex_col()
-        .gap(px(14.))
-        .overflow_hidden()
-        .bg(rgba(tokens.panel_side));
-    let Some(preview) = preview else {
-        return pane.child(
-            div()
-                .text_size(px(text::SMALL))
-                .text_color(rgba(tokens.text_muted))
-                .child("Type to search open tabs and bookmarks, or start with > for commands, @ for plugins and / for open tabs."),
-        );
-    };
-    pane.child(
+    Some(
         div()
-            .text_size(px(text::SMALL))
+            .h(px(NOTICE_HEIGHT))
+            .flex_shrink_0()
+            .px_4()
+            .flex()
+            .items_center()
+            .border_t_1()
+            .border_color(rgba(tokens.panel_divider))
+            .text_size(px(text::CAPTION))
             .text_color(rgba(tokens.text_muted))
-            .child(preview.kind),
-    )
-    .child(
-        div()
-            .text_size(px(text::SUBTITLE))
-            .font_weight(FontWeight::SEMIBOLD)
-            .text_color(rgba(tokens.text_strong))
-            .line_clamp(3)
-            .child(styled(preview.title)),
-    )
-    .children(preview.detail.map(|detail| {
-        div()
-            .text_size(px(text::SMALL))
-            .text_color(rgba(tokens.icon_dim))
-            .line_clamp(4)
-            .child(styled(detail))
-    }))
-    .child(
-        div()
-            .text_size(px(text::SMALL))
-            .text_color(rgba(tokens.text_muted))
-            .child(preview.hint),
+            .overflow_hidden()
+            .whitespace_nowrap()
+            .child(status.to_owned()),
     )
 }
 
-pub(super) fn footer(status: &str) -> Div {
-    let tokens = theme::current();
-    div()
-        .h(px(32.))
-        .flex_shrink_0()
-        .px_4()
-        .flex()
-        .items_center()
-        .gap_3()
-        .border_t_1()
-        .border_color(rgba(tokens.panel_divider))
-        .text_size(px(text::CAPTION))
-        .text_color(rgba(tokens.text_muted))
-        .child(
-            div()
-                .flex_1()
-                .overflow_hidden()
-                .whitespace_nowrap()
-                .child(status.to_owned()),
-        )
-        .child("↑↓ Move · Enter Run · Alt Enter Search the web")
-        .child(prefix_hint(">", "commands"))
-        .child(prefix_hint("@", "plugins"))
-        .child(prefix_hint("/", "tabs"))
-}
-
-/// Only the prefix symbols are monospace (`design/README.md`).
-fn prefix_hint(symbol: &'static str, label: &'static str) -> Div {
-    div()
-        .flex()
-        .gap_1()
-        .child(div().font_family(text::MONO_FONT_FAMILIES[0]).child(symbol))
-        .child(label)
-}
-
-pub(super) fn key_hint(label: &str) -> Div {
+fn key_hint(label: &str) -> Div {
     let tokens = theme::current();
     div()
         .flex_shrink_0()
@@ -495,6 +518,35 @@ mod tests {
             title_matches: Vec::new(),
             address_matches: Vec::new(),
         }
+    }
+
+    #[test]
+    fn the_list_is_as_tall_as_its_rows_headers_and_gaps() {
+        let first = Target::Tab(TabId::new(1).expect("tab"));
+        let second = Target::Tab(TabId::new(2).expect("tab"));
+        let saved = Target::Saved(SavedPageId::new(1).expect("saved"));
+        let mut choices = PaletteChoices::default();
+        assert_eq!(
+            list_height(&choices, false),
+            0.,
+            "an empty palette is the bar alone"
+        );
+        assert_eq!(list_height(&choices, true), EMPTY_STATE_HEIGHT);
+        let request = choices.query_scoped("synthetic", false);
+        assert!(choices.receive(
+            request,
+            Ok(SearchResults {
+                generation: 1,
+                counts: ScopeCounts::default(),
+                hits: [first, second, saved].map(hit).to_vec(),
+            })
+        ));
+        // Children: [Open tabs] tab tab [Bookmarks] saved: three rows, two headers, four gaps.
+        let expected = 2. * LIST_PADDING
+            + 3. * ROW_HEIGHT
+            + 2. * (HEADER_HEIGHT + HEADER_MARGIN)
+            + 4. * ROW_GAP;
+        assert_eq!(list_height(&choices, false), expected);
     }
 
     #[test]

@@ -18,9 +18,10 @@ use super::{
 };
 use crate::palette::{PaletteEntry, PaletteNative};
 
-/// The design's palette is 880 by 560, 72 below the window's top edge.
-const PALETTE_WIDTH: f32 = 880.;
-const PALETTE_HEIGHT: f32 = 560.;
+/// The palette is a bar 640 wide, 72 below the window's top edge, as tall as what it lists (#265).
+const PALETTE_WIDTH: f32 = 640.;
+/// The hidden popup's first size: about the bar alone. Each showing sets the real height.
+const PALETTE_RESTING_HEIGHT: f32 = 54.;
 const PALETTE_TOP: f32 = 72.;
 /// Narrower windows shrink the palette to this, keeping a 24-pixel margin each side.
 const PALETTE_MIN_WIDTH: f32 = 320.;
@@ -113,11 +114,43 @@ impl BrowserView {
         if let Some(probe) = self.acceptance_probe() {
             probe.show_requested(Instant::now());
         }
-        let rect = palette_rect(
+        let Some(rect) = self.open_palette_rect(window, cx) else {
+            return;
+        };
+        self.show_palette(entry, rect, cx);
+    }
+
+    /// Where the open entry's popup belongs now: over the main window, as tall as what it lists.
+    fn open_palette_rect(&self, window: &Window, cx: &App) -> Option<OverlayRect> {
+        let palette = self.palette.as_ref()?;
+        let height = palette.view.read(cx).wanted_height();
+        Some(palette_rect(
             main_window_bounds(window, self.parent_hwnd),
             window.scale_factor(),
-        );
-        self.show_palette(entry, rect, cx);
+            height,
+        ))
+    }
+
+    /// Refits a shown popup to what it now lists (#265). A popup not yet shown is left alone:
+    /// `show_palette` places it, and `palette_shown` then asks for this once more.
+    pub(super) fn fit_palette(&mut self, window: &Window, cx: &mut Context<Self>) {
+        if self.palette.as_ref().is_some_and(|palette| palette.shown) {
+            self.follow_palette(window, cx);
+        }
+    }
+
+    /// Rows that arrived while the popup was still hidden changed its height unseen, so the
+    /// shown popup is fitted once from the main window.
+    fn refit_shown_palette(&self, cx: &mut Context<Self>) {
+        cx.spawn(async move |view, cx| {
+            let fitted = update_in_main(&view, cx, |view, window, cx| {
+                view.fit_palette(window, cx);
+            });
+            if fitted.is_err() {
+                eprintln!("The palette was shown after its browser was removed.");
+            }
+        })
+        .detach();
     }
 
     /// Resets the kept popup for a new entry and listens to it; returns the entry's identity.
@@ -193,7 +226,7 @@ impl BrowserView {
         let retained = created.clone();
         let bounds = Bounds::new(
             point(px(0.), px(0.)),
-            size(px(PALETTE_WIDTH), px(PALETTE_HEIGHT)),
+            size(px(PALETTE_WIDTH), px(PALETTE_RESTING_HEIGHT)),
         );
         let spec = PopupSpec {
             title: "Syrinx command palette",
@@ -286,7 +319,8 @@ impl BrowserView {
         .detach();
     }
 
-    /// Keeps an open palette centred over the main window when the window moves or resizes.
+    /// Keeps an open palette centred over the main window, at the height of what it lists,
+    /// when the window moves or resizes or the rows change.
     pub(super) fn follow_palette(&mut self, window: &Window, cx: &mut Context<Self>) {
         let Some(entry) = self.open_entry() else {
             return;
@@ -294,10 +328,9 @@ impl BrowserView {
         if !self.palette_entry_live(cx) {
             return;
         }
-        let rect = palette_rect(
-            main_window_bounds(window, self.parent_hwnd),
-            window.scale_factor(),
-        );
+        let Some(rect) = self.open_palette_rect(window, cx) else {
+            return;
+        };
         // Moved from a task for the same reason as `show_palette`.
         cx.spawn(async move |view, cx| {
             let Ok(Some(hwnd)) = view.update(cx, |view, cx| view.entry_to_show(entry, cx)) else {
@@ -347,6 +380,7 @@ impl BrowserView {
                 if let Some(palette) = &mut self.palette {
                     palette.shown = true;
                 }
+                self.refit_shown_palette(cx);
             }
             // Another application is in front: the entry ends rather than float above it.
             Ok(false) => {
@@ -605,10 +639,9 @@ fn show_target(current: bool, open: bool, hwnd: isize) -> Option<isize> {
     (current && open).then_some(hwnd)
 }
 
-/// Where the palette sits over the main window, in GPUI's logical pixels.
-fn palette_bounds(main: Bounds<Pixels>) -> Bounds<Pixels> {
+/// Where a palette `height` tall sits over the main window, in GPUI's logical pixels.
+fn palette_bounds(main: Bounds<Pixels>, height: f32) -> Bounds<Pixels> {
     let main_width = f32::from(main.size.width);
-    // Narrower windows drop the preview pane.
     let width = (main_width - 2. * PALETTE_MARGIN)
         .clamp(PALETTE_MIN_WIDTH, PALETTE_WIDTH)
         .min(main_width);
@@ -617,13 +650,13 @@ fn palette_bounds(main: Bounds<Pixels>) -> Bounds<Pixels> {
             main.origin.x + px((main_width - width) / 2.),
             main.origin.y + px(PALETTE_TOP),
         ),
-        size(px(width), px(PALETTE_HEIGHT)),
+        size(px(width), px(height)),
     )
 }
 
 /// The palette's place in physical pixels, at the main window's scale.
-fn palette_rect(main: Bounds<Pixels>, scale: f32) -> OverlayRect {
-    let bounds = palette_bounds(main);
+fn palette_rect(main: Bounds<Pixels>, scale: f32, height: f32) -> OverlayRect {
+    let bounds = palette_bounds(main, height);
     let physical = |logical: Pixels| (f32::from(logical) * scale).round() as i32;
     OverlayRect {
         left: physical(bounds.origin.x),
@@ -846,36 +879,36 @@ mod tests {
     }
 
     #[test]
-    fn a_wide_window_centres_the_full_size_palette_below_its_top() {
-        let rect = palette_rect(main_window(100., 50., 1280.), 1.);
+    fn a_wide_window_centres_the_full_width_palette_below_its_top() {
+        let rect = palette_rect(main_window(100., 50., 1280.), 1., 54.);
         assert_eq!(
             rect,
             OverlayRect {
-                left: 300,
+                left: 420,
                 top: 122,
-                width: 880,
-                height: 560
+                width: 640,
+                height: 54
             }
         );
     }
 
     #[test]
     fn a_narrow_window_keeps_a_margin_and_a_minimum_width() {
-        assert_eq!(palette_rect(main_window(0., 0., 600.), 1.).width, 552);
-        assert_eq!(palette_rect(main_window(0., 0., 300.), 1.).width, 300);
+        assert_eq!(palette_rect(main_window(0., 0., 600.), 1., 54.).width, 552);
+        assert_eq!(palette_rect(main_window(0., 0., 300.), 1., 54.).width, 300);
     }
 
     #[test]
     fn physical_pixels_follow_the_main_windows_scale_on_any_monitor() {
         // A window on a 150% monitor to the left of the primary one has negative coordinates.
-        let rect = palette_rect(main_window(-1600., 40., 1280.), 1.5);
+        let rect = palette_rect(main_window(-1600., 40., 1280.), 1.5, 200.);
         assert_eq!(
             rect,
             OverlayRect {
-                left: -2100,
+                left: -1920,
                 top: 168,
-                width: 1320,
-                height: 840
+                width: 960,
+                height: 300
             }
         );
     }
