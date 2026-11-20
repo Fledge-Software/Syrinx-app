@@ -27,15 +27,7 @@ impl BrowserView {
         let available =
             f32::from(window.viewport_size().height) - f32::from(anchor.y) - WINDOW_MARGIN;
         let rows = history_menu_rows(tab, direction, pages, available);
-        let opening = MenuOpening {
-            anchor: MenuAnchor {
-                position: anchor,
-                corner: Corner::TopLeft,
-            },
-            returns: MenuReturn::Page,
-            select_first,
-            asked: Vec::new(),
-        };
+        let opening = history_opening(anchor, select_first);
         self.show_menu_rows(kind, rows, opening, window, cx);
     }
 
@@ -51,6 +43,20 @@ impl BrowserView {
             return;
         };
         self.close_menu_by(action, window, cx);
+    }
+}
+
+/// How a history menu opens: hanging from `anchor`, and giving the keys back to the page when
+/// it closes, which is where they go after a stale close too.
+fn history_opening(anchor: Point<Pixels>, select_first: bool) -> MenuOpening {
+    MenuOpening {
+        anchor: MenuAnchor {
+            position: anchor,
+            corner: Corner::TopLeft,
+        },
+        returns: MenuReturn::Page,
+        select_first,
+        asked: Vec::new(),
     }
 }
 
@@ -235,6 +241,11 @@ mod tests {
                 .expect("a stale history menu closes");
             assert!(matches!(action, MenuAction::Dismiss), "{direction:?}");
             assert_eq!(action.after_close(true), AfterClose::ReturnKeys);
+        }
+        // Escape's keys go where the menu opened from, and a history menu opens from the page.
+        for select_first in [false, true] {
+            let opening = history_opening(point(px(0.), px(0.)), select_first);
+            assert!(matches!(opening.returns, MenuReturn::Page));
         }
     }
 
