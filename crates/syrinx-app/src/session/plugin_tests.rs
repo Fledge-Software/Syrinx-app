@@ -63,7 +63,7 @@ fn the_test_plugin_runs_through_the_sessions_own_route() {
     create_database(&fixture);
     let lease = WindowsDirectoryLease::prepare(&fixture.0).expect("the synthetic folder");
     let store = Arc::new(Store::open(Arc::new(lease)).expect("the synthetic store"));
-    let mut runtime = plugins::start(&store, &fixture.0).expect("the runtime starts");
+    let mut runtime = plugins::start(&store, &fixture.0, None).expect("the runtime starts");
     let mut registry = PluginRegistry::new();
     let registered = registered_fixture(&mut registry);
     runtime

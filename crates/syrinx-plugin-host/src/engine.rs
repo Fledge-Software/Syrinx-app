@@ -1,11 +1,13 @@
 //! The one wasmtime engine Syrinx configures, and compiling a component on it.
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use wasmtime::component::Component;
 use wasmtime::{Config, Engine, Strategy};
 
 use crate::HostError;
+use crate::cache::{CacheError, CompileCounts, CompiledCache};
 use crate::checks;
 use crate::identity;
 use crate::manifest::PluginManifest;
@@ -13,27 +15,68 @@ use crate::registry::RegisteredPlugin;
 use crate::ticker::{EpochTicker, InFlight};
 
 /// The engine every plugin runs on: Cranelift, epoch interruption, the default
-/// (not pooling) allocator and stack, and no on-disk cache (#137 adds Syrinx's own).
+/// (not pooling) allocator and stack, and none of wasmtime's own on-disk cache: Syrinx's
+/// compiled-code cache (#137), when the runtime has one, is the only one.
 /// Its one epoch ticker serves every plugin on the engine.
 #[derive(Clone)]
 pub struct Runtime {
     engine: Engine,
     ticker: Arc<EpochTicker>,
+    cache: Option<Arc<dyn CompiledCache>>,
+    counts: Arc<Counts>,
+}
+
+/// What `compile_counts` reports, shared by every clone of the runtime.
+#[derive(Default)]
+struct Counts {
+    compiled: AtomicU64,
+    loaded: AtomicU64,
+}
+
+/// A component from `Runtime::compile_cached`, with every cache problem met on the way.
+pub(crate) struct Compiled {
+    pub(crate) component: Component,
+    pub(crate) problems: Vec<CacheError>,
+}
+
+/// The engine configuration every plugin compiles and runs under.
+pub(crate) fn configured_engine() -> Result<Engine, HostError> {
+    let mut config = Config::new();
+    config.strategy(Strategy::Cranelift);
+    config.epoch_interruption(true);
+    Engine::new(&config).map_err(|error| HostError::Malformed(format!("{error:#}")))
 }
 
 impl Runtime {
     pub fn new() -> Result<Self, HostError> {
-        let mut config = Config::new();
-        config.strategy(Strategy::Cranelift);
-        config.epoch_interruption(true);
-        let engine =
-            Engine::new(&config).map_err(|error| HostError::Malformed(format!("{error:#}")))?;
+        Self::on(configured_engine()?)
+    }
+
+    /// A runtime on an engine built by `configured_engine`, with its own epoch ticker.
+    pub(crate) fn on(engine: Engine) -> Result<Self, HostError> {
         let ticker = EpochTicker::start(&engine)
             .map_err(|error| HostError::Instantiation(format!("epoch ticker: {error}")))?;
         Ok(Self {
             engine,
             ticker: Arc::new(ticker),
+            cache: None,
+            counts: Arc::new(Counts::default()),
         })
+    }
+
+    /// Load and keep plugins' native code through `cache` when they activate.
+    #[cfg(feature = "store")]
+    pub(crate) fn with_cache(mut self, cache: Arc<dyn CompiledCache>) -> Self {
+        self.cache = Some(cache);
+        self
+    }
+
+    /// How many components this runtime and its clones compiled and loaded from the cache.
+    pub fn compile_counts(&self) -> CompileCounts {
+        CompileCounts {
+            compiled: self.counts.compiled.load(Ordering::Relaxed),
+            loaded: self.counts.loaded.load(Ordering::Relaxed),
+        }
     }
 
     pub fn engine(&self) -> &Engine {
@@ -77,18 +120,90 @@ impl Runtime {
         bytes: &[u8],
     ) -> Result<Component, HostError> {
         let component = self.build_component(bytes)?;
-        identity::check_component(&self.engine, &component, manifest)
-            .map_err(HostError::Identity)?;
-        checks::component_fits(&self.engine, &component)?;
+        self.check_component(manifest, &component)?;
         Ok(component)
+    }
+
+    /// `compile_manifest` through the runtime's cache, when it has one: an entry that is
+    /// current and passes its checks is loaded instead of compiled, and a component compiled
+    /// here is kept for next time. A cache problem never stops the plugin; it is returned.
+    pub(crate) fn compile_cached(
+        &self,
+        manifest: &PluginManifest,
+        bytes: &[u8],
+    ) -> Result<Compiled, HostError> {
+        let mut problems = Vec::new();
+        let Some(cache) = self.cache.as_ref() else {
+            let component = self.compile_manifest(manifest, bytes)?;
+            return Ok(Compiled {
+                component,
+                problems,
+            });
+        };
+        refuse_precompiled(bytes)?;
+        if let Some(component) = cache.fetch(&self.engine, manifest.id(), bytes, &mut problems) {
+            // Code from the cache passes the same checks as code compiled now.
+            self.check_component(manifest, &component)?;
+            self.counts.loaded.fetch_add(1, Ordering::Relaxed);
+            return Ok(Compiled {
+                component,
+                problems,
+            });
+        }
+        let component = self.compile_manifest(manifest, bytes)?;
+        if let Err(problem) = cache.keep(manifest.id(), bytes, &component) {
+            problems.push(problem);
+        }
+        Ok(Compiled {
+            component,
+            problems,
+        })
+    }
+
+    /// Whether the plugin has no current cache entry, so compiling it ahead of activation
+    /// would save its first activation the compile. Without a cache nothing is saved.
+    pub(crate) fn needs_compiling(
+        &self,
+        manifest: &PluginManifest,
+        bytes: &[u8],
+    ) -> Result<bool, CacheError> {
+        let Some(cache) = self.cache.as_ref() else {
+            return Ok(false);
+        };
+        let current = cache.is_current(manifest.id(), bytes)?;
+        Ok(!current)
+    }
+
+    /// Whether plugins' native code is kept in a compiled-code cache.
+    pub(crate) fn has_cache(&self) -> bool {
+        self.cache.is_some()
+    }
+
+    /// The registered manifest's identity, then the contract.
+    fn check_component(
+        &self,
+        manifest: &PluginManifest,
+        component: &Component,
+    ) -> Result<(), HostError> {
+        identity::check_component(&self.engine, component, manifest)
+            .map_err(HostError::Identity)?;
+        checks::component_fits(&self.engine, component)
     }
 
     /// Build a component from its bytes, refusing precompiled code first.
     fn build_component(&self, bytes: &[u8]) -> Result<Component, HostError> {
-        if Engine::detect_precompiled(bytes).is_some() {
-            return Err(HostError::Precompiled);
-        }
-        Component::new(&self.engine, bytes)
-            .map_err(|error| HostError::Malformed(format!("{error:#}")))
+        refuse_precompiled(bytes)?;
+        let component = Component::new(&self.engine, bytes)
+            .map_err(|error| HostError::Malformed(format!("{error:#}")))?;
+        self.counts.compiled.fetch_add(1, Ordering::Relaxed);
+        Ok(component)
+    }
+}
+
+/// A package's bytes are compiled by Syrinx itself: native code in them is refused.
+fn refuse_precompiled(bytes: &[u8]) -> Result<(), HostError> {
+    match Engine::detect_precompiled(bytes) {
+        Some(_) => Err(HostError::Precompiled),
+        None => Ok(()),
     }
 }

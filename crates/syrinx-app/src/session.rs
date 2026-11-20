@@ -45,7 +45,9 @@ use syrinx_core::{
     TabError, TabId, TabKind, TabMetadata, TabModel, TabModelSnapshot, TabSnapshot,
     commit_bookmark_import,
 };
-use syrinx_platform::{DeletionJournal, JournalError, StartupStorage, WindowsDirectoryLease};
+use syrinx_platform::{
+    CacheFolder, DeletionJournal, JournalError, StartupStorage, WindowsDirectoryLease,
+};
 use syrinx_search::{
     Catalogue, Entry, Scope, SearchError, SearchPolicy, SearchResults, Target, Usage,
     fulltext::FullTextError,
@@ -405,6 +407,8 @@ pub enum SessionError {
     Usage(UsageError),
     /// The plugin runtime could not start; browsing goes on without plugins (#136).
     Plugins(syrinx_plugin_host::owner::OwnerError),
+    /// The compiled-code cache's folder was refused; plugins compile at each activation (#137).
+    PluginCache(LocationError),
     NoActiveTab,
     /// The session worker could not take a request, or stopped before answering it.
     StorageUnavailable,
@@ -476,6 +480,9 @@ impl fmt::Display for SessionError {
             Self::Deletion(error) => write!(formatter, "Cannot clear history safely: {error}"),
             Self::Usage(error) => write!(formatter, "{error}"),
             Self::Plugins(error) => write!(formatter, "Plugins are unavailable: {error}"),
+            Self::PluginCache(error) => {
+                write!(formatter, "Compiled plugin code cannot be kept: {error}")
+            }
             Self::NoActiveTab => formatter.write_str("There is no active page to save"),
             Self::StorageUnavailable => formatter.write_str("Local storage is unavailable"),
             Self::HistoryUnavailable => {
@@ -649,9 +656,22 @@ fn serve_accepted(
     worker.survival.keep_in(data_dir.to_path_buf());
     // The session owns the plugin runtime, which shares its store; plugins never stop browsing.
     let store = Arc::new(store);
-    let (plugins, started) = match plugins::start(&store, data_dir) {
-        Ok(plugins) => (Some(plugins), Ok(())),
-        Err(error) => (None, emit_recoverable(events, SessionError::Plugins(error))),
+    // The cache folder is held until the runtime has closed; a refused one is reported.
+    let (cache_folder, refused) = match worker.plugin_cache.take() {
+        Some(Ok(folder)) => (Some(folder), Ok(())),
+        Some(Err(error)) => (
+            None,
+            emit_recoverable(events, SessionError::PluginCache(error)),
+        ),
+        None => (None, Ok(())),
+    };
+    let cache_path = cache_folder.as_ref().map(CacheFolder::path);
+    let (plugins, started) = match plugins::start(&store, data_dir, cache_path) {
+        Ok(plugins) => (Some(plugins), refused),
+        Err(error) => (
+            None,
+            refused.and_then(|()| emit_recoverable(events, SessionError::Plugins(error))),
+        ),
     };
     let result = started.and_then(|()| {
         serve_counted(
@@ -841,7 +861,9 @@ fn open_worker(
 ) -> Result<Worker, SessionError> {
     let page_text = open_page_text(lease, repair)?;
     let journal = open_journal(store, lease, repair)?;
-    Worker::restore(store, journal, page_text)
+    let mut worker = Worker::restore(store, journal, page_text)?;
+    worker.plugin_cache = Some(lease.cache_folder(plugins::CACHE_FOLDER));
+    Ok(worker)
 }
 
 /// Opens the full-text index; a repair first removes its page text, before the journal is
@@ -915,6 +937,9 @@ struct Worker {
     survival: stop::Survival,
     /// A tab model a busy database refused, and when to try it again (#9).
     unsaved: unsaved::Unsaved,
+    /// The compiled-code cache's folder, opened under the lease for the plugin runtime (#137);
+    /// taken when the runtime starts.
+    plugin_cache: Option<Result<CacheFolder, LocationError>>,
     /// Whether the window missed the zoom levels a clear applied; an idle tick resends them (#196).
     zoom_levels: zoom_levels::ZoomLevelsReport,
 }
@@ -999,6 +1024,7 @@ impl Worker {
             survival: stop::Survival::new(),
             unsaved: unsaved::Unsaved::default(),
             zoom_levels: zoom_levels::ZoomLevelsReport::default(),
+            plugin_cache: None,
         })
     }
 

@@ -86,6 +86,40 @@ the pooling allocator, `component-model-async`, WASI 0.3 (`p3`) or
 `wasi-http`: those stay off, which is where most of 2026's advisories sit
 (below).
 
+## Compiled code through Syrinx's cache (#137, 2026-11-20)
+
+The plugin host now calls `Component::serialize` and the `unsafe`
+`Component::deserialize`, both already in the audited `runtime` and
+`cranelift` features: no feature, version or crate changes. wasmtime's own
+on-disk cache (`cache_config_load`, the `cache` feature) stays off.
+
+- **Where.** Only `crates/syrinx-plugin-host/src/owner/cache.rs` calls them,
+  for the runtime the application owns. The test host and plugin repositories
+  never do. `deserialize_file`, which memory-maps the file so a later change on
+  disk could reach a mapped page, is never called.
+- **Under which check.** An entry is deserialised only when the store's
+  `plugin_compiled` row (schema version 9) names the SHA-256 of these exact
+  `plugin.wasm` bytes, the SHA-256 of the engine's
+  `precompile_compatibility_hash` and this Syrinx's version, and the file read
+  into memory, bounded by the row's length, has the length and SHA-256 the row
+  records. Those same bytes are what `deserialize` is given. The compatibility
+  hash covers the target triple, Cranelift's flags and the ISA flags inferred
+  from this CPU (`wasmtime 48.0.7` `src/compile/code_builder.rs`, lines 848 to
+  866), and `deserialize` checks every enabled ISA flag against the host again
+  (`src/engine/serialization.rs`, `check_isa_flags`), so a data folder copied
+  to another machine misses and recompiles.
+- **After loading.** A deserialised component passes `identity::check_component`
+  and `checks::component_fits`, as a fresh compile does. A refused or damaged
+  entry is deleted with its row, and the plugin compiles from `plugin.wasm`.
+- **SHA-256.** The application passes `syrinx_update::sha256` (Windows CNG,
+  `ring` on Linux, both audited). The plugin host may depend only on
+  `syrinx-core` and `syrinx-store` (`cargo xtask check-deps`), so it takes the
+  function as a value rather than depending on `syrinx-update`.
+- **The honest limit** (research note 10, section 5) is unchanged: a program
+  already running as the owner can rewrite the cache folder and its database
+  row together. The hash check narrows the window to what such a program could
+  already do.
+
 ## Method
 
 - **Two resolutions, both for `x86_64-pc-windows-msvc`.** A *fresh* one

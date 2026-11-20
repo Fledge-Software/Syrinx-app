@@ -1,12 +1,13 @@
 //! Starts and stops the plugin runtime the session owns (#136): the owner's grants read from
-//! the store, and the deny list built from Syrinx's own folders and the system's.
+//! the store, the deny list built from Syrinx's own folders and the system's, and the
+//! compiled-code cache in its folder beside the database (#137).
 
 use std::ffi::OsString;
 use std::path::Path;
 use std::sync::Arc;
 
 use syrinx_plugin_host::grants::{DenyList, Protected};
-use syrinx_plugin_host::owner::{OwnerError, OwnerRuntime};
+use syrinx_plugin_host::owner::{CacheSetup, OwnerError, OwnerRuntime};
 use syrinx_store::{Store, StoreError};
 
 /// Environment variables naming system folders no plugin may be granted, by kind. A
@@ -20,14 +21,34 @@ const SYSTEM_FOLDERS: [(&str, Protected); 6] = [
     ("HOME", Protected::UserProfile),
 ];
 
-/// Read the owner's grants. No plugin is installed from a package yet (2d), so no plugin
+/// The compiled-code cache's folder beside the database, under the storage lease (D13): local,
+/// never synced or roamed, and never copied into a backup.
+pub(super) const CACHE_FOLDER: &str = "PluginCache";
+
+/// Read the owner's grants and clear stale entries from the compiled-code cache in
+/// `cache_folder`, which the caller holds until the runtime closes; without one, plugins
+/// compile at each activation. No plugin is installed from a package yet (2d), so no plugin
 /// code, compiler or worker starts here; each starts on first use.
-pub(super) fn start(store: &Arc<Store>, state_dir: &Path) -> Result<OwnerRuntime, OwnerError> {
+pub(super) fn start(
+    store: &Arc<Store>,
+    state_dir: &Path,
+    cache_folder: Option<&Path>,
+) -> Result<OwnerRuntime, OwnerError> {
+    let cache = cache_folder.map(|folder| CacheSetup {
+        folder: folder.to_path_buf(),
+        sha256: compiled_sha256,
+    });
     OwnerRuntime::start(
         Arc::clone(store),
         env!("CARGO_PKG_VERSION"),
         deny_list(state_dir),
+        cache,
     )
+}
+
+/// SHA-256 for the compiled-code cache, from the audited implementation updates use.
+fn compiled_sha256(bytes: &[u8]) -> Result<[u8; 32], String> {
+    syrinx_update::sha256(bytes).map_err(|error| error.to_string())
 }
 
 /// Stop every plugin, then hand back the store, which nothing else holds any more, for the

@@ -1,7 +1,9 @@
 //! The plugin runtime as the application owns it (#136, P2-04): installs and the owner's
 //! grants kept in Syrinx's store, each plugin's settings in its own namespace there, and
-//! the per-plugin workers behind them. Built only with the `store` feature, for `syrinx-app`.
+//! the per-plugin workers behind them, and the compiled-code cache (#137). Built only with
+//! the `store` feature, for `syrinx-app`.
 
+mod cache;
 mod services;
 
 use std::collections::BTreeMap;
@@ -15,6 +17,9 @@ use syrinx_store::{
     StoredGrant,
 };
 
+use wasmtime::Engine;
+
+pub use cache::{CacheSetup, Sha256};
 pub use services::StoreServices;
 
 use crate::grants::{DenyList, FolderRefusal, GrantSet};
@@ -22,7 +27,8 @@ use crate::manifest::{CapabilityKind, FolderCount, PluginManifest, Scope};
 use crate::registry::RegisteredPlugin;
 use crate::session::{CallResult, Session};
 use crate::worker::{Pending, PluginEvent, PluginStatus, Plugins};
-use crate::{HostError, Runtime, limits};
+use crate::{CompileCounts, HostError, Runtime, limits};
+use cache::StoreCache;
 
 // The plugin contract's settings bounds (`limits`) are the source; the store keeps the same.
 const _: () = assert!(limits::MAX_SETTINGS_KEY_BYTES == syrinx_store::MAX_PLUGIN_SETTING_KEY_BYTES);
@@ -159,24 +165,40 @@ pub struct OwnerRuntime {
     deny: DenyList,
     added: BTreeMap<String, Added>,
     running: Option<Running>,
+    /// The engine every plugin compiles on, built at start so the cache's key names it.
+    engine: Engine,
+    cache: Option<Arc<StoreCache>>,
+    /// What the runtime itself reported, before the workers' events.
+    reported: Vec<PluginEvent>,
 }
 
 impl OwnerRuntime {
-    /// Read the owner's grants from the store. No plugin code, compiler or thread starts
-    /// until a plugin is added.
+    /// Read the owner's grants from the store and clear stale entries out of the compiled-code
+    /// cache, if there is one. The engine is configured, but no plugin code runs, nothing is
+    /// compiled and no thread starts until a plugin is added. A cache that cannot be used is
+    /// reported through `take_events`, and plugins then compile at each activation.
     pub fn start(
         store: Arc<Store>,
         host_version: impl Into<String>,
         deny: DenyList,
+        cache: Option<CacheSetup>,
     ) -> Result<Self, OwnerError> {
         let grants = from_stored(&store.plugin_grants()?);
+        let host_version = host_version.into();
+        let engine = crate::engine::configured_engine()?;
+        let mut reported = Vec::new();
+        let cache = cache
+            .and_then(|setup| open_cache(&store, setup, &engine, &host_version, &mut reported));
         Ok(Self {
             store,
-            host_version: host_version.into(),
+            host_version,
             grants,
             deny,
             added: BTreeMap::new(),
             running: None,
+            engine,
+            cache,
+            reported,
         })
     }
 
@@ -204,7 +226,9 @@ impl OwnerRuntime {
 
     /// Add a plugin the store records as installed and enabled, as at each start-up. The
     /// record's hashes and signer are not checked against the package here: the package is
-    /// verified when it is installed (2d, #140).
+    /// verified when it is installed (2d, #140). When the compiled-code cache has no current
+    /// entry for it, as for a new install or a bundled plugin first seen, it is compiled on a
+    /// background thread; this call does not wait for that.
     pub fn load(
         &mut self,
         plugin: &RegisteredPlugin,
@@ -223,7 +247,13 @@ impl OwnerRuntime {
                 held_for_update: record.state == PluginState::UpdateHeld,
             });
         }
-        self.running()?.plugins.add(plugin, component)?;
+        let plugins = &mut self.running()?.plugins;
+        plugins.add(plugin, component)?;
+        if let Err(error) = plugins.prepare_in_background(&id) {
+            let plugin = id.clone();
+            self.reported
+                .push(PluginEvent::PrepareFailed { plugin, error });
+        }
         let added = Added {
             manifest: plugin.manifest().clone(),
             manifest_sha256: record.manifest_sha256,
@@ -308,8 +338,14 @@ impl OwnerRuntime {
     }
 
     /// Remove any installed plugin and everything keyed to it: it stops, then its install
-    /// record, grants, folders and settings are deleted together. The search index (#141) and
-    /// recovery drafts (#37) keep nothing per plugin yet; their owners join this when they do.
+    /// record, grants, folders, settings and compiled-code record are deleted together, and
+    /// then its compiled-code file. A file that cannot be deleted is reported through
+    /// `take_events` and goes at the next start. A background compile that finishes after the
+    /// removal cannot record its result, since the store refuses a record for a plugin not
+    /// installed, so it writes no file; one that recorded it just before may leave a file,
+    /// which also goes at the next start. The
+    /// search index (#141) and recovery drafts (#37) keep nothing per plugin yet; their owners
+    /// join this when they do.
     pub fn remove(&mut self, plugin: &str) -> Result<(), OwnerError> {
         self.require_record(plugin)?;
         let workers = match (self.added.remove(plugin), self.running.as_mut()) {
@@ -318,6 +354,7 @@ impl OwnerRuntime {
         };
         self.grants.forget(plugin);
         let stored = self.store.remove_plugin(plugin.to_owned());
+        self.discard_compiled(plugin);
         both_steps(workers, stored)
     }
 
@@ -341,12 +378,22 @@ impl OwnerRuntime {
         self.running.as_ref()?.plugins.status(plugin)
     }
 
-    /// What the workers reported since the last look.
-    pub fn take_events(&self) -> Vec<PluginEvent> {
+    /// What the runtime and its workers reported since the last look.
+    pub fn take_events(&mut self) -> Vec<PluginEvent> {
+        let mut events = std::mem::take(&mut self.reported);
+        if let Some(running) = self.running.as_ref() {
+            events.extend(running.events.try_iter());
+        }
+        events
+    }
+
+    /// How many plugins were compiled and how many loaded from the compiled-code cache.
+    pub fn compile_counts(&self) -> CompileCounts {
         self.running
             .as_ref()
-            .map(|running| running.events.try_iter().collect())
-            .unwrap_or_default()
+            .map_or_else(CompileCounts::default, |running| {
+                running.plugins.compile_counts()
+            })
     }
 
     /// Stop every plugin, so nothing but the caller holds the store any more.
@@ -423,18 +470,57 @@ impl OwnerRuntime {
         Ok(self.running.insert(running))
     }
 
+    /// Delete the plugin's compiled-code file, reporting a failure.
+    fn discard_compiled(&mut self, plugin: &str) {
+        let Some(cache) = self.cache.as_ref() else {
+            return;
+        };
+        if let Err(error) = cache.discard(plugin) {
+            let plugin = Some(plugin.to_owned());
+            self.reported.push(PluginEvent::Cache { plugin, error });
+        }
+    }
+
     fn start_running(&self) -> Result<Running, OwnerError> {
         let store = Arc::clone(&self.store);
         let factory =
             move |manifest: &PluginManifest| StoreServices::new(manifest.id(), Arc::clone(&store));
+        let mut runtime = Runtime::on(self.engine.clone())?;
+        if let Some(cache) = self.cache.as_ref() {
+            runtime = runtime.with_cache(Arc::clone(cache) as Arc<dyn crate::cache::CompiledCache>);
+        }
         let (plugins, events) = Plugins::new(
-            Runtime::new()?,
+            runtime,
             self.host_version.clone(),
             self.grants.clone(),
             factory,
         );
         Ok(Running { plugins, events })
     }
+}
+
+/// The compiled-code cache for `engine`, with its stale entries cleared out; `None`, reported,
+/// when it cannot be keyed. Each clean-up failure is reported too.
+fn open_cache(
+    store: &Arc<Store>,
+    setup: CacheSetup,
+    engine: &Engine,
+    host_version: &str,
+    reported: &mut Vec<PluginEvent>,
+) -> Option<Arc<StoreCache>> {
+    let report = |error| PluginEvent::Cache {
+        plugin: None,
+        error,
+    };
+    let cache = match StoreCache::new(Arc::clone(store), setup, engine, host_version.to_owned()) {
+        Ok(cache) => cache,
+        Err(error) => {
+            reported.push(report(error));
+            return None;
+        }
+    };
+    reported.extend(cache.clean().into_iter().map(report));
+    Some(Arc::new(cache))
 }
 
 /// The grants the store holds. A row naming a kind this Syrinx does not know grants nothing.

@@ -17,9 +17,9 @@ use crate::grants::GrantSet;
 use crate::manifest::{CapabilityKind, PluginManifest};
 use crate::registry::RegisteredPlugin;
 use crate::session::{CallResult, RequestIds, Session};
-use crate::{Failure, HostError, PluginHost, Runtime, limits};
+use crate::{CacheError, Failure, HostError, PluginHost, Runtime, limits};
 
-use thread::{Job, Prepared, Shared, Worker};
+use thread::{Job, Prepared, Shared, Worker, prepare};
 
 /// Makes the services behind a plugin's imports, once per instance.
 pub type ServiceFactory<S> = Arc<dyn Fn(&PluginManifest) -> S + Send + Sync>;
@@ -62,6 +62,18 @@ pub enum PluginEvent {
     Deactivated {
         plugin: String,
         reason: StopReason,
+    },
+    /// The compiled-code cache could not be used or kept, and the plugin was compiled instead
+    /// (#137). `plugin` is `None` for the cache as a whole, as in its start-up clean-up.
+    Cache {
+        plugin: Option<String>,
+        error: CacheError,
+    },
+    /// Compiling a plugin in the background failed. Its status is unchanged: its first
+    /// activation compiles it again, and reports `Failed` if that fails too.
+    PrepareFailed {
+        plugin: String,
+        error: HostError,
     },
 }
 
@@ -110,6 +122,17 @@ pub struct Plugins<S: PluginHost> {
     /// Worker threads no slot owns any more, still stopping, at most one per plugin id; a
     /// plugin added again waits for its own, and shutdown joins the rest.
     stopping: BTreeMap<String, JoinHandle<()>>,
+    /// Background compiles started by `prepare_in_background`; shutdown joins them.
+    preparing: Vec<JoinHandle<()>>,
+}
+
+/// One plugin's compile ahead of its first activation, run on its own thread.
+struct Background<S: 'static> {
+    runtime: Runtime,
+    manifest: PluginManifest,
+    component: Arc<[u8]>,
+    prepared: Prepared<S>,
+    events: Sender<PluginEvent>,
 }
 
 struct Slot<S: 'static> {
@@ -155,6 +178,7 @@ impl<S: PluginHost> Plugins<S> {
             events,
             slots: BTreeMap::new(),
             stopping: BTreeMap::new(),
+            preparing: Vec::new(),
         };
         (plugins, received)
     }
@@ -174,6 +198,39 @@ impl<S: PluginHost> Plugins<S> {
         };
         self.slots.insert(id, slot);
         Ok(())
+    }
+
+    /// Compile `plugin` on a background thread when the runtime's cache has no current entry
+    /// for it, so its first activation loads it instead of compiling. An activation that
+    /// starts meanwhile waits for this compile rather than compiling twice. Returns at once;
+    /// without a cache nothing is compiled.
+    pub fn prepare_in_background(&mut self, plugin: &str) -> CallResult<()> {
+        let slot = self
+            .slots
+            .get(plugin)
+            .ok_or_else(|| HostError::Refused(format!("{plugin} is not installed")))?;
+        if !self.runtime.has_cache() {
+            return Ok(());
+        }
+        let background = Background {
+            runtime: self.runtime.clone(),
+            manifest: slot.manifest.clone(),
+            component: Arc::clone(&slot.component),
+            prepared: Arc::clone(&slot.prepared),
+            events: self.events.clone(),
+        };
+        let thread = std::thread::Builder::new()
+            .name(format!("syrinx-prepare-{plugin}"))
+            .spawn(move || background.run())
+            .map_err(|error| HostError::Unavailable(format!("no compile thread: {error}")))?;
+        self.preparing.retain(|thread| !thread.is_finished());
+        self.preparing.push(thread);
+        Ok(())
+    }
+
+    /// How many components the runtime compiled and loaded from its cache.
+    pub fn compile_counts(&self) -> crate::CompileCounts {
+        self.runtime.compile_counts()
     }
 
     pub fn status(&self, plugin: &str) -> Option<PluginStatus> {
@@ -254,7 +311,9 @@ impl<S: PluginHost> Plugins<S> {
     /// Deactivate every plugin and wait for each worker to exit. The workers stop side by
     /// side, each within one job budget (`limits::JOB_BUDGET`), one deferred call's deadline
     /// (the budget is checked between deferred calls) and `lifecycle.deactivate`'s deadline,
-    /// as long as its host services honour their deadlines. Dropping `Plugins` does the same.
+    /// as long as its host services honour their deadlines. A background compile cannot be
+    /// interrupted, so shutdown also waits for one still running, as it waits for a worker
+    /// activating; it finishes and keeps its entry. Dropping `Plugins` does the same.
     pub fn shutdown(mut self) {
         self.stop_all_and_join();
     }
@@ -426,9 +485,57 @@ impl<S: PluginHost> Plugins<S> {
             threads.extend(slot.worker.take().map(|worker| worker.thread));
         }
         threads.extend(std::mem::take(&mut self.stopping).into_values());
+        threads.append(&mut self.preparing);
         for thread in threads {
             if thread.join().is_err() {
                 eprintln!("a plugin worker thread panicked");
+            }
+        }
+    }
+}
+
+impl<S: PluginHost> Background<S> {
+    /// Compile the plugin unless the cache is current for it, then report what went wrong.
+    fn run(self) {
+        let mut problems = Vec::new();
+        let needed = match self
+            .runtime
+            .needs_compiling(&self.manifest, &self.component)
+        {
+            Ok(needed) => needed,
+            Err(error) => {
+                // Without knowing, compiling costs only the time a hit would have saved.
+                problems.push(error);
+                true
+            }
+        };
+        let compiled = if needed {
+            prepare(
+                &self.runtime,
+                &self.manifest,
+                &self.component,
+                &self.prepared,
+                &mut problems,
+            )
+            .map(drop)
+        } else {
+            Ok(())
+        };
+        let plugin = self.manifest.id().to_owned();
+        let mut events: Vec<PluginEvent> = problems
+            .into_iter()
+            .map(|error| PluginEvent::Cache {
+                plugin: Some(plugin.clone()),
+                error,
+            })
+            .collect();
+        if let Err(error) = compiled {
+            events.push(PluginEvent::PrepareFailed { plugin, error });
+        }
+        for event in events {
+            // Once the application stopped listening there is no one left to tell.
+            if self.events.send(event).is_err() {
+                return;
             }
         }
     }

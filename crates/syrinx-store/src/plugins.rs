@@ -51,6 +51,20 @@ pub(crate) const SETTING_TABLE: &str = "CREATE TABLE plugin_setting (
     PRIMARY KEY(plugin_id, key)
 ) STRICT";
 
+/// One row per plugin whose native code the compiled-code cache keeps (#137): the key it was
+/// compiled under and the SHA-256 the file must match before it is ever deserialised.
+pub(crate) const COMPILED_TABLE: &str = "CREATE TABLE plugin_compiled (
+    plugin_id TEXT PRIMARY KEY NOT NULL REFERENCES plugin_install(plugin_id) ON DELETE CASCADE,
+    module_sha256 BLOB NOT NULL CHECK(length(module_sha256) = 32),
+    engine_key BLOB NOT NULL CHECK(length(engine_key) = 32),
+    syrinx_version TEXT NOT NULL CHECK(length(syrinx_version) BETWEEN 1 AND 64),
+    artifact_sha256 BLOB NOT NULL CHECK(length(artifact_sha256) = 32),
+    artifact_bytes INTEGER NOT NULL CHECK(artifact_bytes BETWEEN 1 AND 1073741824)
+) STRICT";
+
+/// The largest compiled artefact the cache records, so a read of one is bounded.
+pub const MAX_PLUGIN_COMPILED_BYTES: u64 = 1 << 30;
+
 /// The largest settings key and value one plugin may store, and how many keys it may hold.
 pub const MAX_PLUGIN_SETTING_KEY_BYTES: usize = 64;
 pub const MAX_PLUGIN_SETTING_VALUE_BYTES: usize = 64 * 1024;
@@ -144,6 +158,19 @@ impl fmt::Debug for PluginFolder {
     }
 }
 
+/// What the compiled-code cache recorded for one plugin's native code: the key it was compiled
+/// under (the exact `plugin.wasm`, the engine's configuration and Syrinx's version) and the
+/// size and SHA-256 its file must have.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PluginCompiled {
+    pub plugin_id: String,
+    pub module_sha256: [u8; 32],
+    pub engine_key: [u8; 32],
+    pub syrinx_version: String,
+    pub artifact_sha256: [u8; 32],
+    pub artifact_bytes: u64,
+}
+
 /// One change to plugin records, serialized with every other durable write.
 pub(crate) enum PluginWrite {
     Install(PluginInstall),
@@ -165,6 +192,10 @@ pub(crate) enum PluginWrite {
         value: Vec<u8>,
     },
     Remove {
+        plugin_id: String,
+    },
+    Compiled(PluginCompiled),
+    ForgetCompiled {
         plugin_id: String,
     },
 }
@@ -229,6 +260,16 @@ fn folder_text(path: &Path) -> Result<&str, StoreError> {
     Ok(text)
 }
 
+fn validate_compiled(compiled: &PluginCompiled) -> Result<(), StoreError> {
+    validate_plugin_id(&compiled.plugin_id)?;
+    let version_ok = !compiled.syrinx_version.is_empty() && compiled.syrinx_version.len() <= 64;
+    let bytes_ok = (1..=MAX_PLUGIN_COMPILED_BYTES).contains(&compiled.artifact_bytes);
+    if !version_ok || !bytes_ok {
+        return Err(invalid());
+    }
+    Ok(())
+}
+
 pub(crate) fn validate_setting(key: &str, value: &[u8]) -> Result<(), StoreError> {
     let key_ok = !key.is_empty() && key.len() <= MAX_PLUGIN_SETTING_KEY_BYTES;
     if !key_ok || value.len() > MAX_PLUGIN_SETTING_VALUE_BYTES {
@@ -264,7 +305,10 @@ pub(crate) fn validate_write(write: &PluginWrite) -> Result<(), StoreError> {
             validate_plugin_id(plugin_id)?;
             validate_setting(key, value)
         }
-        PluginWrite::Remove { plugin_id } => validate_plugin_id(plugin_id),
+        PluginWrite::Remove { plugin_id } | PluginWrite::ForgetCompiled { plugin_id } => {
+            validate_plugin_id(plugin_id)
+        }
+        PluginWrite::Compiled(compiled) => validate_compiled(compiled),
     }
 }
 
@@ -296,7 +340,7 @@ pub(crate) fn write(
             value,
         } => save_setting(connection, plugin_id, key, value),
         PluginWrite::Remove { plugin_id } => {
-            // Grants, folders and settings go with the install row by cascade.
+            // Grants, folders, settings and the compiled-code record go with it by cascade.
             let removed = connection
                 .execute(
                     "DELETE FROM plugin_install WHERE plugin_id = ?1",
@@ -305,7 +349,46 @@ pub(crate) fn write(
                 .map_err(write_error)?;
             Ok(PluginWritten::Removed(removed > 0))
         }
+        PluginWrite::Compiled(compiled) => save_compiled(connection, compiled),
+        PluginWrite::ForgetCompiled { plugin_id } => {
+            let removed = connection
+                .execute(
+                    "DELETE FROM plugin_compiled WHERE plugin_id = ?1",
+                    params![plugin_id],
+                )
+                .map_err(write_error)?;
+            Ok(PluginWritten::Removed(removed > 0))
+        }
     }
+}
+
+/// Records a plugin's compiled artefact, replacing the one it had.
+fn save_compiled(
+    connection: &Connection,
+    compiled: &PluginCompiled,
+) -> Result<PluginWritten, StoreError> {
+    let artifact_bytes = i64::try_from(compiled.artifact_bytes).map_err(|_| invalid())?;
+    connection
+        .execute(
+            "INSERT INTO plugin_compiled(plugin_id, module_sha256, engine_key, syrinx_version,
+                 artifact_sha256, artifact_bytes)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+             ON CONFLICT(plugin_id) DO UPDATE SET
+                 module_sha256 = excluded.module_sha256, engine_key = excluded.engine_key,
+                 syrinx_version = excluded.syrinx_version,
+                 artifact_sha256 = excluded.artifact_sha256,
+                 artifact_bytes = excluded.artifact_bytes",
+            params![
+                compiled.plugin_id,
+                compiled.module_sha256,
+                compiled.engine_key,
+                compiled.syrinx_version,
+                compiled.artifact_sha256,
+                artifact_bytes,
+            ],
+        )
+        .map_err(write_error)?;
+    Ok(PluginWritten::Saved)
 }
 
 fn save_install(
@@ -544,6 +627,58 @@ pub(crate) fn folders(
         Ok(folder)
     })
     .collect()
+}
+
+/// The compiled-code cache's records, one plugin's (`Some(plugin_id)`) or every plugin's;
+/// one damaged row refuses the whole answer rather than guess.
+pub(crate) fn compiled(
+    connection: &Connection,
+    plugin_id: Option<&str>,
+) -> Result<Vec<PluginCompiled>, StoreError> {
+    if let Some(plugin_id) = plugin_id {
+        validate_plugin_id(plugin_id)?;
+    }
+    let mut statement = connection
+        .prepare(
+            "SELECT plugin_id, module_sha256, engine_key, syrinx_version, artifact_sha256,
+                 artifact_bytes
+             FROM plugin_compiled WHERE ?1 IS NULL OR plugin_id = ?1 ORDER BY plugin_id",
+        )
+        .map_err(read_error)?;
+    let rows = statement
+        .query_map(params![plugin_id], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, Vec<u8>>(1)?,
+                row.get::<_, Vec<u8>>(2)?,
+                row.get::<_, String>(3)?,
+                row.get::<_, Vec<u8>>(4)?,
+                row.get::<_, i64>(5)?,
+            ))
+        })
+        .map_err(read_error)?;
+    rows.map(|row| {
+        let (plugin_id, module, engine_key, syrinx_version, artifact, artifact_bytes) =
+            row.map_err(read_error)?;
+        let compiled = PluginCompiled {
+            plugin_id,
+            module_sha256: digest(module)?,
+            engine_key: digest(engine_key)?,
+            syrinx_version,
+            artifact_sha256: digest(artifact)?,
+            artifact_bytes: u64::try_from(artifact_bytes).map_err(|_| invalid())?,
+        };
+        validate_compiled(&compiled)?;
+        Ok(compiled)
+    })
+    .collect()
+}
+
+/// Counts the compiled-code records; the version 9 migration checks that they start empty.
+pub(crate) fn compiled_count(connection: &Connection) -> Result<i64, StoreError> {
+    connection
+        .query_row("SELECT count(*) FROM plugin_compiled", [], |row| row.get(0))
+        .map_err(read_error)
 }
 
 fn digest(bytes: Vec<u8>) -> Result<[u8; 32], StoreError> {
