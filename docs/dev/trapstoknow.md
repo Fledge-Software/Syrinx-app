@@ -685,10 +685,10 @@ i5-4460 / HD 4600; no budget changed.
   later operation. Next and Previous are refused while 64 operations are
   unanswered; searches never are. It rests on WebKit answering one page's
   operations once each, in send order, which held natively for overlapping
-  searches and steps (three runs of 1,032) and through a killed web process (3/3), whose pending
-  searches came back as failures before the crash signal. A cross-site
-  process swap with replies in flight could not be staged in the sandbox
-  and is assumed, not observed. Source: `examples/linux/controls.rs`'s
+  searches and steps (three runs of 1,032) and through a killed web process
+  (3/3), whose pending searches came back as failures before the crash
+  signal. A cross-site process swap with replies in flight could not be
+  staged in the sandbox and is assumed, not observed. Source: `examples/linux/controls.rs`'s
   `overlapping_find`, run on its own under Xvfb because the full controls
   suite needs a window manager (the old state failed with request 55
   reporting "o"'s six matches; the fix passed 5/5), and WebKitGTK 2.52.6
