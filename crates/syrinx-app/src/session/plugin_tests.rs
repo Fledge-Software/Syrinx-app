@@ -148,7 +148,10 @@ fn compiled_code_is_kept_under_its_sha256_and_loaded_after_a_restart() {
         .expect("the record reads")
         .expect("a record");
     assert_eq!(kept.syrinx_version, env!("CARGO_PKG_VERSION"));
-    let entry = fixture.0.join(plugins::CACHE_FOLDER).join("test.cwasm");
+    let entry = fixture
+        .0
+        .join(plugins::CACHE_FOLDER)
+        .join("plugin-test.cwasm");
     let bytes = fs::read(&entry).expect("the cached entry");
     assert_eq!(
         kept.artifact_sha256,

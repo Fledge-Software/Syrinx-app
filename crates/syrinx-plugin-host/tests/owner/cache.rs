@@ -58,11 +58,11 @@ impl Cached {
     }
 
     fn entry(&self) -> PathBuf {
-        self.folder.join(format!("{PLUGIN}.cwasm"))
+        self.folder.join(format!("plugin-{PLUGIN}.cwasm"))
     }
 
     fn partial(&self) -> PathBuf {
-        self.folder.join(format!("{PLUGIN}.cwasm.partial"))
+        self.folder.join(format!("plugin-{PLUGIN}.cwasm.partial"))
     }
 
     /// The folder's file names, sorted.
@@ -350,14 +350,19 @@ fn removing_a_plugin_deletes_its_entry_and_record() {
 fn start_up_removes_orphans_and_partial_files_and_keeps_current_entries() {
     let cached = Cached::new();
     warm(&cached);
-    for orphan in ["gone.cwasm", "cache-test.cwasm.partial", "stray.txt"] {
+    for orphan in [
+        "plugin-gone.cwasm",
+        "plugin-cache-test.cwasm.partial",
+        "cache-test.cwasm",
+        "stray.txt",
+    ] {
         fs::write(cached.folder.join(orphan), b"synthetic").expect("an orphan");
     }
     fs::create_dir(cached.folder.join("subfolder")).expect("a synthetic subfolder");
 
     let store = cached.temp.open();
     let mut runtime = cached.start(&store, VERSION, sha256);
-    assert_eq!(cached.files(), ["cache-test.cwasm", "subfolder"]);
+    assert_eq!(cached.files(), ["plugin-cache-test.cwasm", "subfolder"]);
     let whole_cache: Vec<PluginEvent> = runtime.take_events();
     assert_eq!(
         whole_cache,
@@ -541,7 +546,7 @@ fn an_entry_that_cannot_be_read_is_a_miss_that_is_never_discarded() {
     // A folder where the entry belongs cannot be read or written as a file.
     fs::remove_file(cached.entry()).expect("remove the entry");
     fs::create_dir(cached.entry()).expect("a folder at the entry's name");
-    for orphan in ["gone.cwasm", "stray.txt"] {
+    for orphan in ["plugin-gone.cwasm", "stray.txt"] {
         fs::write(cached.folder.join(orphan), b"synthetic").expect("an orphan");
     }
 
@@ -549,7 +554,7 @@ fn an_entry_that_cannot_be_read_is_a_miss_that_is_never_discarded() {
     let mut runtime = cached.start(&store, VERSION, sha256);
     assert_eq!(
         cached.files(),
-        ["cache-test.cwasm"],
+        ["plugin-cache-test.cwasm"],
         "the orphans went all the same"
     );
     let whole_cache = runtime.take_events();

@@ -646,12 +646,12 @@ fn run(
 fn serve_accepted(
     usage: Arc<UsageRecorder>,
     startup: StartupFacts,
-    opened: Opened,
+    opened: OpenedSession,
     commands: mpsc::Receiver<SessionCommand>,
     events: &UnboundedSender<SessionEvent>,
     data_dir: &std::path::Path,
 ) -> Result<(), SessionError> {
-    let Opened {
+    let OpenedSession {
         store,
         mut worker,
         plugin_cache,
@@ -775,7 +775,7 @@ fn startup_session(
     commands: &mpsc::Receiver<SessionCommand>,
     events: &UnboundedSender<SessionEvent>,
     facts: &mut StartupFacts,
-) -> Result<Option<Opened>, SessionError> {
+) -> Result<Option<OpenedSession>, SessionError> {
     // The guarded preflight retains either the existing primary or the exact recovery offer.
     let confirmed = match recovery::prepare_startup(data_dir)? {
         StartupStorage::Ready(lease) => match open_session(lease, false) {
@@ -813,7 +813,7 @@ fn open_with_repair(
     error: SessionError,
     commands: &mpsc::Receiver<SessionCommand>,
     events: &UnboundedSender<SessionEvent>,
-) -> Result<Option<Opened>, SessionError> {
+) -> Result<Option<OpenedSession>, SessionError> {
     let Some(reason) = history_repair::repairable(&error) else {
         return Err(error);
     };
@@ -828,7 +828,7 @@ fn open_with_repair(
 
 /// What a successful open hands the session: the store, the restored worker, and the
 /// compiled-code cache's folder opened under the same lease (#137).
-struct Opened {
+struct OpenedSession {
     store: Store,
     worker: Worker,
     plugin_cache: Result<CacheFolder, LocationError>,
@@ -836,11 +836,11 @@ struct Opened {
 
 /// Opens the store and the deletion journal; `repair` rebuilds the journal and clears all
 /// history first, which the owner has confirmed.
-fn open_session(lease: WindowsDirectoryLease, repair: bool) -> Result<Opened, SessionError> {
+fn open_session(lease: WindowsDirectoryLease, repair: bool) -> Result<OpenedSession, SessionError> {
     let lease = Arc::new(lease);
     let store = Store::open(lease.clone()).map_err(SessionError::Store)?;
     match open_worker(&store, &lease, repair) {
-        Ok(worker) => Ok(Opened {
+        Ok(worker) => Ok(OpenedSession {
             store,
             worker,
             plugin_cache: lease.cache_folder(plugins::CACHE_FOLDER),

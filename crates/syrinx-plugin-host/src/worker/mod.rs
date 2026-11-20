@@ -19,7 +19,7 @@ use crate::registry::RegisteredPlugin;
 use crate::session::{CallResult, RequestIds, Session};
 use crate::{CacheError, Failure, HostError, PluginHost, Runtime, limits};
 
-use thread::{Job, Prepared, Shared, Worker, prepare};
+use thread::{Job, Prepared, Shared, Worker};
 
 /// Makes the services behind a plugin's imports, once per instance.
 pub type ServiceFactory<S> = Arc<dyn Fn(&PluginManifest) -> S + Send + Sync>;
@@ -128,6 +128,7 @@ pub struct Plugins<S: PluginHost> {
 }
 
 /// One plugin's compile ahead of its first activation, run on its own thread.
+#[cfg(feature = "store")]
 struct Background<S: 'static> {
     runtime: Runtime,
     manifest: PluginManifest,
@@ -176,7 +177,7 @@ impl<S: PluginHost> Plugins<S> {
 
     /// `new`, sending every `PluginEvent` on `events`, a channel the caller already reports
     /// other events on.
-    pub fn with_events(
+    pub(crate) fn with_events(
         runtime: Runtime,
         host_version: impl Into<String>,
         grants: GrantSet,
@@ -218,7 +219,8 @@ impl<S: PluginHost> Plugins<S> {
     /// starts meanwhile waits for this compile rather than compiling twice. Returns at once;
     /// without a cache nothing is compiled. A thread that cannot start is reported as
     /// `PluginEvent::PrepareFailed`, and the first activation compiles instead.
-    pub fn prepare_in_background(&mut self, plugin: &str) -> CallResult<()> {
+    #[cfg(feature = "store")]
+    pub(crate) fn prepare_in_background(&mut self, plugin: &str) -> CallResult<()> {
         let slot = self
             .slots
             .get(plugin)
@@ -249,6 +251,7 @@ impl<S: PluginHost> Plugins<S> {
     }
 
     /// Join each background compile that has finished, reporting one that panicked.
+    #[cfg(feature = "store")]
     fn join_finished_compiles(&mut self) {
         let (finished, running) = std::mem::take(&mut self.preparing)
             .into_iter()
@@ -544,6 +547,7 @@ pub(crate) fn send_event(events: &Sender<PluginEvent>, event: PluginEvent) {
     }
 }
 
+#[cfg(feature = "store")]
 impl<S: PluginHost> Background<S> {
     /// Compile the plugin unless the cache is current for it; the cache reports its own
     /// problems, and a failed compile is reported here.
@@ -554,7 +558,7 @@ impl<S: PluginHost> Background<S> {
         {
             return;
         }
-        let compiled = prepare(
+        let compiled = thread::prepare(
             &self.runtime,
             &self.manifest,
             &self.component,

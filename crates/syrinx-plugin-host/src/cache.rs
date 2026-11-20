@@ -22,6 +22,7 @@ pub(crate) trait CompiledCache: Send + Sync {
 
     /// Whether an entry for these bytes is recorded under the current key. Its file is not
     /// read: `fetch` checks that when the plugin activates. Unknown counts as not current.
+    #[cfg(feature = "store")]
     fn is_current(&self, plugin_id: &str, wasm: &[u8]) -> bool;
 }
 
@@ -29,7 +30,7 @@ pub(crate) trait CompiledCache: Send + Sync {
 /// plugin from loading. No message carries a path.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CacheError {
-    /// An entry did not match its record, or wasmtime refused it; it was deleted.
+    /// An entry was refused, for the reason given, and deleted with its record.
     Refused(Refusal),
     /// A file in the cache folder could not be read, written or removed.
     File(io::ErrorKind),
@@ -45,7 +46,7 @@ pub enum CacheError {
     Serialize(String),
 }
 
-/// Why a cached entry was refused before or while it was deserialised.
+/// Why a cached entry was refused and deleted.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Refusal {
     /// The record names a file that is not there.

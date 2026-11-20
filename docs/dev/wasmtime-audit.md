@@ -93,10 +93,12 @@ The plugin host now calls `Component::serialize` and the `unsafe`
 `cranelift` features: no feature, version or crate changes. wasmtime's own
 on-disk cache (`cache_config_load`, the `cache` feature) stays off.
 
-- **Where.** Only `crates/syrinx-plugin-host/src/owner/cache.rs` calls them,
-  for the runtime the application owns. The test host and plugin repositories
-  never do. `deserialize_file`, which memory-maps the file so a later change on
-  disk could reach a mapped page, is never called.
+- **Where.** Only `crates/syrinx-plugin-host/src/owner/cache.rs` calls
+  `deserialize`, and in product code only it calls `serialize`, for the runtime
+  the application owns. One integration test (`tests/owner/cache.rs`)
+  serialises a fixture to plant a mismatched entry. The published test host and
+  plugin repositories never call either. `deserialize_file`, which memory-maps
+  the file so a later change on disk could reach a mapped page, is never called.
 - **Under which check.** An entry is deserialised only when the store's
   `plugin_compiled` row (schema version 9) names the SHA-256 of these exact
   `plugin.wasm` bytes, the SHA-256 of the engine's

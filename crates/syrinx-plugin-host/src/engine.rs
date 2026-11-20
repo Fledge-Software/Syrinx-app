@@ -106,22 +106,14 @@ impl Runtime {
         plugin: &RegisteredPlugin,
         bytes: &[u8],
     ) -> Result<Component, HostError> {
-        self.compile_manifest(plugin.manifest(), bytes)
-    }
-
-    /// `compile_package` for a manifest the caller kept from a registered plugin.
-    pub(crate) fn compile_manifest(
-        &self,
-        manifest: &PluginManifest,
-        bytes: &[u8],
-    ) -> Result<Component, HostError> {
         refuse_precompiled(bytes)?;
-        self.compile_checked(manifest, bytes)
+        self.compile_checked(plugin.manifest(), bytes)
     }
 
-    /// `compile_manifest` through the runtime's cache, when it has one: a current entry that
-    /// passes every check is loaded instead of compiled, and a component compiled here is kept
-    /// for next time. The cache reports its own problems; none stops the plugin.
+    /// Compile a plugin as `compile_package` does, through the runtime's cache when it has
+    /// one: a current entry that passes every check is loaded instead of compiled, and a
+    /// component compiled here is kept for next time. The cache reports its own problems;
+    /// none stops the plugin.
     pub(crate) fn compile_cached(
         &self,
         manifest: &PluginManifest,
@@ -141,6 +133,7 @@ impl Runtime {
 
     /// Whether the plugin has no current cache entry, so compiling it ahead of activation
     /// saves its first activation the compile. Without a cache nothing is saved.
+    #[cfg(feature = "store")]
     pub(crate) fn needs_compiling(&self, manifest: &PluginManifest, bytes: &[u8]) -> bool {
         self.cache
             .as_ref()
@@ -148,6 +141,7 @@ impl Runtime {
     }
 
     /// Whether plugins' native code is kept in a compiled-code cache.
+    #[cfg(feature = "store")]
     pub(crate) fn has_cache(&self) -> bool {
         self.cache.is_some()
     }

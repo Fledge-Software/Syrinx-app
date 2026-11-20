@@ -29,7 +29,10 @@ pub struct CacheSetup {
     pub sha256: Sha256,
 }
 
-/// The file extension of a cache entry; an entry being written carries `PARTIAL` after it.
+/// A cache entry's file name is `PREFIX`, the plugin id and `.ENTRY`; one being written carries
+/// `.PARTIAL` after that. The prefix keeps every name clear of Windows' reserved device names,
+/// such as `nul` or `com1`, which a bare plugin id could otherwise be.
+const PREFIX: &str = "plugin-";
 const ENTRY: &str = "cwasm";
 const PARTIAL: &str = "partial";
 
@@ -329,7 +332,7 @@ fn is_plain_id(plugin_id: &str) -> bool {
 }
 
 fn entry_name(plugin_id: &str) -> String {
-    format!("{plugin_id}.{ENTRY}")
+    format!("{PREFIX}{plugin_id}.{ENTRY}")
 }
 
 /// Write `bytes` to a fresh partial file beside `path`, then rename it over `path`, so a
@@ -380,6 +383,17 @@ mod tests {
         let long = "a".repeat(65);
         for id in ["", "..", "a.b", "a/b", "a\\b", "Cache", long.as_str()] {
             assert!(!is_plain_id(id), "{id}");
+        }
+    }
+
+    #[test]
+    fn no_entry_name_is_a_windows_device_name() {
+        for (id, name) in [
+            ("nul", "plugin-nul.cwasm"),
+            ("com1", "plugin-com1.cwasm"),
+            ("lpt9", "plugin-lpt9.cwasm"),
+        ] {
+            assert_eq!(entry_name(id), name);
         }
     }
 
