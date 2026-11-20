@@ -43,8 +43,9 @@ mod x11_errors;
 
 pub use storage::local_app_data;
 pub use storage::{
-    CacheFolder, DeletionJournal, JournalError, RecoveryError, RecoveryOffer, RecoveryOutcome,
-    StartupStorage, WindowsDirectoryLease, offer_recovery, prepare_startup, read_deletion_log,
+    CacheFolder, DeletionJournal, ExcludedSitesFile, JournalError, RecoveryError, RecoveryOffer,
+    RecoveryOutcome, StartupStorage, WindowsDirectoryLease, offer_recovery, prepare_startup,
+    read_deletion_log,
 };
 
 /// Process-wide settings the platform needs before anything else runs; nothing on Windows.
