@@ -82,9 +82,8 @@ fn source_changes(state: &LoadState, new_document: bool) -> Vec<HistoryChange> {
 fn find_events_number_matches_from_one_and_wrap_in_both_directions() {
     let (shared, mut events) = page_events();
     let find = FindState::default();
-    assert!(find.begin(41, "synthetic", 7, &shared));
-    find.count.set(3);
-    find.report(7, &shared);
+    search(&find, 41, "synthetic", &shared);
+    find.answered(3, 7, &shared);
     expect_find(&mut events, 41, 3, 1);
     for (forward, expected) in [
         (true, 2),
@@ -94,29 +93,115 @@ fn find_events_number_matches_from_one_and_wrap_in_both_directions() {
         (false, 2),
         (false, 1),
     ] {
-        assert!(find.step(forward));
-        find.report(7, &shared);
+        assert!(find.stepping(forward));
+        find.answered(3, 7, &shared);
         expect_find(&mut events, 41, 3, expected);
     }
-    find.count.set(0);
-    find.report(7, &shared);
+    search(&find, 41, "synthetic", &shared);
+    find.answered(0, 7, &shared);
     expect_find(&mut events, 41, 0, -1);
-    assert!(!find.step(true));
-    assert!(!find.step(false));
+    assert!(!find.stepping(true));
+    assert!(!find.stepping(false));
 }
 
 #[test]
 fn an_empty_find_completes_its_request_and_retires_the_previous_search() {
     let (shared, mut events) = page_events();
     let find = FindState::default();
-    assert!(find.begin(41, "synthetic", 7, &shared));
-    find.count.set(3);
+    search(&find, 41, "synthetic", &shared);
     assert!(!find.begin(42, "", 7, &shared));
     expect_find(&mut events, 42, 0, -1);
-    assert!(!find.step(true));
+    assert!(!find.stepping(true));
     // A late native callback from the ended search cannot resurrect its request.
-    find.count.set(3);
-    find.report(7, &shared);
+    find.answered(3, 7, &shared);
+    expect_no_find(&mut events);
+}
+
+#[test]
+fn a_next_sent_before_a_new_search_answers_steps_against_the_new_count() {
+    let (shared, mut events) = page_events();
+    let find = FindState::default();
+    search(&find, 41, "one", &shared);
+    find.answered(1, 7, &shared);
+    expect_find(&mut events, 41, 1, 1);
+    // Native order (#245): the search selects the first of three, the Next the second.
+    search(&find, 42, "three", &shared);
+    assert!(find.stepping(true));
+    find.answered(3, 7, &shared);
+    find.answered(3, 7, &shared);
+    expect_find(&mut events, 42, 3, 1);
+    expect_find(&mut events, 42, 3, 2);
+}
+
+#[test]
+fn rapid_typing_reports_only_the_latest_query_with_its_own_count() {
+    let (shared, mut events) = page_events();
+    let find = FindState::default();
+    for (request, text) in [(41, "s"), (42, "sy"), (43, "syn")] {
+        search(&find, request, text, &shared);
+    }
+    // Replies arrive in send order; the first two answer retired requests.
+    for count in [36, 8, 2] {
+        find.answered(count, 7, &shared);
+    }
+    expect_find(&mut events, 43, 2, 1);
+    expect_no_find(&mut events);
+}
+
+#[test]
+fn a_step_answered_with_a_count_of_one_keeps_the_search_total() {
+    let (shared, mut events) = page_events();
+    let find = FindState::default();
+    search(&find, 41, "synthetic", &shared);
+    find.answered(3, 7, &shared);
+    expect_find(&mut events, 41, 3, 1);
+    // WebKitGTK 2.52 answers every Next and Previous with a count of one.
+    for expected in [2, 3, 1] {
+        assert!(find.stepping(true));
+        find.answered(1, 7, &shared);
+        expect_find(&mut events, 41, 3, expected);
+    }
+}
+
+#[test]
+fn a_step_that_finds_nothing_reports_no_match_and_refuses_further_steps() {
+    let (shared, mut events) = page_events();
+    let find = FindState::default();
+    search(&find, 41, "synthetic", &shared);
+    assert!(find.stepping(true));
+    find.answered(0, 7, &shared);
+    find.answered(0, 7, &shared);
+    expect_find(&mut events, 41, 0, -1);
+    expect_find(&mut events, 41, 0, -1);
+    assert!(!find.stepping(true));
+}
+
+#[test]
+fn replies_in_flight_at_stop_are_retired_before_the_next_search_is_answered() {
+    let (shared, mut events) = page_events();
+    let find = FindState::default();
+    search(&find, 41, "old", &shared);
+    assert!(find.stepping(false));
+    find.stop();
+    assert!(!find.stepping(true));
+    search(&find, 42, "new", &shared);
+    for count in [5, 1, 2] {
+        find.answered(count, 7, &shared);
+    }
+    expect_find(&mut events, 42, 2, 1);
+    expect_no_find(&mut events);
+    // A reply nothing was sent for is ignored rather than credited to the current request.
+    find.answered(9, 7, &shared);
+    expect_no_find(&mut events);
+}
+
+/// Begin a nonempty query and record its native search, as `Page::find` does.
+fn search(find: &FindState, request: u64, text: &str, shared: &Shared) {
+    assert!(find.begin(request, text, 7, shared));
+    find.searching();
+}
+
+fn expect_no_find(events: &mut futures::channel::mpsc::UnboundedReceiver<BrowserEvent>) {
     assert!(matches!(
         events.try_recv(),
         Err(futures::channel::mpsc::TryRecvError::Empty)

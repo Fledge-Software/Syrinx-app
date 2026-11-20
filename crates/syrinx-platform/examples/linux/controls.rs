@@ -46,8 +46,25 @@ document.addEventListener('selectionchange',()=>{
 });
 </script>"#;
 
+/// Reports every selected occurrence itself, so overlapping Find needs no armed key or focus.
+const OVERLAP_PAGE: &str = r#"<!doctype html><title>overlap-ready</title><link rel=icon href=data:,>
+<p><span data-occurrence=1>overlapneedle</span>
+<span data-occurrence=2>overlapneedle</span>
+<span data-occurrence=3>OVERLAPNEEDLE</span></p><script>
+document.addEventListener('selectionchange',()=>{
+  const selection=getSelection();
+  if(!selection||selection.toString().toLowerCase()!=='overlapneedle')return;
+  const owner=selection.anchorNode?.parentElement?.closest('[data-occurrence]');
+  if(owner)document.title='overlap-selected:'+owner.dataset.occurrence;
+});
+</script>"#;
+
 pub fn response(route: &str) -> Option<&'static str> {
-    (route == "/controls").then_some(PAGE)
+    match route {
+        "/controls" => Some(PAGE),
+        "/controls-overlap" => Some(OVERLAP_PAGE),
+        _ => None,
+    }
 }
 
 pub fn run() -> Result<(), String> {
@@ -79,10 +96,11 @@ pub fn run() -> Result<(), String> {
     }
     mute_states(&mut fixture)?;
     cancel_print(&mut fixture)?;
+    overlapping_find(&mut fixture, &server)?;
     fixture.stop(Duration::from_secs(5))?;
     server.finish()?;
     println!(
-        "Linux controls: Find counts/steps/wrap/chrome focus, zoom, shown/hidden mute and print cancellation passed."
+        "Linux controls: Find counts/steps/wrap/overlap/chrome focus, zoom, shown/hidden mute and print cancellation passed."
     );
     Ok(())
 }
@@ -209,6 +227,157 @@ fn find_result(
 ) -> Result<(), String> {
     let mut observed = FindObservation::new(request, count, active, operation);
     fixture.wait_checked("native Find result", |event, _| observed.observe(event))
+}
+
+/// Send Find operations in one burst; WebKit's replies must reach only their own request (#245).
+fn overlapping_find(fixture: &mut Fixture, server: &Server) -> Result<(), String> {
+    fixture.create(OVERLAP, server.url("/controls-overlap"))?;
+    fixture.loaded(OVERLAP)?;
+    let find = |request, text: &str, case_sensitive| PageAction::Find {
+        request,
+        text: text.into(),
+        case_sensitive,
+    };
+    burst(
+        fixture,
+        [find(50, "OVERLAPNEEDLE", true)],
+        50,
+        &[(1, 1)],
+        Some(3),
+    )?;
+    // A Next sent before the new search answers steps through the new query's three matches.
+    unselect(fixture)?;
+    let early_next = [find(51, "overlapneedle", false), PageAction::FindNext];
+    burst(fixture, early_next, 51, &[(3, 1), (3, 2)], Some(2))?;
+    // Typing faster than WebKit answers reports only the last query. WebKit starts each
+    // search from the current selection and GTK drops its index, so no occurrence is asserted.
+    let typing = [
+        find(52, "o", false),
+        find(53, "ov", false),
+        find(54, "overlap", false),
+        find(55, "overlapneedle", false),
+    ];
+    burst(fixture, typing, 55, &[(3, 1)], None)?;
+    unselect(fixture)?;
+    let stepping = [
+        find(56, "overlapneedle", false),
+        PageAction::FindNext,
+        PageAction::FindNext,
+        PageAction::FindPrevious,
+    ];
+    burst(
+        fixture,
+        stepping,
+        56,
+        &[(3, 1), (3, 2), (3, 3), (3, 2)],
+        Some(2),
+    )?;
+    fixture.send(BrowserCommand::PageAction {
+        id: OVERLAP,
+        action: PageAction::StopFind,
+    })?;
+    fixture.send(BrowserCommand::Close { id: OVERLAP })?;
+    fixture.barrier()
+}
+
+/// The overlap tab, kept apart from the armed observer on tab 3000.
+const OVERLAP: u64 = 3001;
+
+/// Reload the overlap page so the next search starts with no selection, at the first match.
+fn unselect(fixture: &mut Fixture) -> Result<(), String> {
+    fixture.send(BrowserCommand::Reload { id: OVERLAP })?;
+    fixture.loaded(OVERLAP)
+}
+
+fn burst(
+    fixture: &mut Fixture,
+    actions: impl IntoIterator<Item = PageAction>,
+    request: u64,
+    expected: &[(i32, i32)],
+    selected: Option<u32>,
+) -> Result<(), String> {
+    for action in actions {
+        fixture.send(BrowserCommand::PageAction {
+            id: OVERLAP,
+            action,
+        })?;
+    }
+    let mut overlap = OverlapObservation::new(request, expected);
+    fixture.wait_checked("overlapping Find results", |event, _| {
+        overlap.observe(event)?;
+        Ok(overlap.complete(selected))
+    })?;
+    fixture.barrier_checked(|event| overlap.observe(event))?;
+    fixture.watch_for(
+        "no late overlapping Find result",
+        Duration::from_millis(200),
+        |event| overlap.observe(event),
+    )?;
+    require(
+        overlap.complete(selected),
+        &format!(
+            "Overlapping Find settled on occurrence {:?}, expected {selected:?}",
+            overlap.selected
+        ),
+    )
+}
+
+/// Requires the burst's reports in order, for its own request only, and the page's selection.
+struct OverlapObservation<'a> {
+    request: u64,
+    expected: &'a [(i32, i32)],
+    seen: usize,
+    selected: Option<u32>,
+}
+
+impl<'a> OverlapObservation<'a> {
+    fn new(request: u64, expected: &'a [(i32, i32)]) -> Self {
+        Self {
+            request,
+            expected,
+            seen: 0,
+            selected: None,
+        }
+    }
+
+    fn observe(&mut self, event: &BrowserEvent) -> Result<(), String> {
+        match event {
+            BrowserEvent::FindResult {
+                id: OVERLAP,
+                request,
+                count,
+                active,
+            } => {
+                require(
+                    *request == self.request,
+                    &format!("Retired Find request {request} reported {active} of {count}"),
+                )?;
+                let expected = self.expected.get(self.seen).copied();
+                require(
+                    expected == Some((*count, *active)),
+                    &format!(
+                        "Find report {} for request {request}: expected {expected:?}, received ({count}, {active})",
+                        self.seen + 1
+                    ),
+                )?;
+                self.seen += 1;
+            }
+            BrowserEvent::Title { id: OVERLAP, title } => {
+                if let Some(occurrence) = title.strip_prefix("overlap-selected:") {
+                    let occurrence = occurrence
+                        .parse()
+                        .map_err(|_| "Malformed overlap selection report")?;
+                    self.selected = Some(occurrence);
+                }
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    fn complete(&self, selected: Option<u32>) -> bool {
+        self.seen == self.expected.len() && (selected.is_none() || self.selected == selected)
+    }
 }
 
 fn mute_states(fixture: &mut Fixture) -> Result<(), String> {

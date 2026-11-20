@@ -666,30 +666,39 @@ i5-4460 / HD 4600; no budget changed.
   The shared label is one-based and empty Find must complete with `0/-1`.
   Require native found/failed completion plus independent authored selected-span
   evidence for sequential direction and wrap checks. GTK drops the returned
-  query and native index, so this does not prove overlapping-operation
-  correlation; that pre-existing gap is #245. Source: `browser_gtk/page.rs`,
+  query and native index; overlapping operations are paired with their
+  requests separately (the next trap, #245). Source: `browser_gtk/page.rs`,
   `examples/linux/controls/find_observation.rs` and their RED/GREEN regressions
   (source-confirmed, 2026-11-05; native baseline, reversed-direction mutation
   and real Find-label inspection passed in the `a01b28d` receipt).
-- **The Find label can name the wrong match, because a late completion is
-  reported as the newer request.** `FindState::begin` sets the new request and
-  `step` moves the stepped position at once, but WebKit answers each `search`,
-  `search_next` and `search_previous` later, so an older `found-text` count is
-  emitted with the newer request number. `begin` also keeps the previous
-  query's count, so a Next sent before the new search answers steps modulo the
-  old count (old count 1, new count 3: the label settles on 1 of 3 while the
-  selection is on the second match; an old count of 0 drops the Next). Do not
-  correlate by guessing: WebKitGTK 2.54.1 discards the string and match index
-  at the signal (`WebKitFindController.cpp`, line 129, which emits only the
-  count), although its source answers one page's requests in the order sent
-  (`WebPage::FindString` replies synchronously, since GTK's drawing area keeps
-  `dispatchAfterEnsuringUpdatedScrollPosition`'s immediate default; image
-  analysis is Cocoa-only and, without site isolation, a page has no remote
-  pages), given in-order reply dispatch on one connection and no process swap
-  in between. That order is what a fix would rest on, and it is unproven
-  natively; see #245. Source: `browser_gtk/page.rs` and WebKitGTK 2.54.1's
-  `WebPageProxy.cpp`, `FindController.cpp` and `DrawingArea.cpp`
-  (source-confirmed, 2026-11-20; not reproduced).
+- **A Find reply carries only a count, so it must be paired with its request
+  by order.** WebKitGTK answers `search`, `search_next` and
+  `search_previous` later, through `found-text` or `failed-to-find-text`, and
+  drops the string and match index at that signal (`WebKitFindController.cpp`,
+  line 129). Reading the current request when a reply arrives credited an
+  older query's count to the newer request, and a Next sent before a new
+  search answered stepped modulo the old count (old count 1, new count 3: the
+  label settled on "1 of 1" while the selection was on the second match).
+  `browser_gtk/page_find.rs` records each operation it sends and lets each
+  reply retire the oldest one; keep that order, and record before calling
+  WebKit, in case it answers synchronously. It rests on
+  WebKit answering one page's operations once each, in send order: under
+  Xvfb on WebKitGTK 2.52.6, three runs of 1,032 overlapping searches and
+  steps were all answered in send order with no reply missing or extra (549
+  searches with distinct counts each matched their own query), and source
+  reading of 2.54.1 agrees (`WebPage::FindString` replies synchronously on
+  GTK). That a reply cancelled by a web-process crash still arrives, as a
+  failure, is expected from IPC's completion handlers but not traced. Also, WebKitGTK before
+  2.54 answers every Next and Previous with a count of one, because only 2.54
+  adds `DetermineMatchIndex` to every operation, so the total comes from the
+  search's reply. A new search starts from the current selection, and GTK
+  never says which match it chose, so "1 of n" after a search is right only
+  with no prior selection; that limit is unchanged. Source:
+  `examples/linux/controls.rs`'s `overlapping_find` (failed on the old
+  state, passed 5/5 with the fix under Xvfb, 2026-11-20) and WebKitGTK
+  2.52.6 and 2.54.1's `FindController.cpp` and `WebPageProxy.cpp`
+  (observed and source-confirmed; not yet run on the owner's Hyprland
+  machine).
 - **Native X11 focus alone does not establish window-manager activation.**
   At `cb44257`, three permissions runs failed the native-focus guard before
   Enter, and one earlier X11 probe failed popup-to-chrome transfer. Fixtures
