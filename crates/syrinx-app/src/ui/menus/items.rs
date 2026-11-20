@@ -1,5 +1,5 @@
 //! The page menu behind ☰ and the sidebar's ⋯ menu: which items each holds, how they open,
-//! and what choosing an item does (#95).
+//! and what choosing any menu item does (#95).
 
 use super::*;
 

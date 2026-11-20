@@ -64,7 +64,7 @@ impl MenuView {
         }
     }
 
-    pub(super) fn send(&self, action: MenuAction, cx: &mut Context<Self>) {
+    fn send(&self, action: MenuAction, cx: &mut Context<Self>) {
         let generation = self.generation;
         let queued = self.browser.update(cx, |browser, cx| {
             browser.queue_menu_action(generation, action, cx);
@@ -307,7 +307,7 @@ impl MenuStep {
 
     /// The row selected after this step; Down from nothing selects the first row, Up the
     /// last, and both wrap around the ends as Windows menus do.
-    pub(super) fn apply(self, selected: Option<usize>, rows: usize) -> usize {
+    fn apply(self, selected: Option<usize>, rows: usize) -> usize {
         let last = rows.saturating_sub(1);
         match (self, selected) {
             (Self::First, _) | (Self::Next, None) => 0,
