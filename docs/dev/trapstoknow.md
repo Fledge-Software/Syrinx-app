@@ -1073,6 +1073,13 @@ uses its own tree. Still use a private target directory for each worktree.
   longer has. Source: #53's blocked-cleanup test and the folder audit in
   `crates/syrinx-search/src/fulltext/tests/fixture.rs` (observed; high).
 
+- **Tantivy opens a segment whose `.pos` file is missing, and fails only at
+  phrase search.** `SegmentReader::open` reads a missing positions file as
+  empty, while every other missing component fails the open. A failed empty
+  can leave exactly that, so `FullText::open` checks each searchable
+  segment's files itself and reports `Damaged`. Source: #240, found through a
+  flaky test in the review of #226 (observed; high).
+
 - **A NUL query can match padding beyond a field's text.** In the pinned
   frizbee 0.13.0 matcher, synthetic `\0` queries returned highlight indices
   equal to the field's byte length. Both the exhaustive and ASCII-filtered

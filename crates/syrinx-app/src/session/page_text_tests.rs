@@ -410,16 +410,12 @@ fn a_repair_whose_index_opens_but_cannot_restart_empties_its_folder_and_starts_a
 
 // Holding a file so it cannot be read or deleted is a Windows behaviour.
 
-/// The index's segment files in name order, which is NTFS's listing order: not a `.tantivy-*`
-/// lock and not `*.json`. Linux lists in hash order, so an unsorted first file could be a
-/// `.pos`, whose loss Tantivy reports only at search time.
+/// The index's segment files: not a `.tantivy-*` lock and not `*.json`.
 fn segment_files(fixture: &Fixture) -> Vec<PathBuf> {
-    let mut files: Vec<PathBuf> = checked_io(fs::read_dir(index_folder(fixture)))
+    checked_io(fs::read_dir(index_folder(fixture)))
         .map(|entry| checked_io(entry).path())
         .filter(|path| is_segment_file(path))
-        .collect();
-    files.sort();
-    files
+        .collect()
 }
 
 fn is_segment_file(path: &Path) -> bool {
@@ -429,32 +425,45 @@ fn is_segment_file(path: &Path) -> bool {
     })
 }
 
+/// Every file kind a committed segment holds, one per component.
+const SEGMENT_FILE_KINDS: [&str; 6] = ["pos", "term", "store", "idx", "fast", "fieldnorm"];
+
 #[test]
 fn an_ordinary_start_empties_an_index_a_failed_empty_left_without_some_segment_files() {
-    let fixture = Fixture::new();
-    let now = utc_seconds().expect("synthetic clock");
-    seed_index(&fixture, &[page("leftover", now - 600), note("lost")]);
-    // A failed empty deletes in listing order and stops at the held file, leaving the
-    // metadata and the rest of the segment behind.
-    let segment = segment_files(&fixture);
-    let (deleted, kept) = segment
-        .split_first()
-        .expect("the synthetic index has a segment");
-    checked_io(fs::remove_file(deleted));
+    // A failed empty deletes in listing order and stops part-way, leaving the metadata and
+    // any of the segment's files behind: by name on Windows, in hash order on Linux (#240).
+    for kind in SEGMENT_FILE_KINDS {
+        let fixture = Fixture::new();
+        let now = utc_seconds().expect("synthetic clock");
+        seed_index(&fixture, &[page("leftover", now - 600), note("lost")]);
+        let segment = segment_files(&fixture);
+        let (deleted, kept): (Vec<_>, Vec<_>) = segment
+            .into_iter()
+            .partition(|file| file.extension().is_some_and(|found| found == kind));
+        assert_eq!(
+            deleted.len(),
+            1,
+            "the synthetic segment has one .{kind} file"
+        );
+        checked_io(fs::remove_file(&deleted[0]));
 
-    let lease = WindowsDirectoryLease::prepare(&fixture.0).expect("guard synthetic data");
-    let mut page_text = page_text::PageText::open(&lease);
-    let index = page_text.index().expect("a fresh index is open");
-    assert!(ids_in(index, Namespace::page()).is_empty());
-    assert!(ids_in(index, notes()).is_empty());
-    assert!(
-        kept.iter().all(|file| !file.exists()),
-        "the leftover segment was removed"
-    );
-    assert_eq!(page_text.take_problem(), Ok(()));
-    drop(page_text);
-    drop(lease);
-    fixture.cleanup();
+        let lease = WindowsDirectoryLease::prepare(&fixture.0).expect("guard synthetic data");
+        let mut page_text = page_text::PageText::open(&lease);
+        let index = page_text.index().expect("a fresh index is open");
+        assert!(
+            ids_in(index, Namespace::page()).is_empty(),
+            "without .{kind}"
+        );
+        assert!(ids_in(index, notes()).is_empty(), "without .{kind}");
+        assert!(
+            kept.iter().all(|file| !file.exists()),
+            "the leftover segment was removed without .{kind}"
+        );
+        assert_eq!(page_text.take_problem(), Ok(()), "without .{kind}");
+        drop(page_text);
+        drop(lease);
+        fixture.cleanup();
+    }
 }
 
 // Holding a file so it cannot be read or deleted is a Windows behaviour.
