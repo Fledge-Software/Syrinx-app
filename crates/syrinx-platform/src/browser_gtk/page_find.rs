@@ -7,7 +7,9 @@ use std::{
 
 use super::{BrowserEvent, Shared};
 
-/// The most operations left unanswered before Next and Previous wait for WebKit to reply.
+/// The most operations left unanswered before Next and Previous are refused.
+///
+/// Searches are never refused: the latest query must be kept, and each is one change to the query.
 const MAX_IN_FLIGHT: usize = 64;
 
 /// One native Find operation sent to WebKit and not yet answered.
@@ -111,6 +113,7 @@ impl FindState {
             }
             Sent::Step { forward, .. } => self.step(forward, count),
         }
+        // Unreachable while replies come in send order: a step's search always answers first.
         let Some(count) = self.count.get() else {
             return;
         };

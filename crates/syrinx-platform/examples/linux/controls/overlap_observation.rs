@@ -62,7 +62,8 @@ impl<'a> OverlapObservation<'a> {
         )
     }
 
-    /// An earlier request may report only its own search, and only before the final one does.
+    /// An earlier request may report only with its own query's count, and only before the final
+    /// one does: the host can apply a reply between two sends, while that request is current.
     fn observe_report(&mut self, request: u64, count: i32, active: i32) -> Result<(), String> {
         if request != self.request {
             let own = self.earlier.iter().find(|(earlier, _)| *earlier == request);
@@ -71,10 +72,8 @@ impl<'a> OverlapObservation<'a> {
                 &format!("Request {request} reported after request {}", self.request),
             )?;
             return require(
-                own.is_some_and(|(_, own)| {
-                    (*own, if *own == 0 { -1 } else { 1 }) == (count, active)
-                }),
-                &format!("Request {request} reported {active} of {count}, not its own search"),
+                own.is_some_and(|&(_, own)| own == count && valid_position(count, active)),
+                &format!("Request {request} reported {active} of {count}, not its own query"),
             );
         }
         let expected = self.expected.get(self.seen).copied();
@@ -117,6 +116,15 @@ impl<'a> OverlapObservation<'a> {
             .iter()
             .all(|seen| remaining.any(|occurrence| occurrence == seen));
         in_order && self.selected.last() == expected.last()
+    }
+}
+
+/// A one-based position within `count` matches, or -1 when there are none.
+fn valid_position(count: i32, active: i32) -> bool {
+    if count == 0 {
+        active == -1
+    } else {
+        (1..=count).contains(&active)
     }
 }
 
@@ -195,7 +203,16 @@ mod tests {
         let earlier = [(52, 6), (53, 0)];
         let mut overlap = OverlapObservation::new(55, &[(3, 1)], None, &earlier);
         overlap.observe(&report(52, 6, 1)).unwrap();
+        overlap.observe(&report(52, 6, 2)).unwrap();
         overlap.observe(&report(53, 0, -1)).unwrap();
+        assert!(
+            overlap.observe(&report(53, 0, 1)).is_err(),
+            "a match with none found"
+        );
+        assert!(
+            overlap.observe(&report(52, 6, 7)).is_err(),
+            "outside its own matches"
+        );
         assert!(
             overlap.observe(&report(52, 3, 1)).is_err(),
             "credited the final count"

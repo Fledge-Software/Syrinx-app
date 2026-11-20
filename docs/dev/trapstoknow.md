@@ -682,11 +682,11 @@ i5-4460 / HD 4600; no budget changed.
   second match). `browser_gtk/page_find.rs` records each operation before
   sending it and lets each reply retire the oldest; keep that order, and
   never clear the record, since a reply still owed would then pair with a
-  later operation. It rests on WebKit answering one page's operations once
-  each, in send order. Under Xvfb on 2.52.6 that held for three runs of
-  1,032 overlapping operations (549 searches with distinct counts each
-  matched their own query), and through a killed web process, whose pending
-  searches came back as failures before the crash signal (3/3). A cross-site
+  later operation. Next and Previous are refused while 64 operations are
+  unanswered; searches never are. It rests on WebKit answering one page's
+  operations once each, in send order, which held natively for overlapping
+  searches and steps and through a killed web process, whose pending
+  searches came back as failures before the crash signal. A cross-site
   process swap with replies in flight could not be staged in the sandbox
   and is assumed, not observed. Source: `examples/linux/controls.rs`'s
   `overlapping_find`, run on its own under Xvfb because the full controls

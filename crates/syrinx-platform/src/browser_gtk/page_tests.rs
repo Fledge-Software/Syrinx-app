@@ -197,7 +197,7 @@ fn a_step_that_finds_nothing_reports_no_match_and_refuses_further_steps() {
     find.answered(0, 7, &shared);
     expect_find(&mut events, 41, 0, -1);
     assert!(!find.sending_step(true));
-    // A step already in flight when its search found nothing cannot invent a match.
+    // Before 2.54, a step in flight when its search found nothing cannot invent a match.
     search(&find, 42, "absent", &shared);
     assert!(find.sending_step(true));
     find.answered(0, 7, &shared);
@@ -226,7 +226,7 @@ fn replies_in_flight_at_stop_are_retired_before_the_next_search_is_answered() {
 }
 
 #[test]
-fn steps_wait_once_sixty_four_operations_are_unanswered() {
+fn steps_are_refused_once_sixty_four_operations_are_unanswered() {
     let (shared, mut events) = page_events();
     let find = FindState::new(false);
     search(&find, 41, "synthetic", &shared);
@@ -239,6 +239,20 @@ fn steps_wait_once_sixty_four_operations_are_unanswered() {
     find.answered(1, 7, &shared);
     expect_find(&mut events, 41, 3, 2);
     assert!(find.sending_step(true));
+}
+
+#[test]
+fn searches_are_never_refused_and_only_the_last_reports() {
+    let (shared, mut events) = page_events();
+    let find = FindState::new(false);
+    for request in 100..165 {
+        search(&find, request, "synthetic", &shared);
+    }
+    for _ in 100..165 {
+        find.answered(2, 7, &shared);
+    }
+    expect_find(&mut events, 164, 2, 1);
+    expect_no_find(&mut events);
 }
 
 /// Begin a nonempty query and record its native search, as `Page::find` does.

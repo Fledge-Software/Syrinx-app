@@ -242,14 +242,15 @@ fn overlapping_find(fixture: &mut Fixture, server: &Server) -> Result<(), String
         case_sensitive,
     };
     let only = [find(50, "OVERLAPNEEDLE", true)];
-    burst(fixture, only, (50, &[(1, 1)]), Some(&[3]), &[])?;
+    burst(fixture, only, 50, &[(1, 1)], Some(&[3]), &[])?;
     // A step sent before the new search answers steps through the new query's three matches.
     unselect(fixture)?;
     let early_next = [find(51, "overlapneedle", false), PageAction::FindNext];
     burst(
         fixture,
         early_next,
-        (51, &[(3, 1), (3, 2)]),
+        51,
+        &[(3, 1), (3, 2)],
         Some(&[1, 2]),
         &[],
     )?;
@@ -263,7 +264,7 @@ fn overlapping_find(fixture: &mut Fixture, server: &Server) -> Result<(), String
         find(55, "overlap", false),
     ];
     let earlier = [(52, 6), (53, 4), (54, 0)];
-    burst(fixture, typing, (55, &[(3, 1)]), None, &earlier)?;
+    burst(fixture, typing, 55, &[(3, 1)], None, &earlier)?;
     unselect(fixture)?;
     let stepping = [
         find(56, "overlapneedle", false),
@@ -272,15 +273,15 @@ fn overlapping_find(fixture: &mut Fixture, server: &Server) -> Result<(), String
         PageAction::FindPrevious,
     ];
     let reports = [(3, 1), (3, 2), (3, 3), (3, 2)];
-    burst(fixture, stepping, (56, &reports), Some(&[1, 2, 3, 2]), &[])?;
+    burst(fixture, stepping, 56, &reports, Some(&[1, 2, 3, 2]), &[])?;
     // StopFind retires replies still in flight, so they cannot reach the next search.
     let stopped = [
-        find(57, "oo", false),
+        find(57, "ov", false),
         PageAction::FindNext,
         PageAction::StopFind,
-        find(58, "OVERLAPNEEDLE", true),
+        find(58, "overlapneedle", false),
     ];
-    burst(fixture, stopped, (58, &[(1, 1)]), None, &[(57, 1)])?;
+    burst(fixture, stopped, 58, &[(3, 1)], None, &[(57, 4)])?;
     action_on(fixture, OVERLAP, PageAction::StopFind)?;
     fixture.send(BrowserCommand::Close { id: OVERLAP })?;
     fixture.barrier()
@@ -296,7 +297,8 @@ fn unselect(fixture: &mut Fixture) -> Result<(), String> {
 fn burst(
     fixture: &mut Fixture,
     actions: impl IntoIterator<Item = PageAction>,
-    (request, reports): (u64, &[(i32, i32)]),
+    request: u64,
+    reports: &[(i32, i32)],
     selections: Option<&[u32]>,
     earlier: &[(u64, i32)],
 ) -> Result<(), String> {
