@@ -97,7 +97,7 @@ fn find_events_number_matches_from_one_and_wrap_in_both_directions() {
         find.answered(3, 7, &shared);
         expect_find(&mut events, 41, 3, expected);
     }
-    // The same search later finds nothing; its steps are then refused.
+    // A later step finds nothing; further steps are then refused.
     assert!(find.sending_step(true));
     find.answered(0, 7, &shared);
     expect_find(&mut events, 41, 0, -1);

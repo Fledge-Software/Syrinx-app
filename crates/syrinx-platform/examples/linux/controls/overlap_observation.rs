@@ -52,6 +52,7 @@ impl<'a> OverlapObservation<'a> {
         self.seen == self.expected.len() && self.selection_matches()
     }
 
+    /// Summarises progress for a timeout message.
     pub(super) fn describe(&self) -> String {
         format!(
             "{} of {} reports; selections {:?}, expected {:?}",
