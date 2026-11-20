@@ -1,6 +1,8 @@
 //! Runs each active plugin on its own worker thread, never the UI thread, behind a bounded
 //! queue, so a slow, stuck or crashing plugin never stops the owner browsing (P2-03).
 
+#[cfg(feature = "store")]
+mod background;
 mod thread;
 
 use std::collections::BTreeMap;
@@ -127,16 +129,6 @@ pub struct Plugins<S: PluginHost> {
     preparing: Vec<(String, JoinHandle<()>)>,
 }
 
-/// One plugin's compile ahead of its first activation, run on its own thread.
-#[cfg(feature = "store")]
-struct Background<S: 'static> {
-    runtime: Runtime,
-    manifest: PluginManifest,
-    component: Arc<[u8]>,
-    prepared: Prepared<S>,
-    events: Sender<PluginEvent>,
-}
-
 struct Slot<S: 'static> {
     manifest: PluginManifest,
     component: Arc<[u8]>,
@@ -212,54 +204,6 @@ impl<S: PluginHost> Plugins<S> {
         };
         self.slots.insert(id, slot);
         Ok(())
-    }
-
-    /// Compile `plugin` on a background thread when the runtime's cache has no current entry
-    /// for it, so its first activation loads it instead of compiling. An activation that
-    /// starts meanwhile waits for this compile rather than compiling twice. Returns at once;
-    /// without a cache nothing is compiled. A thread that cannot start is reported as
-    /// `PluginEvent::PrepareFailed`, and the first activation compiles instead.
-    #[cfg(feature = "store")]
-    pub(crate) fn prepare_in_background(&mut self, plugin: &str) -> CallResult<()> {
-        let slot = self
-            .slots
-            .get(plugin)
-            .ok_or_else(|| HostError::Refused(format!("{plugin} is not installed")))?;
-        if !self.runtime.has_cache() {
-            return Ok(());
-        }
-        let background = Background {
-            runtime: self.runtime.clone(),
-            manifest: slot.manifest.clone(),
-            component: Arc::clone(&slot.component),
-            prepared: Arc::clone(&slot.prepared),
-            events: self.events.clone(),
-        };
-        self.join_finished_compiles();
-        let spawned = std::thread::Builder::new()
-            .name(format!("syrinx-prepare-{plugin}"))
-            .spawn(move || background.run());
-        match spawned {
-            Ok(thread) => self.preparing.push((plugin.to_owned(), thread)),
-            Err(error) => {
-                let error = HostError::Unavailable(format!("no compile thread: {error}"));
-                let plugin = plugin.to_owned();
-                send_event(&self.events, PluginEvent::PrepareFailed { plugin, error });
-            }
-        }
-        Ok(())
-    }
-
-    /// Join each background compile that has finished, reporting one that panicked.
-    #[cfg(feature = "store")]
-    fn join_finished_compiles(&mut self) {
-        let (finished, running) = std::mem::take(&mut self.preparing)
-            .into_iter()
-            .partition(|(_, thread)| thread.is_finished());
-        self.preparing = running;
-        for (plugin, thread) in finished {
-            join_compile(&self.events, plugin, thread);
-        }
     }
 
     /// How many components the runtime compiled and loaded from its cache: a diagnostic for
@@ -544,30 +488,6 @@ fn join_compile(events: &Sender<PluginEvent>, plugin: String, thread: JoinHandle
 pub(crate) fn send_event(events: &Sender<PluginEvent>, event: PluginEvent) {
     if let Err(unsent) = events.send(event) {
         eprintln!("a plugin event had no listener: {:?}", unsent.0);
-    }
-}
-
-#[cfg(feature = "store")]
-impl<S: PluginHost> Background<S> {
-    /// Compile the plugin unless the cache is current for it; the cache reports its own
-    /// problems, and a failed compile is reported here.
-    fn run(self) {
-        if !self
-            .runtime
-            .needs_compiling(&self.manifest, &self.component)
-        {
-            return;
-        }
-        let compiled = thread::prepare(
-            &self.runtime,
-            &self.manifest,
-            &self.component,
-            &self.prepared,
-        );
-        if let Err(error) = compiled {
-            let plugin = self.manifest.id().to_owned();
-            send_event(&self.events, PluginEvent::PrepareFailed { plugin, error });
-        }
     }
 }
 

@@ -98,11 +98,13 @@ impl Fixture {
             remove_if_present(&self.0.join(name), false);
         }
         remove_if_present(&self.0.join("backups"), true);
-        // The index's files are Tantivy's own names, so its whole folder goes.
-        match fs::remove_dir_all(self.0.join(page_text::INDEX_FOLDER)) {
-            Ok(()) => {}
-            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
-            Err(error) => checked_io(Err(error)),
+        // The index's and the plugin cache's files are their own names, so each whole folder goes.
+        for folder in [page_text::INDEX_FOLDER, plugins::CACHE_FOLDER] {
+            match fs::remove_dir_all(self.0.join(folder)) {
+                Ok(()) => {}
+                Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+                Err(error) => checked_io(Err(error)),
+            }
         }
         checked_io(fs::remove_dir(self.0));
         checked_io(fs::remove_dir(self.1));
