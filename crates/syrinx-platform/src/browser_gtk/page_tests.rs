@@ -248,10 +248,11 @@ fn searches_are_never_refused_and_only_the_last_reports() {
     for request in 100..165 {
         search(&find, request, "synthetic", &shared);
     }
-    for _ in 100..165 {
-        find.answered(2, 7, &shared);
+    // Each search's reply carries its own count, so the last report must be the last reply.
+    for count in 1..=65 {
+        find.answered(count, 7, &shared);
     }
-    expect_find(&mut events, 164, 2, 1);
+    expect_find(&mut events, 164, 65, 1);
     expect_no_find(&mut events);
 }
 
