@@ -144,22 +144,18 @@ impl Downloads {
     /// A download Syrinx cannot place is refused and shown as a file error, with the cause logged.
     fn decide(&self, id: u64, download: &Download, suggested: &str, folder: Option<PathBuf>) {
         let Some(folder) = folder else {
-            self.drop_running(id);
-            download.cancel();
+            self.abandon(id, download);
             return;
         };
         if let Err(error) = ensure_folder(&folder) {
-            eprintln!(
-                "Syrinx could not create the Downloads folder {}: {error}",
-                folder.display()
-            );
+            // The folder's path names the owner's account, so only the cause is logged.
+            eprintln!("Syrinx could not create the Downloads folder: {error}");
             self.announce(id, download, &folder.join(safe_name(suggested)));
             self.refuse(id, download);
             return;
         }
         let Some(path) = fresh_path(&folder, suggested) else {
-            self.drop_running(id);
-            download.cancel();
+            self.abandon(id, download);
             return;
         };
         self.announce(id, download, &path);
@@ -178,13 +174,14 @@ impl Downloads {
     fn refuse(&self, id: u64, download: &Download) {
         let refused = DownloadState::Interrupted(DownloadInterruption::File);
         self.report(changed(id, download, refused));
-        self.drop_running(id);
-        download.cancel();
+        self.abandon(id, download);
     }
 
-    /// A download that never got a destination has no `finished` handler to leave the registry.
-    fn drop_running(&self, id: u64) {
+    /// Cancels a download that never got a destination and drops it from the registry, since
+    /// its `finished` handler, which would otherwise do that, is never connected.
+    fn abandon(&self, id: u64, download: &Download) {
         self.0.borrow_mut().running.remove(&id);
+        download.cancel();
     }
 
     /// Reports the download's start, now or once its popup has a tab.

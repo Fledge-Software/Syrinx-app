@@ -1,5 +1,6 @@
-//! Proves native download shutdown releases contexts and cancels without choosing a file, and
-//! that a finished download is reported complete and a cancelled one never is.
+//! Proves native download shutdown releases contexts and cancels without choosing a file, that
+//! a finished download is reported complete and a cancelled one never is, and that a missing
+//! Downloads folder is made while one that cannot be made refuses the download visibly (#242).
 
 #[test]
 fn shutdown_releases_tracked_views_and_their_context() {
@@ -186,6 +187,42 @@ impl Drop for SyntheticFolder {
     }
 }
 
+/// A registry with no pages or downloads yet, reporting into `events`.
+fn empty_registry(
+    events: futures::channel::mpsc::UnboundedSender<super::BrowserEvent>,
+) -> super::Downloads {
+    super::Downloads(std::rc::Rc::new(std::cell::RefCell::new(super::Registry {
+        events: super::EventSink(events, None),
+        pages: std::collections::HashMap::new(),
+        popups: std::rc::Rc::default(),
+        running: std::collections::HashMap::new(),
+        held: std::collections::HashMap::new(),
+        next: 0,
+        stopped: false,
+    })))
+}
+
+/// Runs GTK's main loop until `download` finishes, or for at most ten seconds.
+fn run_until_finished(download: &webkit2gtk::Download) {
+    use gtk::glib;
+    use webkit2gtk::DownloadExt;
+    let finished = glib::MainLoop::new(None, false);
+    let quit = finished.clone();
+    download.connect_finished(move |_| quit.quit());
+    let deadline = finished.clone();
+    let expired = std::rc::Rc::new(std::cell::Cell::new(false));
+    let elapsed = expired.clone();
+    let timer = glib::timeout_add_local_once(std::time::Duration::from_secs(10), move || {
+        elapsed.set(true);
+        deadline.quit();
+    });
+    finished.run();
+    // A timer that fired has already removed itself.
+    if !expired.get() {
+        timer.remove();
+    }
+}
+
 /// Downloads from the loopback `port` into `target` through the registry's own handlers and
 /// returns every reported change; `cancel` cancels the download once its first data arrives.
 fn download_states(
@@ -200,16 +237,7 @@ fn download_states(
             &webkit2gtk::WebsiteDataManager::new_ephemeral(),
         );
         let (events, mut outgoing) = futures::channel::mpsc::unbounded();
-        let registry =
-            super::Downloads(std::rc::Rc::new(std::cell::RefCell::new(super::Registry {
-                events: super::EventSink(events, None),
-                pages: std::collections::HashMap::new(),
-                popups: std::rc::Rc::default(),
-                running: std::collections::HashMap::new(),
-                held: std::collections::HashMap::new(),
-                next: 0,
-                stopped: false,
-            })));
+        let registry = empty_registry(events);
         let download = context
             .download_uri(&format!("http://127.0.0.1:{port}/synthetic"))
             .expect("native download");
@@ -225,21 +253,7 @@ fn download_states(
         if cancel {
             download.connect_received_data(|download, _| download.cancel());
         }
-        let finished = glib::MainLoop::new(None, false);
-        let quit = finished.clone();
-        download.connect_finished(move |_| quit.quit());
-        let deadline = finished.clone();
-        let expired = std::rc::Rc::new(std::cell::Cell::new(false));
-        let elapsed = expired.clone();
-        let timer = glib::timeout_add_local_once(std::time::Duration::from_secs(10), move || {
-            elapsed.set(true);
-            deadline.quit();
-        });
-        finished.run();
-        // A timer that fired has already removed itself.
-        if !expired.get() {
-            timer.remove();
-        }
+        run_until_finished(&download);
         let mut states = Vec::new();
         while let Ok(event) = outgoing.try_recv() {
             if let super::BrowserEvent::DownloadChanged {
@@ -300,25 +314,19 @@ fn a_cancelled_download_is_never_reported_complete() {
 }
 
 /// Downloads from the loopback `port` through the registry's own `decide`, with `folder` as the
-/// owner's Downloads folder, and returns every event it reported.
-fn download_into_folder(port: u16, folder: std::path::PathBuf) -> Vec<super::BrowserEvent> {
+/// owner's Downloads folder, and returns every event it reported and how many downloads the
+/// registry still holds afterwards.
+fn download_into_folder(
+    port: u16,
+    folder: std::path::PathBuf,
+) -> (Vec<super::BrowserEvent>, usize) {
     crate::gtk_thread::run(move || {
-        use gtk::glib;
         use webkit2gtk::{DownloadExt, WebContextExt};
         let context = webkit2gtk::WebContext::with_website_data_manager(
             &webkit2gtk::WebsiteDataManager::new_ephemeral(),
         );
         let (events, mut outgoing) = futures::channel::mpsc::unbounded();
-        let registry =
-            super::Downloads(std::rc::Rc::new(std::cell::RefCell::new(super::Registry {
-                events: super::EventSink(events, None),
-                pages: std::collections::HashMap::new(),
-                popups: std::rc::Rc::default(),
-                running: std::collections::HashMap::new(),
-                held: std::collections::HashMap::new(),
-                next: 0,
-                stopped: false,
-            })));
+        let registry = empty_registry(events);
         let download = context
             .download_uri(&format!("http://127.0.0.1:{port}/synthetic"))
             .expect("native download");
@@ -328,21 +336,9 @@ fn download_into_folder(port: u16, folder: std::path::PathBuf) -> Vec<super::Bro
             decider.decide(id, download, suggested, Some(folder.clone()));
             true
         });
-        let finished = glib::MainLoop::new(None, false);
-        let quit = finished.clone();
-        download.connect_finished(move |_| quit.quit());
-        let deadline = finished.clone();
-        let expired = std::rc::Rc::new(std::cell::Cell::new(false));
-        let elapsed = expired.clone();
-        let timer = glib::timeout_add_local_once(std::time::Duration::from_secs(10), move || {
-            elapsed.set(true);
-            deadline.quit();
-        });
-        finished.run();
-        if !expired.get() {
-            timer.remove();
-        }
-        std::iter::from_fn(|| outgoing.try_recv().ok()).collect()
+        run_until_finished(&download);
+        let events = std::iter::from_fn(|| outgoing.try_recv().ok()).collect();
+        (events, registry.0.borrow().running.len())
     })
     .expect("GTK thread")
 }
@@ -363,7 +359,7 @@ fn a_missing_downloads_folder_is_made_private_and_the_download_completes() {
     std::thread::spawn(move || serve_unsized_body(listener, BODY));
     let scratch = SyntheticFolder::new("download-missing-folder", port);
     let downloads = scratch.0.join("Downloads");
-    let events = download_into_folder(port, downloads.clone());
+    let (events, _) = download_into_folder(port, downloads.clone());
     let mode = std::fs::metadata(&downloads)
         .expect("the folder was made")
         .permissions()
@@ -377,4 +373,27 @@ fn a_missing_downloads_folder_is_made_private_and_the_download_completes() {
         reports(&events, syrinx_core::DownloadState::Completed),
         "{events:?}"
     );
+}
+
+#[test]
+fn a_downloads_folder_that_cannot_be_made_refuses_the_download_visibly() {
+    use syrinx_core::{DownloadInterruption, DownloadState};
+    const BODY: &[u8] = b"synthetic download body";
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("loopback listener");
+    let port = listener.local_addr().expect("listener address").port();
+    std::thread::spawn(move || serve_unsized_body(listener, BODY));
+    let scratch = SyntheticFolder::new("download-blocked-folder", port);
+    let downloads = scratch.0.join("Downloads");
+    std::fs::write(&downloads, b"a file in the folder's place").expect("blocking file");
+    let (events, running) = download_into_folder(port, downloads.clone());
+    assert!(
+        reports(
+            &events,
+            DownloadState::Interrupted(DownloadInterruption::File)
+        ),
+        "{events:?}"
+    );
+    assert!(!reports(&events, DownloadState::Completed), "{events:?}");
+    assert_eq!(running, 0, "a refused download leaves the registry");
+    assert!(downloads.is_file(), "the blocking file is left alone");
 }
