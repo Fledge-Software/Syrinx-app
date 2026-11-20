@@ -187,19 +187,17 @@ impl BrowserView {
         self.command(SessionCommand::ObserveHistory { id: tab, report });
     }
 
-    /// Closes an open history menu whose rows went stale as Escape does, so the keys go back
-    /// to the page (review of #213; trap: "Keys go to the page while GPUI still shows a
-    /// caret"). Its rows would otherwise jump to the wrong page.
+    /// Closes an open history menu when a report or relisting made its rows stale.
     fn close_stale_history_menu(
         &mut self,
         stale: Stale,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if stale == Stale::Keep || !matches!(self.open_menu_kind(), Some(MenuKind::History(_))) {
+        if stale == Stale::Keep {
             return;
         }
-        self.dismiss_menu(window, cx);
+        self.dismiss_stale_history_menu(window, cx);
     }
 
     /// Forgets a menu whose rows are still being read, so its late reply opens nothing.

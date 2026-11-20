@@ -1,5 +1,6 @@
 //! Builds Back and Forward's menu of the tab's recent pages, which hangs under its button and
-//! jumps straight to a row (#126; the owner chose this design on 2026-10-28).
+//! jumps straight to a row, and closes it when its rows go stale (#126; the owner chose this
+//! design on 2026-10-28).
 
 use syrinx_core::HistoryDirection;
 
@@ -26,17 +27,43 @@ impl BrowserView {
         let available =
             f32::from(window.viewport_size().height) - f32::from(anchor.y) - WINDOW_MARGIN;
         let rows = history_menu_rows(tab, direction, pages, available);
-        let opening = MenuOpening {
-            anchor: MenuAnchor {
-                position: anchor,
-                corner: Corner::TopLeft,
-            },
-            returns: MenuReturn::Page,
-            select_first,
-            asked: Vec::new(),
-        };
+        let opening = history_opening(anchor, select_first);
         self.show_menu_rows(kind, rows, opening, window, cx);
     }
+
+    /// Closes an open history menu whose rows went stale as Escape does, so the keys go back
+    /// to the page (review of #213; trap: "Keys go to the page while GPUI still shows a
+    /// caret"). Its rows would otherwise jump to the wrong page.
+    pub(in crate::ui) fn dismiss_stale_history_menu(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(action) = stale_history_close(self.open_menu_kind()) else {
+            return;
+        };
+        self.close_menu_by(action, window, cx);
+    }
+}
+
+/// How a history menu opens: hanging from `anchor`, and giving the keys back to the page when
+/// it closes, which is where they go after a stale close too.
+fn history_opening(anchor: Point<Pixels>, select_first: bool) -> MenuOpening {
+    MenuOpening {
+        anchor: MenuAnchor {
+            position: anchor,
+            corner: Corner::TopLeft,
+        },
+        returns: MenuReturn::Page,
+        select_first,
+        asked: Vec::new(),
+    }
+}
+
+/// The action that closes the open menu when the history menu's rows go stale: Escape's, for
+/// a history menu; any other menu stays open.
+fn stale_history_close(open: Option<MenuKind>) -> Option<MenuAction> {
+    matches!(open, Some(MenuKind::History(_))).then_some(MenuAction::Dismiss)
 }
 
 /// The menu's rows: as many pages as fit in `available` logical pixels, nearest first, then
@@ -204,6 +231,36 @@ mod tests {
 
     fn shown(face: RowFace) -> (String, Option<String>) {
         (face.label, face.host)
+    }
+
+    #[test]
+    fn a_stale_history_menu_closes_as_escape_and_gives_the_keys_back() {
+        // #214: closing it without returning focus left the keys on the main window (#213).
+        for direction in [HistoryDirection::Back, HistoryDirection::Forward] {
+            let action = stale_history_close(Some(MenuKind::History(direction)))
+                .expect("a stale history menu closes");
+            assert!(matches!(action, MenuAction::Dismiss), "{direction:?}");
+            assert_eq!(action.after_close(true), AfterClose::ReturnKeys);
+        }
+        // Escape's keys go where the menu opened from, and a history menu opens from the page.
+        for select_first in [false, true] {
+            let opening = history_opening(point(px(0.), px(0.)), select_first);
+            assert!(matches!(opening.returns, MenuReturn::Page));
+        }
+    }
+
+    #[test]
+    fn stale_history_rows_leave_any_other_menu_open() {
+        for open in [
+            None,
+            Some(MenuKind::Page),
+            Some(MenuKind::Sidebar),
+            Some(MenuKind::Downloads),
+            Some(MenuKind::Row),
+            Some(MenuKind::Confirm),
+        ] {
+            assert!(stale_history_close(open).is_none(), "{open:?}");
+        }
     }
 
     #[test]
