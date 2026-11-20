@@ -16,6 +16,9 @@ Syrinx keeps the damaged database files instead of deleting them.";
 const RESTORING: &str =
     "Restoring the backup… Closing Syrinx will wait for this operation to finish.";
 
+/// The widest the card grows; a narrower window shrinks it.
+const CARD_MAX_WIDTH: f32 = 620.;
+
 pub(super) struct RecoveryCard {
     prompt: RecoveryPrompt,
     /// The backup's date line, formatted once when the offer arrives.
@@ -67,7 +70,7 @@ impl BrowserView {
         } else {
             "Opening your workspace…"
         };
-        let mut card = div().flex().flex_col().gap_4().max_w(px(620.)).child(
+        let mut card = startup_card().child(
             div()
                 .id("startup-title")
                 .role(gpui::Role::Heading)
@@ -146,6 +149,17 @@ impl BrowserView {
             cx.notify();
         }
     }
+}
+
+/// The column holding the screen's text and buttons. Without a full width it sizes to its
+/// longest line and, in a narrow or scaled window, runs off both edges instead of wrapping.
+fn startup_card() -> Div {
+    div()
+        .flex()
+        .flex_col()
+        .gap_4()
+        .w_full()
+        .max_w(px(CARD_MAX_WIDTH))
 }
 
 /// The backup's local date and time, or `None` (reported on stderr) when Windows cannot
@@ -255,6 +269,14 @@ mod tests {
         assert_eq!(colors.id, PaletteId::Graphite);
         assert_eq!(rgba(colors.ground.representative()), gpui::rgb(0x141519));
         assert_eq!(rgba(colors.text), gpui::rgb(0xecedf0));
+    }
+
+    #[test]
+    fn the_card_fills_its_container_up_to_its_widest() {
+        let mut card = startup_card();
+        let style = card.style();
+        assert_eq!(style.size.width, Some(gpui::relative(1.).into()));
+        assert_eq!(style.max_size.width, Some(px(CARD_MAX_WIDTH).into()));
     }
 
     #[test]
