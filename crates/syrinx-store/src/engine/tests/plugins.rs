@@ -17,13 +17,13 @@ use crate::{
     PluginState, Store, StoreError, StoreOperation, schema,
 };
 
-fn user_version(connection: &Connection) -> i64 {
+pub(super) fn user_version(connection: &Connection) -> i64 {
     connection
         .query_row("PRAGMA user_version", [], |row| row.get(0))
         .expect("read synthetic schema version")
 }
 
-fn install(plugin_id: &str) -> PluginInstall {
+pub(super) fn install(plugin_id: &str) -> PluginInstall {
     PluginInstall {
         plugin_id: plugin_id.to_owned(),
         version: "0.1.0".to_owned(),
@@ -65,7 +65,7 @@ fn installed(directory: &TestDirectory, plugin_ids: &[&str]) -> Store {
 }
 
 /// Builds the version 7 (site zoom) schema with the fixture session.
-fn site_zoom_database(directory: &TestDirectory) -> Connection {
+pub(super) fn site_zoom_database(directory: &TestDirectory) -> Connection {
     close(permissions_database(directory));
     let mut connection = directory.connection();
     schema::configure_connection(&connection).expect("configure synthetic connection");
@@ -96,7 +96,7 @@ fn version_7_upgrades_to_8_keeping_the_session_with_no_plugin_installed() {
 
     let connection = directory.connection();
     assert_eq!(user_version(&connection), schema::SCHEMA_VERSION);
-    assert_eq!(schema::SCHEMA_VERSION, 8);
+    assert_eq!(schema::SCHEMA_VERSION, 9);
     close(connection);
     directory.cleanup();
 }

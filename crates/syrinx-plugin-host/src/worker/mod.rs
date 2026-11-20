@@ -1,6 +1,8 @@
 //! Runs each active plugin on its own worker thread, never the UI thread, behind a bounded
 //! queue, so a slow, stuck or crashing plugin never stops the owner browsing (P2-03).
 
+#[cfg(feature = "store")]
+mod background;
 mod thread;
 
 use std::collections::BTreeMap;
@@ -17,7 +19,7 @@ use crate::grants::GrantSet;
 use crate::manifest::{CapabilityKind, PluginManifest};
 use crate::registry::RegisteredPlugin;
 use crate::session::{CallResult, RequestIds, Session};
-use crate::{Failure, HostError, PluginHost, Runtime, limits};
+use crate::{CacheError, Failure, HostError, PluginHost, Runtime, limits};
 
 use thread::{Job, Prepared, Shared, Worker};
 
@@ -62,6 +64,18 @@ pub enum PluginEvent {
     Deactivated {
         plugin: String,
         reason: StopReason,
+    },
+    /// The compiled-code cache could not be used or kept, and the plugin was compiled instead
+    /// (#137). `plugin` is `None` for the cache as a whole, as in its start-up clean-up.
+    Cache {
+        plugin: Option<String>,
+        error: CacheError,
+    },
+    /// Compiling a plugin in the background failed. Its status is unchanged: its first
+    /// activation compiles it again, and reports `Failed` if that fails too.
+    PrepareFailed {
+        plugin: String,
+        error: HostError,
     },
 }
 
@@ -110,6 +124,9 @@ pub struct Plugins<S: PluginHost> {
     /// Worker threads no slot owns any more, still stopping, at most one per plugin id; a
     /// plugin added again waits for its own, and shutdown joins the rest.
     stopping: BTreeMap<String, JoinHandle<()>>,
+    /// Background compiles started by `prepare_in_background`, by plugin id; each is joined
+    /// once finished or at shutdown, and a panic is reported.
+    preparing: Vec<(String, JoinHandle<()>)>,
 }
 
 struct Slot<S: 'static> {
@@ -146,7 +163,20 @@ impl<S: PluginHost> Plugins<S> {
         services: impl Fn(&PluginManifest) -> S + Send + Sync + 'static,
     ) -> (Self, Receiver<PluginEvent>) {
         let (events, received) = mpsc::channel();
-        let plugins = Self {
+        let plugins = Self::with_events(runtime, host_version, grants, services, events);
+        (plugins, received)
+    }
+
+    /// `new`, sending every `PluginEvent` on `events`, a channel the caller already reports
+    /// other events on.
+    pub(crate) fn with_events(
+        runtime: Runtime,
+        host_version: impl Into<String>,
+        grants: GrantSet,
+        services: impl Fn(&PluginManifest) -> S + Send + Sync + 'static,
+        events: Sender<PluginEvent>,
+    ) -> Self {
+        Self {
             runtime,
             requests: Arc::new(RequestIds::default()),
             grants,
@@ -155,8 +185,8 @@ impl<S: PluginHost> Plugins<S> {
             events,
             slots: BTreeMap::new(),
             stopping: BTreeMap::new(),
-        };
-        (plugins, received)
+            preparing: Vec::new(),
+        }
     }
 
     /// Add a registered plugin and its component's bytes. Nothing is compiled or run.
@@ -174,6 +204,12 @@ impl<S: PluginHost> Plugins<S> {
         };
         self.slots.insert(id, slot);
         Ok(())
+    }
+
+    /// How many components the runtime compiled and loaded from its cache: a diagnostic for
+    /// tests and measurements, not part of the application's contract.
+    pub fn compile_counts(&self) -> crate::CompileCounts {
+        self.runtime.compile_counts()
     }
 
     pub fn status(&self, plugin: &str) -> Option<PluginStatus> {
@@ -254,7 +290,9 @@ impl<S: PluginHost> Plugins<S> {
     /// Deactivate every plugin and wait for each worker to exit. The workers stop side by
     /// side, each within one job budget (`limits::JOB_BUDGET`), one deferred call's deadline
     /// (the budget is checked between deferred calls) and `lifecycle.deactivate`'s deadline,
-    /// as long as its host services honour their deadlines. Dropping `Plugins` does the same.
+    /// as long as its host services honour their deadlines. A background compile cannot be
+    /// interrupted, so shutdown also waits for one still running, as it waits for a worker
+    /// activating; it finishes and keeps its entry. Dropping `Plugins` does the same.
     pub fn shutdown(mut self) {
         self.stop_all_and_join();
     }
@@ -431,6 +469,25 @@ impl<S: PluginHost> Plugins<S> {
                 eprintln!("a plugin worker thread panicked");
             }
         }
+        for (plugin, thread) in std::mem::take(&mut self.preparing) {
+            join_compile(&self.events, plugin, thread);
+        }
+    }
+}
+
+/// Wait for one background compile, reporting it if it panicked.
+fn join_compile(events: &Sender<PluginEvent>, plugin: String, thread: JoinHandle<()>) {
+    if thread.join().is_ok() {
+        return;
+    }
+    let error = HostError::Unavailable("the background compile panicked".into());
+    send_event(events, PluginEvent::PrepareFailed { plugin, error });
+}
+
+/// Tell the application; once it stopped listening there is no one left to tell but stderr.
+pub(crate) fn send_event(events: &Sender<PluginEvent>, event: PluginEvent) {
+    if let Err(unsent) = events.send(event) {
+        eprintln!("a plugin event had no listener: {:?}", unsent.0);
     }
 }
 

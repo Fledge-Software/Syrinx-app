@@ -71,13 +71,25 @@ fn release_write_lock(connection: rusqlite::Connection) {
 
 /// A worker on the fixture's folder, driven directly so a test can run its idle step.
 fn direct_worker(fixture: &Fixture) -> (Store, Worker) {
+    let OpenedSession { store, worker, .. } = direct_session(fixture);
+    (store, worker)
+}
+
+/// The store, the worker and the plugin cache's folder, as `open_session` hands them to
+/// `serve_accepted`.
+fn direct_session(fixture: &Fixture) -> OpenedSession {
     let lease =
         Arc::new(WindowsDirectoryLease::prepare(&fixture.0).expect("guard synthetic store"));
     let journal = DeletionJournal::open(&lease).expect("open synthetic journal");
     let page_text = page_text::PageText::open(&lease);
+    let plugin_cache = lease.cache_folder(plugins::CACHE_FOLDER);
     let store = Store::open(lease).expect("open synthetic store");
     let worker = Worker::restore(&store, journal, page_text).expect("restore synthetic worker");
-    (store, worker)
+    OpenedSession {
+        store,
+        worker,
+        plugin_cache,
+    }
 }
 
 fn close_direct(fixture: Fixture, store: Store, worker: Worker) {
@@ -454,11 +466,12 @@ fn a_flood_of_survived_failures_leaves_the_stop_log_intact() {
 #[test]
 fn a_fatal_stop_is_still_kept_in_the_log_beside_the_database() {
     let fixture = Fixture::new();
-    let (store, mut worker) = direct_worker(&fixture);
+    let mut session = direct_session(&fixture);
     let (sender, mut events) = unbounded();
-    worker
+    session
+        .worker
         .handle(
-            &store,
+            &session.store,
             SessionCommand::NewTab {
                 address: SAVED_ADDRESS.into(),
             },
@@ -468,7 +481,8 @@ fn a_fatal_stop_is_still_kept_in_the_log_beside_the_database() {
     let acknowledged = state(&mut events);
 
     // Storage advances behind the worker, so its next save is refused as stale.
-    store
+    session
+        .store
         .save(acknowledged.revision, acknowledged.model.clone())
         .expect("advance synthetic store revision");
     let (commands, receiver) = mpsc::channel();
@@ -478,8 +492,7 @@ fn a_fatal_stop_is_still_kept_in_the_log_beside_the_database() {
     let error = serve_accepted(
         Arc::default(),
         StartupFacts::default(),
-        store,
-        worker,
+        session,
         receiver,
         &sender,
         &fixture.0,

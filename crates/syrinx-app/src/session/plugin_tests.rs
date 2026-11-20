@@ -1,14 +1,15 @@
 //! Proves the session starts the plugin runtime from its own store at start-up (#136), that a
-//! grant it cannot read never stops browsing, and that the test plugin runs through the
-//! session's own route: activation, a command, a view opened and closed, and shutdown.
+//! grant it cannot read never stops browsing, that the test plugin runs through the
+//! session's own route: activation, a command, a view opened and closed, and shutdown, and
+//! that its compiled code is kept under the real SHA-256 and loaded after a restart (#137).
 
 use syrinx_core::CommandRegistry;
 use syrinx_plugin_host::bindings::syrinx::plugin::types::PluginError;
 use syrinx_plugin_host::manifest::{
     CapabilityKind, DiscoveryOptions, MANIFEST_FILE, PluginManifest,
 };
-use syrinx_plugin_host::owner::OwnerError;
-use syrinx_plugin_host::{PluginRegistry, SignedIdentity, check_signed};
+use syrinx_plugin_host::owner::{OwnerError, OwnerRuntime};
+use syrinx_plugin_host::{CompileCounts, PluginRegistry, SignedIdentity, check_signed};
 use syrinx_store::{PluginInstall, PluginState};
 
 use super::*;
@@ -57,13 +58,33 @@ fn install_record() -> PluginInstall {
     }
 }
 
+/// The session's store and plugin runtime over the fixture's folder, with the cache folder
+/// beside the database, as `serve_accepted` starts them.
+fn started(fixture: &Fixture) -> (Arc<Store>, plugins::SessionPlugins) {
+    let lease = Arc::new(WindowsDirectoryLease::prepare(&fixture.0).expect("the synthetic folder"));
+    let store = Arc::new(Store::open(lease.clone()).expect("the synthetic store"));
+    let cache_folder = lease.cache_folder(plugins::CACHE_FOLDER);
+    let (session_plugins, problems) = plugins::start(&store, &fixture.0, cache_folder);
+    assert!(problems.is_empty(), "{problems:?}");
+    (store, session_plugins.expect("the runtime starts"))
+}
+
+/// Activate the test plugin with an empty call; it answers once activation is done.
+fn activate(runtime: &mut OwnerRuntime) {
+    let answered = runtime
+        .call("test", |_session| Ok(()))
+        .expect("queued")
+        .wait(Duration::from_secs(60))
+        .expect("answered");
+    assert_eq!(answered, Ok(()));
+}
+
 #[test]
 fn the_test_plugin_runs_through_the_sessions_own_route() {
     let fixture = Fixture::new();
     create_database(&fixture);
-    let lease = WindowsDirectoryLease::prepare(&fixture.0).expect("the synthetic folder");
-    let store = Arc::new(Store::open(Arc::new(lease)).expect("the synthetic store"));
-    let mut runtime = plugins::start(&store, &fixture.0).expect("the runtime starts");
+    let (store, mut session_plugins) = started(&fixture);
+    let runtime = &mut session_plugins.runtime;
     let mut registry = PluginRegistry::new();
     let registered = registered_fixture(&mut registry);
     runtime
@@ -95,7 +116,63 @@ fn the_test_plugin_runs_through_the_sessions_own_route() {
         store.plugin_setting("test", "test.greeting"),
         Ok(Some(b"hello".to_vec()))
     );
-    assert_eq!(plugins::close(Some(runtime), store), Ok(()));
+    assert_eq!(plugins::close(Some(session_plugins), store), Ok(()));
+    fixture.cleanup();
+}
+
+#[test]
+fn compiled_code_is_kept_under_its_sha256_and_loaded_after_a_restart() {
+    let fixture = Fixture::new();
+    create_database(&fixture);
+    let component = full_component();
+    let record = PluginInstall {
+        module_sha256: syrinx_update::sha256(component).expect("SHA-256"),
+        ..install_record()
+    };
+    let (store, mut session_plugins) = started(&fixture);
+    let mut registry = PluginRegistry::new();
+    let registered = registered_fixture(&mut registry);
+    session_plugins
+        .runtime
+        .install(registered, Arc::from(component), record)
+        .expect("installed");
+    activate(&mut session_plugins.runtime);
+    let compiled = CompileCounts {
+        compiled: 1,
+        loaded: 0,
+    };
+    assert_eq!(session_plugins.runtime.compile_counts(), compiled);
+    assert!(session_plugins.runtime.take_events().is_empty());
+    let kept = store
+        .plugin_compiled("test")
+        .expect("the record reads")
+        .expect("a record");
+    assert_eq!(kept.syrinx_version, env!("CARGO_PKG_VERSION"));
+    let entry = fixture
+        .0
+        .join(plugins::CACHE_FOLDER)
+        .join("plugin-test.cwasm");
+    let bytes = fs::read(&entry).expect("the cached entry");
+    assert_eq!(
+        kept.artifact_sha256,
+        syrinx_update::sha256(&bytes).expect("SHA-256")
+    );
+    assert_eq!(plugins::close(Some(session_plugins), store), Ok(()));
+
+    let (store, mut session_plugins) = started(&fixture);
+    let mut registry = PluginRegistry::new();
+    let registered = registered_fixture(&mut registry);
+    session_plugins
+        .runtime
+        .load(registered, Arc::from(component))
+        .expect("loaded");
+    activate(&mut session_plugins.runtime);
+    let loaded = CompileCounts {
+        compiled: 0,
+        loaded: 1,
+    };
+    assert_eq!(session_plugins.runtime.compile_counts(), loaded);
+    assert_eq!(plugins::close(Some(session_plugins), store), Ok(()));
     fixture.cleanup();
 }
 

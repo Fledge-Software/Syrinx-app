@@ -746,6 +746,8 @@ wasmtime can save its native code (`Component::serialize`, `Engine::precompile_c
 4. **Reconciled: read with `deserialize`, not `deserialize_file`.** The runtime research proposed loading with `Component::deserialize_file`; because that maps the file and a later edit on disk could reach a mapped page, the distribution research's rule is adopted: read the bytes, check their SHA-256 against the value Syrinx recorded when it wrote them, and pass the checked bytes to `deserialize`. A mismatch deletes the entry and recompiles.
 5. Stale entries are deleted on uninstall, update and at start-up.
 
+The ⚠️ in rule 3 is now confirmed: the compatibility hash covers the CPU features (see "Compiled code through Syrinx's cache" in `docs/dev/wasmtime-audit.md`).
+
 The honest limit is the same as for updates: a program running as the owner can write to the data folder and plant native code between Syrinx's write and its next read, and the recorded hash lives in the same user's storage; rule 4 narrows that, and no per-user design closes it. wasmtime's own on-disk cache (`Config::cache_config_load` and the `cache` feature) is not recommended ⚠️, because it manages its own directory and eviction outside Syrinx's lease and recorded hashes. The fallback, if the owner prefers no native code on disk, is to compile at every activation; with activation on first use, that cost is paid once per session per plugin, not at start-up.
 
 ### Loading

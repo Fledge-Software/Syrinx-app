@@ -103,10 +103,37 @@ impl Store {
         self.write_plugin(write, None).map(drop)
     }
 
-    /// Removes `plugin_id` with its grants, folders and settings in one statement; `false` if
-    /// it was not installed.
+    /// Removes `plugin_id` with its grants, folders, settings and compiled-code record in one
+    /// statement; `false` if it was not installed.
     pub fn remove_plugin(&self, plugin_id: String) -> Result<bool, StoreError> {
         self.removed(PluginWrite::Remove { plugin_id })
+    }
+
+    /// The compiled-code cache's record for `plugin_id`, if it keeps one (#137).
+    pub fn plugin_compiled(
+        &self,
+        plugin_id: &str,
+    ) -> Result<Option<crate::PluginCompiled>, StoreError> {
+        let mut records =
+            self.read(|connection| crate::plugins::compiled(connection, Some(plugin_id)))?;
+        Ok(records.pop())
+    }
+
+    /// Every compiled-code record, read at start-up to clear out the stale ones.
+    pub fn plugin_compiled_entries(&self) -> Result<Vec<crate::PluginCompiled>, StoreError> {
+        self.read(|connection| crate::plugins::compiled(connection, None))
+    }
+
+    /// Records a plugin's compiled artefact, replacing its earlier record. The plugin must be
+    /// installed: a record for any other id is refused.
+    pub fn save_plugin_compiled(&self, compiled: crate::PluginCompiled) -> Result<(), StoreError> {
+        self.write_plugin(PluginWrite::Compiled(compiled), None)
+            .map(drop)
+    }
+
+    /// Deletes `plugin_id`'s compiled-code record; `false` if it had none.
+    pub fn forget_plugin_compiled(&self, plugin_id: String) -> Result<bool, StoreError> {
+        self.removed(PluginWrite::ForgetCompiled { plugin_id })
     }
 
     /// As `plugin_setting`, waiting at most `budget` for a reader and for SQLite; past it,

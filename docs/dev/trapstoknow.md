@@ -1115,6 +1115,19 @@ uses its own tree. Still use a private target directory for each worktree.
 
 ## Storage
 
+- **A schema bump passes the store's own tests and still breaks the
+  recovery tests in `syrinx-platform`.** `storage/recovery/tests.rs`
+  hard-codes the current schema version (`mark_newer_schema` writes "one past
+  current" into the header's bytes 60 to 64, and the flat-schema test asserts
+  the migrated `user_version`) and lists every table to drop in
+  `downgrade_to_flat_schema`, newest first because later tables reference
+  earlier ones. After a bump, update all three and run
+  `cargo test -p syrinx-platform recovery`, not only `-p syrinx-store`.
+  Schema version 9 (#137) reached Windows CI with the old values: the
+  newer-schema backup was offered, and the flat backup was refused as
+  `NoValidBackup`. The same tests also fail on Linux; they were simply not
+  run there. Source: #137's CI run on 83c48a5 and a Linux rerun of the old
+  file (observed 2026-11-20).
 - **A new deletion-journal category makes a build that predates it refuse
   the journal and offer the clear-all-history repair.** D47's codec fails
   closed on a category byte it does not know, by design. A build between
