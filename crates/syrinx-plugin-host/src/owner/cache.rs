@@ -108,9 +108,15 @@ impl StoreCache {
         let mut current = BTreeSet::new();
         for record in records {
             let installed_bytes = installed.get(&record.plugin_id);
-            if self.is_current_key(&record) && installed_bytes == Some(&record.module_sha256) {
+            let same_bytes = installed_bytes == Some(&record.module_sha256);
+            if self.is_current_key(&record) && same_bytes {
                 current.insert(entry_name(&record.plugin_id));
                 continue;
+            }
+            // A new key is an expected miss; bytes the install record disagrees with are not.
+            if self.is_current_key(&record) && installed_bytes.is_some() {
+                let refused = CacheError::Refused(Refusal::NotInstalled);
+                self.report(Some(&record.plugin_id), refused);
             }
             if let Err(error) = self.discard(&record.plugin_id) {
                 self.report(Some(&record.plugin_id), error);
@@ -224,6 +230,26 @@ impl StoreCache {
         Ok(bytes)
     }
 
+    /// Record the artefact's key and SHA-256, then write its file.
+    fn save(&self, plugin_id: &str, wasm: &[u8], component: &Component) -> Result<(), CacheError> {
+        let path = self.entry_path(plugin_id)?;
+        let bytes = component
+            .serialize()
+            .map_err(|error| CacheError::Serialize(format!("{error:#}")))?;
+        let record = PluginCompiled {
+            plugin_id: plugin_id.to_owned(),
+            module_sha256: (self.sha256)(wasm).map_err(CacheError::Hash)?,
+            engine_key: self.engine_key,
+            syrinx_version: self.syrinx_version.clone(),
+            artifact_sha256: (self.sha256)(&bytes).map_err(CacheError::Hash)?,
+            artifact_bytes: bytes.len() as u64,
+        };
+        self.store
+            .save_plugin_compiled(record)
+            .map_err(store_error)?;
+        write_replacing(&path, &bytes)
+    }
+
     /// The entry's file, named from a plugin id that is one plain segment.
     fn entry_path(&self, plugin_id: &str) -> Result<PathBuf, CacheError> {
         if !is_plain_id(plugin_id) {
@@ -255,24 +281,7 @@ impl CompiledCache for StoreCache {
 
     /// Record the artefact's key and SHA-256, then write its file.
     fn keep(&self, plugin_id: &str, wasm: &[u8], component: &Component) {
-        let kept = self.entry_path(plugin_id).and_then(|path| {
-            let bytes = component
-                .serialize()
-                .map_err(|error| CacheError::Serialize(format!("{error:#}")))?;
-            let record = PluginCompiled {
-                plugin_id: plugin_id.to_owned(),
-                module_sha256: (self.sha256)(wasm).map_err(CacheError::Hash)?,
-                engine_key: self.engine_key,
-                syrinx_version: self.syrinx_version.clone(),
-                artifact_sha256: (self.sha256)(&bytes).map_err(CacheError::Hash)?,
-                artifact_bytes: bytes.len() as u64,
-            };
-            self.store
-                .save_plugin_compiled(record)
-                .map_err(store_error)?;
-            write_replacing(&path, &bytes)
-        });
-        if let Err(error) = kept {
+        if let Err(error) = self.save(plugin_id, wasm, component) {
             self.report(Some(plugin_id), error);
         }
     }
@@ -353,6 +362,7 @@ fn store_error(error: StoreError) -> CacheError {
     CacheError::Store(error.to_string())
 }
 
+// Shared with the integration tests: the host may not depend on syrinx-update, even for tests.
 #[cfg(test)]
 #[path = "../../tests/support/sha256.rs"]
 mod test_sha256;

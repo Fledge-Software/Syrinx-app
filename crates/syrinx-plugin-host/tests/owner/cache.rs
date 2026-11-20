@@ -426,8 +426,9 @@ fn install_returns_while_the_background_compile_is_still_running() {
     let started = Instant::now();
     install_with(&mut runtime, &full());
     let took = started.elapsed();
+    // An install that waited would wait for the gate's whole `PATIENCE`.
     assert!(
-        took < Duration::from_secs(5),
+        took < PATIENCE / 2,
         "install waited {took:?} for the compile"
     );
     // The compile runs after install returned, and is held before it can keep its entry.
@@ -525,6 +526,56 @@ fn an_entry_for_other_bytes_than_the_install_records_is_cleared_at_start() {
     let runtime = cached.start(&store, VERSION, sha256);
     assert_eq!(record(&store), None);
     assert!(cached.files().is_empty());
+    assert_eq!(
+        cache_problems(&runtime),
+        [CacheError::Refused(Refusal::NotInstalled)],
+        "a disagreement with the install record is reported, not silent"
+    );
+    close(runtime, store);
+}
+
+#[test]
+fn an_entry_that_cannot_be_read_is_a_miss_that_keeps_its_record_and_the_sweep_goes_on() {
+    let cached = Cached::new();
+    warm(&cached);
+    // A folder where the entry belongs cannot be read, written or swept as a file.
+    fs::remove_file(cached.entry()).expect("remove the entry");
+    fs::create_dir(cached.entry()).expect("a folder at the entry's name");
+    for orphan in ["gone.cwasm", "stray.txt"] {
+        fs::write(cached.folder.join(orphan), b"synthetic").expect("an orphan");
+    }
+
+    let store = cached.temp.open();
+    let mut runtime = cached.start(&store, VERSION, sha256);
+    assert_eq!(
+        cached.files(),
+        ["cache-test.cwasm"],
+        "the orphans went all the same"
+    );
+    let whole_cache = runtime.take_events();
+    assert_eq!(
+        whole_cache,
+        [PluginEvent::Cache {
+            plugin: None,
+            error: CacheError::NotAFile
+        }]
+    );
+    load(&mut runtime);
+    activate(&mut runtime);
+    assert_eq!(runtime.compile_counts(), COMPILED_ONCE);
+    let problems = cache_problems(&runtime);
+    assert!(
+        !problems.is_empty()
+            && problems
+                .iter()
+                .all(|problem| matches!(problem, CacheError::File(_))),
+        "the read and the write fail as files, never as a refusal: {problems:?}"
+    );
+    assert!(
+        record(&store).is_some(),
+        "a failed read never discards the record"
+    );
+    assert!(cached.entry().is_dir(), "the folder is left alone");
     close(runtime, store);
 }
 

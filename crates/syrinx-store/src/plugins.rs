@@ -108,6 +108,8 @@ impl PluginState {
 pub struct PluginInstall {
     pub plugin_id: String,
     pub version: String,
+    /// The SHA-256 of the exact `plugin.wasm` bytes installed. The compiled-code cache (#137)
+    /// keeps only code compiled from these bytes and clears any other entry at start-up.
     pub module_sha256: [u8; 32],
     pub manifest_sha256: [u8; 32],
     pub signer_key: String,
