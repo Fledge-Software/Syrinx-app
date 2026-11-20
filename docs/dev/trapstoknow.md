@@ -688,12 +688,13 @@ i5-4460 / HD 4600; no budget changed.
   searches and steps (three runs of 1,032) and through a killed web process
   (3/3), whose pending searches came back as failures before the crash
   signal. A cross-site process swap with replies in flight could not be
-  staged in the sandbox and is assumed, not observed. Source: `examples/linux/controls.rs`'s
-  `overlapping_find`, run on its own under Xvfb because the full controls
-  suite needs a window manager (the old state failed with request 55
-  reporting "o"'s six matches; the fix passed 5/5), and WebKitGTK 2.52.6
-  and 2.54.1's `FindController.cpp` and `WebPageProxy.cpp` (observed
-  2026-11-20; the owner's Hyprland run is pending).
+  staged in the sandbox and is assumed, not observed. Source:
+  `examples/linux/controls.rs`'s `overlapping_find`, run on its own under
+  Xvfb because the full controls suite needs a window manager (the old
+  state failed with request 55 reporting "o"'s six matches; the fix passed
+  5/5), and WebKitGTK 2.52.6 and 2.54.1's `FindController.cpp` and
+  `WebPageProxy.cpp` (observed 2026-11-20; the owner's Hyprland run is
+  pending).
 - **Before WebKitGTK 2.54, every Find step reports one match.** A Next or
   Previous's `found-text` count is 1 whatever the page holds, so taking it as
   the total made the label read "2 of 1". Only 2.54's
