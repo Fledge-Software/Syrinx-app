@@ -14,13 +14,15 @@ use syrinx_search::fulltext::{
     SearchRequest,
 };
 use tantivy::{
-    Index, TantivyDocument,
-    schema::{Field, Value},
+    Index, TantivyDocument, Term,
+    collector::Count,
+    query::{BooleanQuery, Occur, Query, TermQuery},
+    schema::{Field, IndexRecordOption, Value},
 };
 
 /// Pages are staged on the corpus's first day, when none of them has expired yet.
 const CAPTURE_TIME: i64 = 0;
-/// The adapter's own cap on hits per query, so `hits` saturates there.
+/// The adapter's own cap on hits per query (`search.rs`'s `MAX_RESULTS`).
 const MAX_HITS: usize = 1000;
 /// The bake-off ranks and snippets the top 20, like the other engines.
 const TOP: usize = 20;
@@ -63,14 +65,19 @@ impl AdapterStore {
         Ok(())
     }
 
+    /// Records the revision a previous process committed for `id`, so a new process stages
+    /// past it; otherwise its change would be refused as stale and test nothing.
+    pub fn assume_committed(&mut self, id: usize, revision: u64) {
+        self.revisions.insert(id, revision);
+    }
+
     /// Stages without committing; the crash writer is killed before any commit.
     pub fn stage(&mut self, documents: &[Document], removed: &[usize]) -> Result<Vec<Outcome>> {
         let replaced: HashSet<usize> = documents.iter().map(|document| document.id).collect();
-        let mut changes: Vec<Change> = removed
-            .iter()
-            .filter(|id| !replaced.contains(id))
-            .map(|id| Change::Delete(self.deletion(*id)))
-            .collect();
+        let mut changes = Vec::with_capacity(removed.len() + documents.len());
+        for id in removed.iter().filter(|id| !replaced.contains(id)) {
+            changes.push(Change::Delete(self.deletion(*id)?));
+        }
         for document in documents {
             let revision = self.revisions.entry(document.id).or_insert(0);
             *revision += 1;
@@ -79,14 +86,19 @@ impl AdapterStore {
         Ok(self.index.stage(&changes, CAPTURE_TIME)?)
     }
 
-    fn deletion(&self, id: usize) -> Deletion {
-        Deletion {
+    /// Deletes the revision this process staged or was told was committed.
+    fn deletion(&self, id: usize) -> Result<Deletion> {
+        let revision = *self
+            .revisions
+            .get(&id)
+            .ok_or("deleting an id whose revision this process does not know")?;
+        Ok(Deletion {
             namespace: Namespace::page(),
             id: id.to_string(),
-            revision: self.revisions.get(&id).copied().unwrap_or(1),
+            revision,
             // Deleted at the run's present, so the tombstone outlives the expiry pass.
             deleted_at: NOW,
-        }
+        })
     }
 
     /// The pass the session worker runs at start-up and daily.
@@ -108,10 +120,32 @@ impl AdapterStore {
         Ok(ids)
     }
 
-    /// Counts matches up to the adapter's cap of 1,000.
+    /// Counts matches. A single word is counted exactly from the folder; any other query goes
+    /// through the adapter, whose cap of 1,000 would hide a surplus, so reaching it is an error.
     pub fn hits(&self, query: &str) -> Result<usize> {
+        match self.reported_hits(query)? {
+            (hits, false) => Ok(hits),
+            (_, true) => {
+                Err(format!("{query} reached the adapter's cap, so it cannot be counted").into())
+            }
+        }
+    }
+
+    /// The count for the report, and whether it stopped at the adapter's cap.
+    pub fn reported_hits(&self, query: &str) -> Result<(usize, bool)> {
+        if is_single_word(query) {
+            return Ok((count_word(&self.directory, query)?, false));
+        }
         let request = request(query, MAX_HITS).ok_or("query syntax the adapter does not offer")?;
-        Ok(self.index.search(&request)?.len())
+        let hits = self.index.search(&request)?.len();
+        Ok((hits, hits >= MAX_HITS))
+    }
+
+    /// The committed segments in the folder.
+    pub fn segments(&self) -> Result<usize> {
+        Ok(Index::open_in_dir(&self.directory)?
+            .searchable_segment_ids()?
+            .len())
     }
 
     /// Scans every stored row in the folder, independently of the adapter's own reads.
@@ -176,6 +210,36 @@ pub fn request(query: &str, limit: usize) -> Option<SearchRequest> {
         namespaces: NamespaceFilter::Only(vec![Namespace::page()]),
         limit,
     })
+}
+
+fn is_single_word(query: &str) -> bool {
+    !query.is_empty() && query.bytes().all(|byte| byte.is_ascii_alphanumeric())
+}
+
+/// Counts stored documents, not tombstones, whose title or body holds `word`, read straight
+/// from the folder's committed segments without the adapter's result cap.
+fn count_word(directory: &Path, word: &str) -> Result<usize> {
+    let index = Index::open_in_dir(directory)?;
+    let schema = index.schema();
+    let term = word.to_ascii_lowercase();
+    let in_text = |name: &str| -> Result<(Occur, Box<dyn Query>)> {
+        let field = schema.get_field(name)?;
+        let query = TermQuery::new(
+            Term::from_field_text(field, &term),
+            IndexRecordOption::Basic,
+        );
+        Ok((Occur::Should, Box::new(query)))
+    };
+    let text = BooleanQuery::new(vec![in_text("title")?, in_text("body")?]);
+    let document_row = TermQuery::new(
+        Term::from_field_u64(schema.get_field("kind")?, DOCUMENT_ROW),
+        IndexRecordOption::Basic,
+    );
+    let query = BooleanQuery::new(vec![
+        (Occur::Must, Box::new(text) as Box<dyn Query>),
+        (Occur::Must, Box::new(document_row)),
+    ]);
+    Ok(index.reader()?.searcher().search(&query, &Count)?)
 }
 
 fn page(document: &Document, revision: u64) -> FullTextDocument {

@@ -62,7 +62,8 @@ impl Engine {
         match self {
             Self::Fts5(connection) => store::optimize(connection),
             Self::Tantivy(store) => store.optimize(),
-            // The adapter merges at every commit and offers no separate pass.
+            // Production has no separate pass: each commit merges only segments holding
+            // deletions, or all but the largest once there are more than eight.
             Self::Adapter(_) => Ok(()),
         }
     }
@@ -120,6 +121,25 @@ impl Engine {
         }
     }
 
+    /// The hit count for the query report; the adapter's reads `1000+` once capped.
+    pub fn reported_hits(&self, query: &str) -> Result<String> {
+        let Self::Adapter(store) = self else {
+            return Ok(self.hits(query)?.to_string());
+        };
+        Ok(match store.reported_hits(query)? {
+            (hits, false) => hits.to_string(),
+            (hits, true) => format!("{hits}+"),
+        })
+    }
+
+    /// How many segments the adapter's queries run over; the others are optimized to one.
+    pub fn adapter_segments(&self) -> Result<Option<usize>> {
+        match self {
+            Self::Adapter(store) => Ok(Some(store.segments()?)),
+            Self::Fts5(_) | Self::Tantivy(_) => Ok(None),
+        }
+    }
+
     pub fn verify(&self, expected: usize) -> Result<()> {
         match self {
             Self::Fts5(connection) => store::verify(connection, expected),
@@ -149,10 +169,8 @@ impl Engine {
         match self {
             Self::Fts5(connection) => connection.close().map_err(|(_, error)| error.into()),
             Self::Tantivy(store) => store.close(),
-            Self::Adapter(store) => {
-                drop(store);
-                Ok(())
-            }
+            // `FullText` has no close: its commits are durable and its merges synchronous.
+            Self::Adapter(_) => Ok(()),
         }
     }
 }
@@ -262,12 +280,12 @@ mod tests {
             let (tantivy_path, adapter_path) = (Scratch::new("tantivy")?, Scratch::new("adapter")?);
             let mut tantivy = Engine::open("tantivy", &tantivy_path.0)?;
             let mut adapter = Engine::open("adapter", &adapter_path.0)?;
-            let documents: Vec<_> = (0..1000).map(|id| corpus.document(id)).collect();
+            // One page short of the adapter's 1,000-hit cap, so every count stays exact.
+            let documents: Vec<_> = (0..999).map(|id| corpus.document(id)).collect();
             tantivy.batch(&documents, &[], false)?;
             adapter.batch(&documents, &[], false)?;
             for query in SHARED_QUERIES {
-                // The adapter stops counting at 1,000 hits, which the overlap corpus reaches.
-                let hits = tantivy.hits(query)?.min(1000);
+                let hits = tantivy.hits(query)?;
                 assert_eq!(hits, adapter.hits(query)?, "{corpus:?} {query}");
                 assert_eq!(
                     tantivy.query(query)?.len(),

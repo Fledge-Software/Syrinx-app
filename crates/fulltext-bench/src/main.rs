@@ -1,4 +1,5 @@
-//! Compares disposable synthetic full-text caches; no product crate uses this harness.
+//! Measures synthetic full-text workloads on #52's disposable engines and on the production
+//! index (#53); no product crate uses this harness.
 
 mod adapter_store;
 mod corpus;
@@ -80,6 +81,9 @@ fn run(directory: &Path, count: usize, name: &str, corpus: Corpus) -> Result<()>
     // The only consolidation in a run; later mutations rely on each engine's deletion path.
     timed("maintenance_once", || engine.optimize())?;
     println!("disk_after_maintenance,{}", disk_size(directory)?);
+    if let Some(segments) = engine.adapter_segments()? {
+        println!("adapter_segments_at_queries,{segments}");
+    }
     queries(&engine)?;
     timed("add_1000", || {
         let documents: Vec<_> = (count..count + 1000)
@@ -161,7 +165,7 @@ fn queries(engine: &Engine) -> Result<()> {
             samples[49],
             samples[94],
             samples[99],
-            engine.hits(query)?
+            engine.reported_hits(query)?
         );
         // Ranked IDs, outside timing, let separate runs compare the engines' top 20.
         let top: Vec<_> = engine.query(query)?.iter().map(u64::to_string).collect();

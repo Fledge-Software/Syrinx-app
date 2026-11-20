@@ -11,8 +11,12 @@ $ErrorActionPreference = 'Stop'
 # unknown engine before any quiet-window wait.
 $engineList = @($Engines | ForEach-Object { $_ -split ',' } | ForEach-Object { $_.Trim() } |
     Where-Object { $_ })
-foreach ($name in $engineList) {
-    if ($name -notin @('fts5', 'tantivy', 'adapter')) { throw "Unknown engine '$name'." }
+if ($engineList.Count -eq 0) { throw 'Name at least one engine.' }
+foreach ($engineName in $engineList) {
+    if ($engineName -notin @('fts5', 'tantivy', 'adapter')) { throw "Unknown engine '$engineName'." }
+}
+if (@($engineList | Select-Object -Unique).Count -ne $engineList.Count) {
+    throw 'Name each engine once.'
 }
 $workspace = (Resolve-Path (Join-Path $PSScriptRoot '../..')).Path
 $executable = Join-Path $workspace 'target/local/fulltext-bench.exe'
@@ -68,8 +72,8 @@ function Write-Load($eventName, $load) {
 # Alternate engine order by repetition; both corpora use the same seed and count.
 foreach ($corpus in @('overlap', 'broad')) {
     foreach ($run in 1..3) {
-        $order = @($engineList)
-        if ($run -eq 2) { [array]::Reverse($order) }
+        # Index into a new array: reversing in place would also reverse later runs' order.
+        $order = if ($run -eq 2) { $engineList[($engineList.Count - 1)..0] } else { $engineList }
         foreach ($engine in $order) {
             $name = "$Label-$corpus-$engine-$run"
             $deadline = [DateTime]::UtcNow.AddMinutes($QuietWaitMinutes)

@@ -143,7 +143,22 @@ Its speed is measured with the bake-off's harness, on the same synthetic
 corpora and queries as #52: `fulltext-bench NEW_FOLDER 100000 adapter broad`,
 or `crates/fulltext-bench/run-comparison.ps1 -Engines fts5,tantivy,adapter`
 on a quiet machine. The adapter has no phrase or `OR` queries, so those two
-lines read `unsupported`, and its hit counts stop at 1,000. Its snippets are
-this adapter's 160 bytes, against the bake-off engines' 120 characters, and
-its queries also filter by namespace. Start-up costs the `reopen` and
-`startup_expiry` lines together.
+lines read `unsupported`, and a multi-word or prefix query's hit count stops at
+1,000, printed `1000+`. Its
+snippets are this adapter's 160 bytes, against the Tantivy engine's 120
+characters and FTS5's 16 tokens, and its queries also filter by namespace and
+document kind. Read its numbers as production's, not as an identical engine's:
+
+- It has no separate consolidation pass, so `maintenance_once` is about zero
+  and its queries run over the segments its commits left (merges happen only
+  for segments holding deletions, or once there are more than eight);
+  `adapter_segments_at_queries` says how many. The bake-off engines query one
+  optimized segment.
+- Its writer's budget is 32 MB, against the bake-off engines' 50 MB, so
+  `bulk` can include merges that crowding triggers.
+- `interrupted_writer_until_kill` includes building its phantom pages and
+  waiting for a finished uncommitted segment, so it does not compare across
+  engines.
+- Start-up is the `reopen` and `startup_expiry` lines together, but by then
+  nothing is left to expire, so that is a lower bound: a start after a day
+  away also pays for a merge, which the earlier `expiry` line measures.
