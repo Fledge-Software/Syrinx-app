@@ -179,7 +179,7 @@ impl StoreCache {
         Ok(current)
     }
 
-    /// Whether clean-up keeps `record`, given the module hash its install record names.
+    /// What clean-up does with `record`, given the module hash its install record names.
     fn fate(&self, record: &PluginCompiled, installed: Option<&[u8; 32]>) -> Fate {
         let Some(installed) = installed else {
             return Fate::Stale;
