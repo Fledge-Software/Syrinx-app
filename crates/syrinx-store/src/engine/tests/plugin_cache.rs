@@ -243,7 +243,7 @@ fn the_table_checks_the_same_bounds_the_store_refuses_before_writing() {
         format!("'cache-test', zeroblob(32), zeroblob(32), '{long_version}', zeroblob(32), 1"),
     ];
     for row in &refused_rows {
-        refused_by_check(insert(row), row);
+        assert_refused_by_check(insert(row), row);
     }
     assert!(
         insert(&format!(
@@ -256,7 +256,7 @@ fn the_table_checks_the_same_bounds_the_store_refuses_before_writing() {
 }
 
 /// Assert that SQLite refused `row` for a CHECK constraint, not for any other reason.
-fn refused_by_check(result: rusqlite::Result<()>, row: &str) {
+fn assert_refused_by_check(result: rusqlite::Result<()>, row: &str) {
     let check_failed = matches!(
         &result,
         Err(rusqlite::Error::SqliteFailure(error, _))

@@ -118,7 +118,7 @@ impl CompiledCache for StoreCache {
 }
 
 /// What start-up clean-up does with one record.
-enum Kept {
+enum Fate {
     /// Current: compiled under this key from the bytes the install record names.
     Keep,
     /// Under this key but from other bytes than the install record names: reported, deleted.
@@ -164,33 +164,33 @@ impl StoreCache {
         let mut current = BTreeSet::new();
         for record in records {
             let plugin_id = record.plugin_id.as_str();
-            match self.kept(&record, installed.get(plugin_id)) {
-                Kept::Keep => {
+            match self.fate(&record, installed.get(plugin_id)) {
+                Fate::Keep => {
                     current.insert(entry_name(plugin_id));
                 }
-                Kept::OtherBytes => {
+                Fate::OtherBytes => {
                     let refused = CacheError::Refused(Refusal::OtherBytes);
                     self.report(Some(plugin_id), refused);
                     self.delete_entry_or_report(plugin_id);
                 }
-                Kept::Stale => self.delete_entry_or_report(plugin_id),
+                Fate::Stale => self.delete_entry_or_report(plugin_id),
             }
         }
         Ok(current)
     }
 
     /// Whether clean-up keeps `record`, given the module hash its install record names.
-    fn kept(&self, record: &PluginCompiled, installed: Option<&[u8; 32]>) -> Kept {
+    fn fate(&self, record: &PluginCompiled, installed: Option<&[u8; 32]>) -> Fate {
         let Some(installed) = installed else {
-            return Kept::Stale;
+            return Fate::Stale;
         };
         if !self.is_current_key(record) {
-            return Kept::Stale;
+            return Fate::Stale;
         }
         if *installed != record.module_sha256 {
-            return Kept::OtherBytes;
+            return Fate::OtherBytes;
         }
-        Kept::Keep
+        Fate::Keep
     }
 
     /// Remove each plain file whose name is not in `current`; each failure is reported and
