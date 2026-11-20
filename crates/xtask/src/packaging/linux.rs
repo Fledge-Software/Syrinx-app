@@ -378,7 +378,8 @@ mod tests {
         let uninstall = read("packaging/linux/uninstall.sh");
         for path in [
             "bin_dir=\"$HOME/.local/bin\"",
-            "data_home=\"${XDG_DATA_HOME:-$HOME/.local/share}\"",
+            "/*) data_home=\"$XDG_DATA_HOME\" ;;",
+            "*) data_home=\"$HOME/.local/share\" ;;",
             "icons/hicolor/256x256/apps",
             "program=\"$bin_dir/syrinx\"",
         ] {
