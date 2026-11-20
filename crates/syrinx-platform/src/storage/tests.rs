@@ -687,3 +687,40 @@ mod windows {
         );
     }
 }
+
+#[test]
+fn the_excluded_sites_file_is_absent_until_saved_and_then_replaced_whole() {
+    let fixture = Fixture::new();
+    let destination = fixture.root.join("data");
+    let lease = prepare(&destination);
+    let kept = lease
+        .excluded_sites_file()
+        .expect("open the synthetic excluded-sites file");
+    assert_eq!(kept.read(), Ok(None));
+    kept.save(b"first.example.test second.example.test")
+        .expect("save a synthetic list");
+    kept.save(b"second.example.test")
+        .expect("replace the synthetic list");
+    assert_eq!(kept.read(), Ok(Some(b"second.example.test".to_vec())));
+    // The replacement is renamed into place, so nothing is left beside it.
+    let leftovers: Vec<_> = fs::read_dir(&destination)
+        .expect("list synthetic data folder")
+        .map(|entry| entry.expect("read synthetic entry").file_name())
+        .filter(|name| name.to_string_lossy().ends_with(".new"))
+        .collect();
+    assert!(leftovers.is_empty());
+}
+
+#[test]
+fn a_folder_where_the_excluded_sites_file_belongs_is_refused() {
+    let fixture = Fixture::new();
+    let destination = fixture.root.join("data");
+    let lease = prepare(&destination);
+    fs::create_dir(destination.join(super::excluded_sites::EXCLUDED_SITES_NAME))
+        .expect("create a synthetic folder");
+    let kept = lease
+        .excluded_sites_file()
+        .expect("open the synthetic data folder");
+    assert!(kept.read().is_err());
+    assert!(kept.save(b"owner.example.test").is_err());
+}
