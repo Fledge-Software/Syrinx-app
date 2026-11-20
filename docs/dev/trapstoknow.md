@@ -671,6 +671,25 @@ i5-4460 / HD 4600; no budget changed.
   `examples/linux/controls/find_observation.rs` and their RED/GREEN regressions
   (source-confirmed, 2026-11-05; native baseline, reversed-direction mutation
   and real Find-label inspection passed in the `a01b28d` receipt).
+- **The Find label can name the wrong match, because a late completion is
+  reported as the newer request.** `FindState::begin` sets the new request and
+  `step` moves the stepped position at once, but WebKit answers each `search`,
+  `search_next` and `search_previous` later, so an older `found-text` count is
+  emitted with the newer request number. `begin` also keeps the previous
+  query's count, so a Next sent before the new search answers steps modulo the
+  old count (old count 1, new count 3: the label settles on 1 of 3 while the
+  selection is on the second match; an old count of 0 drops the Next). Do not
+  correlate by guessing: WebKitGTK 2.54.1 discards the string and match index
+  at the signal (`WebKitFindController.cpp`, line 129, which emits only the
+  count), although its source answers one page's requests in the order sent
+  (`WebPage::FindString` replies synchronously, since GTK's drawing area keeps
+  `dispatchAfterEnsuringUpdatedScrollPosition`'s immediate default; image
+  analysis is Cocoa-only and, without site isolation, a page has no remote
+  pages), given in-order reply dispatch on one connection and no process swap
+  in between. That order is what a fix would rest on, and it is unproven
+  natively; see #245. Source: `browser_gtk/page.rs` and WebKitGTK 2.54.1's
+  `WebPageProxy.cpp`, `FindController.cpp` and `DrawingArea.cpp`
+  (source-confirmed, 2026-11-20; not reproduced).
 - **Native X11 focus alone does not establish window-manager activation.**
   At `cb44257`, three permissions runs failed the native-focus guard before
   Enter, and one earlier X11 probe failed popup-to-chrome transfer. Fixtures
