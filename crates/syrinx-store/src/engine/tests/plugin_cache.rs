@@ -240,6 +240,14 @@ fn the_table_checks_the_same_bounds_the_store_refuses_before_writing() {
     assert!(insert("'cache-test', zeroblob(31), zeroblob(32), 'v', zeroblob(32), 1").is_err());
     assert!(insert("'cache-test', zeroblob(32), zeroblob(33), 'v', zeroblob(32), 1").is_err());
     assert!(insert("'cache-test', zeroblob(32), zeroblob(32), '', zeroblob(32), 1").is_err());
+    assert!(insert("'cache-test', zeroblob(32), zeroblob(32), 'v', zeroblob(31), 1").is_err());
+    let long_version = "9".repeat(65);
+    assert!(
+        insert(&format!(
+            "'cache-test', zeroblob(32), zeroblob(32), '{long_version}', zeroblob(32), 1"
+        ))
+        .is_err()
+    );
     assert!(
         insert(&format!(
             "'cache-test', zeroblob(32), zeroblob(32), 'v', zeroblob(32), {largest}"

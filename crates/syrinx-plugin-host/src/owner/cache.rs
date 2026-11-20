@@ -1,18 +1,20 @@
 //! Syrinx's compiled-code cache (#137): each plugin's native code in a file in the cache
 //! folder beside the database, and its key and SHA-256 in the store, checked before every load.
 
-use std::collections::BTreeSet;
-use std::fs::{self, File};
+use std::collections::{BTreeMap, BTreeSet};
+use std::fs::{self, File, OpenOptions};
 use std::hash::{Hash, Hasher};
-use std::io::{Read, Write};
+use std::io::{ErrorKind, Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::mpsc::Sender;
 
 use syrinx_store::{MAX_PLUGIN_COMPILED_BYTES, PluginCompiled, Store, StoreError};
 use wasmtime::Engine;
 use wasmtime::component::Component;
 
 use crate::cache::{CacheError, CompiledCache, Refusal};
+use crate::worker::{PluginEvent, send_event};
 
 /// SHA-256 as Syrinx computes it. The application passes `syrinx_update::sha256`, which this
 /// crate may not depend on (`cargo xtask check-deps`).
@@ -31,23 +33,36 @@ pub struct CacheSetup {
 const ENTRY: &str = "cwasm";
 const PARTIAL: &str = "partial";
 
+/// FIPS 180-2's first test vector: the SHA-256 of `abc`.
+const ABC_SHA256: [u8; 32] = [
+    0xba, 0x78, 0x16, 0xbf, 0x8f, 0x01, 0xcf, 0xea, 0x41, 0x41, 0x40, 0xde, 0x5d, 0xae, 0x22, 0x23,
+    0xb0, 0x03, 0x61, 0xa3, 0x96, 0x17, 0x7a, 0x9c, 0xb4, 0x10, 0xff, 0x61, 0xf2, 0x00, 0x15, 0xad,
+];
+
 /// The compiled-code cache, keyed by the engine it was made for and this Syrinx's version.
+/// Every problem it meets is sent as `PluginEvent::Cache` on `events`.
 pub(crate) struct StoreCache {
     store: Arc<Store>,
     folder: PathBuf,
     sha256: Sha256,
     engine_key: [u8; 32],
     syrinx_version: String,
+    events: Sender<PluginEvent>,
 }
 
 impl StoreCache {
-    /// A cache for code compiled on `engine` by this `syrinx_version`.
+    /// A cache for code compiled on `engine` by this `syrinx_version`. A `sha256` that does
+    /// not compute SHA-256 is refused: tamper resistance rests on it.
     pub(crate) fn new(
         store: Arc<Store>,
         setup: CacheSetup,
         engine: &Engine,
         syrinx_version: String,
+        events: Sender<PluginEvent>,
     ) -> Result<Self, CacheError> {
+        if (setup.sha256)(b"abc").map_err(CacheError::Hash)? != ABC_SHA256 {
+            return Err(CacheError::Hash("the function given is not SHA-256".into()));
+        }
         let engine_key = engine_key(engine, setup.sha256)?;
         Ok(Self {
             store,
@@ -55,36 +70,82 @@ impl StoreCache {
             sha256: setup.sha256,
             engine_key,
             syrinx_version,
+            events,
         })
     }
 
-    /// Delete every record made under another engine key or Syrinx version, with its file,
-    /// then every file in the folder that no current record names, including partly written
-    /// ones. A subfolder or link is reported and left alone.
-    pub(crate) fn clean(&self) -> Vec<CacheError> {
-        let mut problems = Vec::new();
-        let records = match self.store.plugin_compiled_entries() {
-            Ok(records) => records,
-            Err(error) => return vec![store_error(error)],
+    /// Delete every record that is not current, with its file: one made under another engine
+    /// key or Syrinx version, or for other bytes than the plugin's install records. Then
+    /// delete every file in the folder no current record names, partly written ones included.
+    /// A subfolder or link is reported and left alone.
+    pub(crate) fn clean(&self) {
+        let current = match self.clean_records() {
+            Ok(current) => current,
+            Err(error) => return self.report(None, error),
         };
+        if let Err(error) = self.remove_unnamed_files(&current) {
+            self.report(None, error);
+        }
+    }
+
+    /// Delete the plugin's record and file, reporting a failure; for an uninstall.
+    pub(crate) fn forget(&self, plugin_id: &str) {
+        if let Err(error) = self.discard(plugin_id) {
+            self.report(Some(plugin_id), error);
+        }
+    }
+
+    /// Discard the records that are not current; the file names of those that are.
+    fn clean_records(&self) -> Result<BTreeSet<String>, CacheError> {
+        let records = self.store.plugin_compiled_entries().map_err(store_error)?;
+        let installed: BTreeMap<String, [u8; 32]> = self
+            .store
+            .plugin_installs()
+            .map_err(store_error)?
+            .into_iter()
+            .map(|install| (install.plugin_id, install.module_sha256))
+            .collect();
         let mut current = BTreeSet::new();
         for record in records {
-            if self.is_current_key(&record) {
+            let installed_bytes = installed.get(&record.plugin_id);
+            if self.is_current_key(&record) && installed_bytes == Some(&record.module_sha256) {
                 current.insert(entry_name(&record.plugin_id));
                 continue;
             }
             if let Err(error) = self.discard(&record.plugin_id) {
-                problems.push(error);
+                self.report(Some(&record.plugin_id), error);
             }
         }
-        if let Err(error) = self.remove_unnamed_files(&current, &mut problems) {
-            problems.push(error);
+        Ok(current)
+    }
+
+    /// Remove each plain file whose name is not in `current`; each failure is reported and
+    /// the sweep goes on.
+    fn remove_unnamed_files(&self, current: &BTreeSet<String>) -> Result<(), CacheError> {
+        for entry in fs::read_dir(&self.folder)? {
+            let removed = entry.map_err(CacheError::from).and_then(|entry| {
+                let kind = entry.file_type()?;
+                if !kind.is_file() {
+                    return Err(CacheError::NotAFile);
+                }
+                let kept = entry
+                    .file_name()
+                    .to_str()
+                    .is_some_and(|name| current.contains(name));
+                if kept {
+                    return Ok(());
+                }
+                remove_if_present(&entry.path())
+            });
+            if let Err(error) = removed {
+                self.report(None, error);
+            }
         }
-        problems
+        Ok(())
     }
 
     /// Delete the plugin's record and file. Both are tried; the first failure is returned.
-    pub(crate) fn discard(&self, plugin_id: &str) -> Result<(), CacheError> {
+    fn discard(&self, plugin_id: &str) -> Result<(), CacheError> {
         let record = self
             .store
             .forget_plugin_compiled(plugin_id.to_owned())
@@ -96,28 +157,9 @@ impl StoreCache {
         record.and(file)
     }
 
-    /// Remove each plain file whose name is not in `current`.
-    fn remove_unnamed_files(
-        &self,
-        current: &BTreeSet<String>,
-        problems: &mut Vec<CacheError>,
-    ) -> Result<(), CacheError> {
-        for entry in fs::read_dir(&self.folder)? {
-            let entry = entry?;
-            let kind = entry.file_type()?;
-            if !kind.is_file() {
-                problems.push(CacheError::NotAFile);
-                continue;
-            }
-            let kept = entry
-                .file_name()
-                .to_str()
-                .is_some_and(|name| current.contains(name));
-            if !kept {
-                remove_if_present(&entry.path())?;
-            }
-        }
-        Ok(())
+    fn report(&self, plugin_id: Option<&str>, error: CacheError) {
+        let plugin = plugin_id.map(str::to_owned);
+        send_event(&self.events, PluginEvent::Cache { plugin, error });
     }
 
     fn is_current_key(&self, record: &PluginCompiled) -> bool {
@@ -164,7 +206,7 @@ impl StoreCache {
         let expected = record.artifact_bytes.min(MAX_PLUGIN_COMPILED_BYTES);
         let file = match File::open(path) {
             Ok(file) => file,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            Err(error) if error.kind() == ErrorKind::NotFound => {
                 return Err(CacheError::Refused(Refusal::Missing));
             }
             Err(error) => return Err(error.into()),
@@ -182,26 +224,6 @@ impl StoreCache {
         Ok(bytes)
     }
 
-    /// Record the artefact's key and SHA-256, then write its file.
-    fn save(&self, plugin_id: &str, wasm: &[u8], component: &Component) -> Result<(), CacheError> {
-        let path = self.entry_path(plugin_id)?;
-        let bytes = component
-            .serialize()
-            .map_err(|error| CacheError::Serialize(format!("{error:#}")))?;
-        let record = PluginCompiled {
-            plugin_id: plugin_id.to_owned(),
-            module_sha256: (self.sha256)(wasm).map_err(CacheError::Hash)?,
-            engine_key: self.engine_key,
-            syrinx_version: self.syrinx_version.clone(),
-            artifact_sha256: (self.sha256)(&bytes).map_err(CacheError::Hash)?,
-            artifact_bytes: bytes.len() as u64,
-        };
-        self.store
-            .save_plugin_compiled(record)
-            .map_err(store_error)?;
-        write_replacing(&path, &bytes)
-    }
-
     /// The entry's file, named from a plugin id that is one plain segment.
     fn entry_path(&self, plugin_id: &str) -> Result<PathBuf, CacheError> {
         if !is_plain_id(plugin_id) {
@@ -212,31 +234,58 @@ impl StoreCache {
 }
 
 impl CompiledCache for StoreCache {
-    fn fetch(
-        &self,
-        engine: &Engine,
-        plugin_id: &str,
-        wasm: &[u8],
-        problems: &mut Vec<CacheError>,
-    ) -> Option<Component> {
+    fn fetch(&self, engine: &Engine, plugin_id: &str, wasm: &[u8]) -> Option<Component> {
         let error = match self.load(engine, plugin_id, wasm) {
             Ok(found) => return found,
             Err(error) => error,
         };
-        // Whatever failed, the entry goes, so the next activation compiles it afresh.
-        problems.push(error);
-        if let Err(error) = self.discard(plugin_id) {
-            problems.push(error);
+        // Only a refused entry goes; a busy store or a held file is a miss that keeps it.
+        if let CacheError::Refused(refusal) = error {
+            self.refuse(plugin_id, refusal);
+        } else {
+            self.report(Some(plugin_id), error);
         }
         None
     }
 
-    fn keep(&self, plugin_id: &str, wasm: &[u8], component: &Component) -> Result<(), CacheError> {
-        self.save(plugin_id, wasm, component)
+    fn refuse(&self, plugin_id: &str, refusal: Refusal) {
+        self.report(Some(plugin_id), CacheError::Refused(refusal));
+        self.forget(plugin_id);
     }
 
-    fn is_current(&self, plugin_id: &str, wasm: &[u8]) -> Result<bool, CacheError> {
-        Ok(self.current_record(plugin_id, wasm)?.is_some())
+    /// Record the artefact's key and SHA-256, then write its file.
+    fn keep(&self, plugin_id: &str, wasm: &[u8], component: &Component) {
+        let kept = self.entry_path(plugin_id).and_then(|path| {
+            let bytes = component
+                .serialize()
+                .map_err(|error| CacheError::Serialize(format!("{error:#}")))?;
+            let record = PluginCompiled {
+                plugin_id: plugin_id.to_owned(),
+                module_sha256: (self.sha256)(wasm).map_err(CacheError::Hash)?,
+                engine_key: self.engine_key,
+                syrinx_version: self.syrinx_version.clone(),
+                artifact_sha256: (self.sha256)(&bytes).map_err(CacheError::Hash)?,
+                artifact_bytes: bytes.len() as u64,
+            };
+            self.store
+                .save_plugin_compiled(record)
+                .map_err(store_error)?;
+            write_replacing(&path, &bytes)
+        });
+        if let Err(error) = kept {
+            self.report(Some(plugin_id), error);
+        }
+    }
+
+    fn is_current(&self, plugin_id: &str, wasm: &[u8]) -> bool {
+        match self.current_record(plugin_id, wasm) {
+            Ok(record) => record.is_some(),
+            Err(error) => {
+                // Unknown counts as not current: compiling costs only what a hit would save.
+                self.report(Some(plugin_id), error);
+                false
+            }
+        }
     }
 }
 
@@ -273,11 +322,17 @@ fn entry_name(plugin_id: &str) -> String {
     format!("{plugin_id}.{ENTRY}")
 }
 
-/// Write `bytes` to a partial file beside `path`, then rename it over `path`, so a reader
-/// never sees half an entry. A partial file left by a failure is removed at the next start.
+/// Write `bytes` to a fresh partial file beside `path`, then rename it over `path`, so a
+/// reader never sees half an entry. Whatever stood at the partial name, even a link, is
+/// removed first, and the new file is created exclusively, so nothing outside the folder is
+/// written through it. A partial file left by a failure is removed at the next start.
 fn write_replacing(path: &Path, bytes: &[u8]) -> Result<(), CacheError> {
     let partial = path.with_extension(format!("{ENTRY}.{PARTIAL}"));
-    let mut file = File::create(&partial)?;
+    remove_if_present(&partial)?;
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&partial)?;
     file.write_all(bytes)?;
     file.sync_all()?;
     drop(file);
@@ -285,11 +340,11 @@ fn write_replacing(path: &Path, bytes: &[u8]) -> Result<(), CacheError> {
     Ok(())
 }
 
-/// Remove a file; one already gone is not an error.
+/// Remove a file, or a link without following it; one already gone is not an error.
 fn remove_if_present(path: &Path) -> Result<(), CacheError> {
     match fs::remove_file(path) {
         Ok(()) => Ok(()),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) if error.kind() == ErrorKind::NotFound => Ok(()),
         Err(error) => Err(error.into()),
     }
 }
@@ -297,6 +352,10 @@ fn remove_if_present(path: &Path) -> Result<(), CacheError> {
 fn store_error(error: StoreError) -> CacheError {
     CacheError::Store(error.to_string())
 }
+
+#[cfg(test)]
+#[path = "../../tests/support/sha256.rs"]
+mod test_sha256;
 
 #[cfg(test)]
 mod tests {
@@ -315,13 +374,7 @@ mod tests {
 
     #[test]
     fn the_engine_key_is_stable_for_one_configuration_and_follows_the_bytes_written() {
-        let hash: Sha256 = |bytes| {
-            let mut key = [0; 32];
-            for (index, byte) in bytes.iter().enumerate() {
-                key[index % 32] ^= byte.rotate_left(index as u32 % 8);
-            }
-            Ok(key)
-        };
+        let hash: Sha256 = test_sha256::sha256;
         let engine = crate::engine::configured_engine().expect("an engine");
         let again = crate::engine::configured_engine().expect("another engine");
         let first = engine_key(&engine, hash).expect("a key");

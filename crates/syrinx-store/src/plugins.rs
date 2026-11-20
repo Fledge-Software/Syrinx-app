@@ -51,19 +51,31 @@ pub(crate) const SETTING_TABLE: &str = "CREATE TABLE plugin_setting (
     PRIMARY KEY(plugin_id, key)
 ) STRICT";
 
+/// The largest compiled artefact the cache records, written once for the constant and the
+/// table's CHECK alike.
+macro_rules! max_compiled_bytes {
+    () => {
+        1073741824
+    };
+}
+
 /// One row per plugin whose native code the compiled-code cache keeps (#137): the key it was
 /// compiled under and the SHA-256 the file must match before it is ever deserialised.
-pub(crate) const COMPILED_TABLE: &str = "CREATE TABLE plugin_compiled (
+pub(crate) const COMPILED_TABLE: &str = concat!(
+    "CREATE TABLE plugin_compiled (
     plugin_id TEXT PRIMARY KEY NOT NULL REFERENCES plugin_install(plugin_id) ON DELETE CASCADE,
     module_sha256 BLOB NOT NULL CHECK(length(module_sha256) = 32),
     engine_key BLOB NOT NULL CHECK(length(engine_key) = 32),
     syrinx_version TEXT NOT NULL CHECK(length(syrinx_version) BETWEEN 1 AND 64),
     artifact_sha256 BLOB NOT NULL CHECK(length(artifact_sha256) = 32),
-    artifact_bytes INTEGER NOT NULL CHECK(artifact_bytes BETWEEN 1 AND 1073741824)
-) STRICT";
+    artifact_bytes INTEGER NOT NULL CHECK(artifact_bytes BETWEEN 1 AND ",
+    max_compiled_bytes!(),
+    ")
+) STRICT"
+);
 
 /// The largest compiled artefact the cache records, so a read of one is bounded.
-pub const MAX_PLUGIN_COMPILED_BYTES: u64 = 1 << 30;
+pub const MAX_PLUGIN_COMPILED_BYTES: u64 = max_compiled_bytes!();
 
 /// The largest settings key and value one plugin may store, and how many keys it may hold.
 pub const MAX_PLUGIN_SETTING_KEY_BYTES: usize = 64;

@@ -11,9 +11,7 @@ use crate::bindings::syrinx::plugin::types::Outcome;
 use crate::grants::GrantSet;
 use crate::manifest::PluginManifest;
 use crate::session::{JobLimits, Mediator, RequestIds, Session};
-use crate::{
-    CacheError, Failure, HostError, LoadedPlugin, PluginHost, PreparedPlugin, Runtime, limits,
-};
+use crate::{Failure, HostError, LoadedPlugin, PluginHost, PreparedPlugin, Runtime, limits};
 
 use super::{PluginEvent, PluginStatus, ServiceFactory, StopReason};
 
@@ -34,21 +32,19 @@ pub(super) type Prepared<S> = Arc<Mutex<Option<PreparedPlugin<Mediator<S>>>>>;
 
 /// The plugin's prepared component: the first caller, a worker activating or a background
 /// compile, compiles (or loads from the cache) and links it while holding the lock, so a
-/// second caller waits for it and never compiles twice. Cache problems go into `problems`.
+/// second caller waits for it and never compiles twice.
 pub(super) fn prepare<S: PluginHost>(
     runtime: &Runtime,
     manifest: &PluginManifest,
     component: &[u8],
     prepared: &Prepared<S>,
-    problems: &mut Vec<CacheError>,
 ) -> Result<PreparedPlugin<Mediator<S>>, HostError> {
     let mut kept = prepared.lock().unwrap_or_else(PoisonError::into_inner);
     if let Some(prepared) = kept.as_ref() {
         return Ok(prepared.clone());
     }
     let compiled = runtime.compile_cached(manifest, component)?;
-    problems.extend(compiled.problems);
-    let linked = LoadedPlugin::<Mediator<S>>::prepare(runtime, &compiled.component)?;
+    let linked = LoadedPlugin::<Mediator<S>>::prepare(runtime, &compiled)?;
     Ok(kept.insert(linked).clone())
 }
 
@@ -203,23 +199,15 @@ impl<S: PluginHost> Worker<S> {
     }
 
     /// The prepared component, compiling and linking it on the plugin's first activation
-    /// unless a background compile already did. Each cache problem is reported.
+    /// unless a background compile already did.
     fn prepared(&self) -> Result<PreparedPlugin<Mediator<S>>, Failure> {
-        let mut problems = Vec::new();
-        let prepared = prepare(
+        prepare(
             &self.runtime,
             &self.manifest,
             &self.component,
             &self.prepared,
-            &mut problems,
-        );
-        for error in problems {
-            self.send(PluginEvent::Cache {
-                plugin: Some(self.manifest.id().to_owned()),
-                error,
-            });
-        }
-        prepared.map_err(Failure::Load)
+        )
+        .map_err(Failure::Load)
     }
 
     /// Best effort `lifecycle.deactivate` under its own deadline, then exit.

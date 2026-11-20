@@ -7,25 +7,22 @@ use std::io;
 use wasmtime::Engine;
 use wasmtime::component::Component;
 
-/// Native code kept between sessions so a plugin activates without compiling again.
+/// Native code kept between sessions so a plugin activates without compiling again. Each
+/// method reports its own problems as `PluginEvent::Cache`; none stops a plugin from loading.
 pub(crate) trait CompiledCache: Send + Sync {
     /// The component compiled earlier from exactly these `plugin.wasm` bytes, on an engine
-    /// like `engine` and this Syrinx; `None` on a miss. An entry that fails its checks is
-    /// deleted, and the reason goes into `problems`.
-    fn fetch(
-        &self,
-        engine: &Engine,
-        plugin_id: &str,
-        wasm: &[u8],
-        problems: &mut Vec<CacheError>,
-    ) -> Option<Component>;
+    /// like `engine` and this Syrinx; `None` on a miss. An entry it refuses is deleted.
+    fn fetch(&self, engine: &Engine, plugin_id: &str, wasm: &[u8]) -> Option<Component>;
+
+    /// Delete an entry `fetch` returned that failed a later check, and report why.
+    fn refuse(&self, plugin_id: &str, refusal: Refusal);
 
     /// Keep a component just compiled from `wasm`, which passed every check.
-    fn keep(&self, plugin_id: &str, wasm: &[u8], component: &Component) -> Result<(), CacheError>;
+    fn keep(&self, plugin_id: &str, wasm: &[u8], component: &Component);
 
     /// Whether an entry for these bytes is recorded under the current key. Its file is not
-    /// read: `fetch` checks that when the plugin activates.
-    fn is_current(&self, plugin_id: &str, wasm: &[u8]) -> Result<bool, CacheError>;
+    /// read: `fetch` checks that when the plugin activates. Unknown counts as not current.
+    fn is_current(&self, plugin_id: &str, wasm: &[u8]) -> bool;
 }
 
 /// Why the cache could not be used or kept. The plugin is compiled instead; it never stops a
@@ -59,9 +56,12 @@ pub enum Refusal {
     Hash,
     /// wasmtime refused the checked bytes, for example for another CPU's features.
     Deserialize(String),
+    /// The deserialised component failed the identity or contract checks a compile passes.
+    Checks(String),
 }
 
-/// How many components the runtime compiled from `plugin.wasm` and loaded from the cache.
+/// How many components the runtime compiled from `plugin.wasm` and loaded from the cache; a
+/// diagnostic, not part of the application's contract.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct CompileCounts {
     pub compiled: u64,
@@ -89,6 +89,7 @@ impl fmt::Display for Refusal {
             Self::Length => write!(formatter, "its file has the wrong length"),
             Self::Hash => write!(formatter, "its file does not match its SHA-256"),
             Self::Deserialize(error) => write!(formatter, "wasmtime refused it: {error}"),
+            Self::Checks(error) => write!(formatter, "it failed the plugin's checks: {error}"),
         }
     }
 }

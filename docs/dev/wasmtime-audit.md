@@ -109,12 +109,16 @@ on-disk cache (`cache_config_load`, the `cache` feature) stays off.
   (`src/engine/serialization.rs`, `check_isa_flags`), so a data folder copied
   to another machine misses and recompiles.
 - **After loading.** A deserialised component passes `identity::check_component`
-  and `checks::component_fits`, as a fresh compile does. A refused or damaged
-  entry is deleted with its row, and the plugin compiles from `plugin.wasm`.
+  and `checks::component_fits`, as a fresh compile does; one that fails them is
+  refused like a damaged entry. A refused entry is deleted with its row, and the
+  plugin compiles from `plugin.wasm`. A busy store or a file held open is only a
+  miss and deletes nothing.
 - **SHA-256.** The application passes `syrinx_update::sha256` (Windows CNG,
   `ring` on Linux, both audited). The plugin host may depend only on
   `syrinx-core` and `syrinx-store` (`cargo xtask check-deps`), so it takes the
-  function as a value rather than depending on `syrinx-update`.
+  function as a value rather than depending on `syrinx-update`, and refuses the
+  cache unless the function gives FIPS 180's answer for `abc`. The host's tests
+  use a test-only SHA-256 checked against the FIPS vectors.
 - **The honest limit** (research note 10, section 5) is unchanged: a program
   already running as the owner can rewrite the cache folder and its database
   row together. The hash check narrows the window to what such a program could

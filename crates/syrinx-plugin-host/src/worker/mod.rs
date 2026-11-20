@@ -122,8 +122,9 @@ pub struct Plugins<S: PluginHost> {
     /// Worker threads no slot owns any more, still stopping, at most one per plugin id; a
     /// plugin added again waits for its own, and shutdown joins the rest.
     stopping: BTreeMap<String, JoinHandle<()>>,
-    /// Background compiles started by `prepare_in_background`; shutdown joins them.
-    preparing: Vec<JoinHandle<()>>,
+    /// Background compiles started by `prepare_in_background`, by plugin id; each is joined
+    /// once finished or at shutdown, and a panic is reported.
+    preparing: Vec<(String, JoinHandle<()>)>,
 }
 
 /// One plugin's compile ahead of its first activation, run on its own thread.
@@ -169,7 +170,20 @@ impl<S: PluginHost> Plugins<S> {
         services: impl Fn(&PluginManifest) -> S + Send + Sync + 'static,
     ) -> (Self, Receiver<PluginEvent>) {
         let (events, received) = mpsc::channel();
-        let plugins = Self {
+        let plugins = Self::with_events(runtime, host_version, grants, services, events);
+        (plugins, received)
+    }
+
+    /// `new`, sending every `PluginEvent` on `events`, a channel the caller already reports
+    /// other events on.
+    pub fn with_events(
+        runtime: Runtime,
+        host_version: impl Into<String>,
+        grants: GrantSet,
+        services: impl Fn(&PluginManifest) -> S + Send + Sync + 'static,
+        events: Sender<PluginEvent>,
+    ) -> Self {
+        Self {
             runtime,
             requests: Arc::new(RequestIds::default()),
             grants,
@@ -179,8 +193,7 @@ impl<S: PluginHost> Plugins<S> {
             slots: BTreeMap::new(),
             stopping: BTreeMap::new(),
             preparing: Vec::new(),
-        };
-        (plugins, received)
+        }
     }
 
     /// Add a registered plugin and its component's bytes. Nothing is compiled or run.
@@ -203,7 +216,8 @@ impl<S: PluginHost> Plugins<S> {
     /// Compile `plugin` on a background thread when the runtime's cache has no current entry
     /// for it, so its first activation loads it instead of compiling. An activation that
     /// starts meanwhile waits for this compile rather than compiling twice. Returns at once;
-    /// without a cache nothing is compiled.
+    /// without a cache nothing is compiled. A thread that cannot start is reported as
+    /// `PluginEvent::PrepareFailed`, and the first activation compiles instead.
     pub fn prepare_in_background(&mut self, plugin: &str) -> CallResult<()> {
         let slot = self
             .slots
@@ -219,16 +233,34 @@ impl<S: PluginHost> Plugins<S> {
             prepared: Arc::clone(&slot.prepared),
             events: self.events.clone(),
         };
-        let thread = std::thread::Builder::new()
+        self.join_finished_compiles();
+        let spawned = std::thread::Builder::new()
             .name(format!("syrinx-prepare-{plugin}"))
-            .spawn(move || background.run())
-            .map_err(|error| HostError::Unavailable(format!("no compile thread: {error}")))?;
-        self.preparing.retain(|thread| !thread.is_finished());
-        self.preparing.push(thread);
+            .spawn(move || background.run());
+        match spawned {
+            Ok(thread) => self.preparing.push((plugin.to_owned(), thread)),
+            Err(error) => {
+                let error = HostError::Unavailable(format!("no compile thread: {error}"));
+                let plugin = plugin.to_owned();
+                send_event(&self.events, PluginEvent::PrepareFailed { plugin, error });
+            }
+        }
         Ok(())
     }
 
-    /// How many components the runtime compiled and loaded from its cache.
+    /// Join each background compile that has finished, reporting one that panicked.
+    fn join_finished_compiles(&mut self) {
+        let (finished, running) = std::mem::take(&mut self.preparing)
+            .into_iter()
+            .partition(|(_, thread)| thread.is_finished());
+        self.preparing = running;
+        for (plugin, thread) in finished {
+            join_compile(&self.events, plugin, thread);
+        }
+    }
+
+    /// How many components the runtime compiled and loaded from its cache: a diagnostic for
+    /// tests and measurements, not part of the application's contract.
     pub fn compile_counts(&self) -> crate::CompileCounts {
         self.runtime.compile_counts()
     }
@@ -485,58 +517,52 @@ impl<S: PluginHost> Plugins<S> {
             threads.extend(slot.worker.take().map(|worker| worker.thread));
         }
         threads.extend(std::mem::take(&mut self.stopping).into_values());
-        threads.append(&mut self.preparing);
         for thread in threads {
             if thread.join().is_err() {
                 eprintln!("a plugin worker thread panicked");
             }
         }
+        for (plugin, thread) in std::mem::take(&mut self.preparing) {
+            join_compile(&self.events, plugin, thread);
+        }
+    }
+}
+
+/// Wait for one background compile, reporting it if it panicked.
+fn join_compile(events: &Sender<PluginEvent>, plugin: String, thread: JoinHandle<()>) {
+    if thread.join().is_ok() {
+        return;
+    }
+    let error = HostError::Unavailable("the background compile panicked".into());
+    send_event(events, PluginEvent::PrepareFailed { plugin, error });
+}
+
+/// Tell the application; once it stopped listening there is no one left to tell but stderr.
+pub(crate) fn send_event(events: &Sender<PluginEvent>, event: PluginEvent) {
+    if let Err(unsent) = events.send(event) {
+        eprintln!("a plugin event had no listener: {:?}", unsent.0);
     }
 }
 
 impl<S: PluginHost> Background<S> {
-    /// Compile the plugin unless the cache is current for it, then report what went wrong.
+    /// Compile the plugin unless the cache is current for it; the cache reports its own
+    /// problems, and a failed compile is reported here.
     fn run(self) {
-        let mut problems = Vec::new();
-        let needed = match self
+        if !self
             .runtime
             .needs_compiling(&self.manifest, &self.component)
         {
-            Ok(needed) => needed,
-            Err(error) => {
-                // Without knowing, compiling costs only the time a hit would have saved.
-                problems.push(error);
-                true
-            }
-        };
-        let compiled = if needed {
-            prepare(
-                &self.runtime,
-                &self.manifest,
-                &self.component,
-                &self.prepared,
-                &mut problems,
-            )
-            .map(drop)
-        } else {
-            Ok(())
-        };
-        let plugin = self.manifest.id().to_owned();
-        let mut events: Vec<PluginEvent> = problems
-            .into_iter()
-            .map(|error| PluginEvent::Cache {
-                plugin: Some(plugin.clone()),
-                error,
-            })
-            .collect();
-        if let Err(error) = compiled {
-            events.push(PluginEvent::PrepareFailed { plugin, error });
+            return;
         }
-        for event in events {
-            // Once the application stopped listening there is no one left to tell.
-            if self.events.send(event).is_err() {
-                return;
-            }
+        let compiled = prepare(
+            &self.runtime,
+            &self.manifest,
+            &self.component,
+            &self.prepared,
+        );
+        if let Err(error) = compiled {
+            let plugin = self.manifest.id().to_owned();
+            send_event(&self.events, PluginEvent::PrepareFailed { plugin, error });
         }
     }
 }

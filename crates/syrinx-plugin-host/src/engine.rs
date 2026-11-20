@@ -7,7 +7,7 @@ use wasmtime::component::Component;
 use wasmtime::{Config, Engine, Strategy};
 
 use crate::HostError;
-use crate::cache::{CacheError, CompileCounts, CompiledCache};
+use crate::cache::{CompileCounts, CompiledCache, Refusal};
 use crate::checks;
 use crate::identity;
 use crate::manifest::PluginManifest;
@@ -31,12 +31,6 @@ pub struct Runtime {
 struct Counts {
     compiled: AtomicU64,
     loaded: AtomicU64,
-}
-
-/// A component from `Runtime::compile_cached`, with every cache problem met on the way.
-pub(crate) struct Compiled {
-    pub(crate) component: Component,
-    pub(crate) problems: Vec<CacheError>,
 }
 
 /// The engine configuration every plugin compiles and runs under.
@@ -71,7 +65,8 @@ impl Runtime {
         self
     }
 
-    /// How many components this runtime and its clones compiled and loaded from the cache.
+    /// How many components this runtime and its clones compiled and loaded from the cache: a
+    /// diagnostic for tests and measurements, not part of the application's contract.
     pub fn compile_counts(&self) -> CompileCounts {
         CompileCounts {
             compiled: self.counts.compiled.load(Ordering::Relaxed),
@@ -96,7 +91,8 @@ impl Runtime {
     /// Compile a component, refusing precompiled code and anything that does
     /// not fit `syrinx:plugin@0.1.x` before any of its code runs.
     pub fn compile(&self, bytes: &[u8]) -> Result<Component, HostError> {
-        let component = self.build_component(bytes)?;
+        refuse_precompiled(bytes)?;
+        let component = self.new_component(bytes)?;
         checks::component_fits(&self.engine, &component)?;
         Ok(component)
     }
@@ -119,64 +115,69 @@ impl Runtime {
         manifest: &PluginManifest,
         bytes: &[u8],
     ) -> Result<Component, HostError> {
-        let component = self.build_component(bytes)?;
-        self.check_component(manifest, &component)?;
-        Ok(component)
+        refuse_precompiled(bytes)?;
+        self.compile_checked(manifest, bytes)
     }
 
-    /// `compile_manifest` through the runtime's cache, when it has one: an entry that is
-    /// current and passes its checks is loaded instead of compiled, and a component compiled
-    /// here is kept for next time. A cache problem never stops the plugin; it is returned.
+    /// `compile_manifest` through the runtime's cache, when it has one: a current entry that
+    /// passes every check is loaded instead of compiled, and a component compiled here is kept
+    /// for next time. The cache reports its own problems; none stops the plugin.
     pub(crate) fn compile_cached(
         &self,
         manifest: &PluginManifest,
         bytes: &[u8],
-    ) -> Result<Compiled, HostError> {
-        let mut problems = Vec::new();
-        let Some(cache) = self.cache.as_ref() else {
-            let component = self.compile_manifest(manifest, bytes)?;
-            return Ok(Compiled {
-                component,
-                problems,
-            });
-        };
+    ) -> Result<Component, HostError> {
         refuse_precompiled(bytes)?;
-        if let Some(component) = cache.fetch(&self.engine, manifest.id(), bytes, &mut problems) {
-            // Code from the cache passes the same checks as code compiled now.
-            self.check_component(manifest, &component)?;
-            self.counts.loaded.fetch_add(1, Ordering::Relaxed);
-            return Ok(Compiled {
-                component,
-                problems,
-            });
+        let Some(cache) = self.cache.as_deref() else {
+            return self.compile_checked(manifest, bytes);
+        };
+        if let Some(component) = self.load_cached(cache, manifest, bytes) {
+            return Ok(component);
         }
-        let component = self.compile_manifest(manifest, bytes)?;
-        if let Err(problem) = cache.keep(manifest.id(), bytes, &component) {
-            problems.push(problem);
-        }
-        Ok(Compiled {
-            component,
-            problems,
-        })
+        let component = self.compile_checked(manifest, bytes)?;
+        cache.keep(manifest.id(), bytes, &component);
+        Ok(component)
     }
 
     /// Whether the plugin has no current cache entry, so compiling it ahead of activation
-    /// would save its first activation the compile. Without a cache nothing is saved.
-    pub(crate) fn needs_compiling(
-        &self,
-        manifest: &PluginManifest,
-        bytes: &[u8],
-    ) -> Result<bool, CacheError> {
-        let Some(cache) = self.cache.as_ref() else {
-            return Ok(false);
-        };
-        let current = cache.is_current(manifest.id(), bytes)?;
-        Ok(!current)
+    /// saves its first activation the compile. Without a cache nothing is saved.
+    pub(crate) fn needs_compiling(&self, manifest: &PluginManifest, bytes: &[u8]) -> bool {
+        self.cache
+            .as_ref()
+            .is_some_and(|cache| !cache.is_current(manifest.id(), bytes))
     }
 
     /// Whether plugins' native code is kept in a compiled-code cache.
     pub(crate) fn has_cache(&self) -> bool {
         self.cache.is_some()
+    }
+
+    /// The cached component, once it passes the same checks as code compiled now; one that
+    /// fails them is refused, so the plugin is compiled afresh.
+    fn load_cached(
+        &self,
+        cache: &dyn CompiledCache,
+        manifest: &PluginManifest,
+        bytes: &[u8],
+    ) -> Option<Component> {
+        let component = cache.fetch(&self.engine, manifest.id(), bytes)?;
+        if let Err(error) = self.check_component(manifest, &component) {
+            cache.refuse(manifest.id(), Refusal::Checks(error.to_string()));
+            return None;
+        }
+        self.counts.loaded.fetch_add(1, Ordering::Relaxed);
+        Some(component)
+    }
+
+    /// Compile bytes already known not to be precompiled, then check them against the manifest.
+    fn compile_checked(
+        &self,
+        manifest: &PluginManifest,
+        bytes: &[u8],
+    ) -> Result<Component, HostError> {
+        let component = self.new_component(bytes)?;
+        self.check_component(manifest, &component)?;
+        Ok(component)
     }
 
     /// The registered manifest's identity, then the contract.
@@ -190,9 +191,8 @@ impl Runtime {
         checks::component_fits(&self.engine, component)
     }
 
-    /// Build a component from its bytes, refusing precompiled code first.
-    fn build_component(&self, bytes: &[u8]) -> Result<Component, HostError> {
-        refuse_precompiled(bytes)?;
+    /// Compile a component from bytes already known not to be precompiled.
+    fn new_component(&self, bytes: &[u8]) -> Result<Component, HostError> {
         let component = Component::new(&self.engine, bytes)
             .map_err(|error| HostError::Malformed(format!("{error:#}")))?;
         self.counts.compiled.fetch_add(1, Ordering::Relaxed);

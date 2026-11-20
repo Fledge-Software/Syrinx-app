@@ -6,9 +6,12 @@ use std::ffi::OsString;
 use std::path::Path;
 use std::sync::Arc;
 
+use syrinx_platform::CacheFolder;
 use syrinx_plugin_host::grants::{DenyList, Protected};
-use syrinx_plugin_host::owner::{CacheSetup, OwnerError, OwnerRuntime};
-use syrinx_store::{Store, StoreError};
+use syrinx_plugin_host::owner::{CacheSetup, OwnerRuntime};
+use syrinx_store::{LocationError, Store, StoreError};
+
+use super::SessionError;
 
 /// Environment variables naming system folders no plugin may be granted, by kind. A
 /// variable this system does not set protects nothing.
@@ -25,25 +28,53 @@ const SYSTEM_FOLDERS: [(&str, Protected); 6] = [
 /// never synced or roamed, and never copied into a backup.
 pub(super) const CACHE_FOLDER: &str = "PluginCache";
 
+/// The plugin runtime and the folder its compiled-code cache writes to; `close` stops the
+/// runtime before it releases the folder.
+pub(super) struct SessionPlugins {
+    pub(super) runtime: OwnerRuntime,
+    pub(super) cache_folder: Option<CacheFolder>,
+}
+
 /// Read the owner's grants and clear stale entries from the compiled-code cache in
-/// `cache_folder`, which the caller holds until the runtime closes; without one, plugins
-/// compile at each activation. No plugin is installed from a package yet (2d), so no plugin
-/// code, compiler or worker starts here; each starts on first use.
+/// `cache_folder`; a refused folder leaves plugins compiling at each activation. Each problem
+/// is returned for the session to report: none stops browsing. No plugin is installed from a
+/// package yet (2d), so no plugin code, compiler or worker starts here.
 pub(super) fn start(
     store: &Arc<Store>,
     state_dir: &Path,
-    cache_folder: Option<&Path>,
-) -> Result<OwnerRuntime, OwnerError> {
-    let cache = cache_folder.map(|folder| CacheSetup {
-        folder: folder.to_path_buf(),
+    cache_folder: Result<CacheFolder, LocationError>,
+) -> (Option<SessionPlugins>, Vec<SessionError>) {
+    let mut problems = Vec::new();
+    let cache_folder = match cache_folder {
+        Ok(folder) => Some(folder),
+        Err(error) => {
+            problems.push(SessionError::PluginCache(error));
+            None
+        }
+    };
+    let cache = cache_folder.as_ref().map(|folder| CacheSetup {
+        folder: folder.path().to_path_buf(),
         sha256: compiled_sha256,
     });
-    OwnerRuntime::start(
+    let started = OwnerRuntime::start(
         Arc::clone(store),
         env!("CARGO_PKG_VERSION"),
         deny_list(state_dir),
         cache,
-    )
+    );
+    match started {
+        Ok(runtime) => {
+            let plugins = SessionPlugins {
+                runtime,
+                cache_folder,
+            };
+            (Some(plugins), problems)
+        }
+        Err(error) => {
+            problems.push(SessionError::Plugins(error));
+            (None, problems)
+        }
+    }
 }
 
 /// SHA-256 for the compiled-code cache, from the audited implementation updates use.
@@ -51,11 +82,17 @@ fn compiled_sha256(bytes: &[u8]) -> Result<[u8; 32], String> {
     syrinx_update::sha256(bytes).map_err(|error| error.to_string())
 }
 
-/// Stop every plugin, then hand back the store, which nothing else holds any more, for the
-/// session to close.
-pub(super) fn close(plugins: Option<OwnerRuntime>, store: Arc<Store>) -> Result<(), StoreError> {
-    if let Some(plugins) = plugins {
-        plugins.shutdown();
+/// Stop every plugin, release the cache folder, then hand back the store, which nothing else
+/// holds any more, for the session to close.
+pub(super) fn close(plugins: Option<SessionPlugins>, store: Arc<Store>) -> Result<(), StoreError> {
+    if let Some(SessionPlugins {
+        runtime,
+        cache_folder,
+    }) = plugins
+    {
+        runtime.shutdown();
+        // Only once no plugin can write to it.
+        drop(cache_folder);
     }
     match Arc::try_unwrap(store) {
         Ok(store) => store.shutdown(),

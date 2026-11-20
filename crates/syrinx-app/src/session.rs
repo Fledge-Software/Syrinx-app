@@ -633,13 +633,12 @@ fn run(
     events: &UnboundedSender<SessionEvent>,
 ) -> Result<(), SessionError> {
     let mut startup = StartupFacts::default();
-    let Some((store, mut worker)) = startup_session(&data_dir, &commands, events, &mut startup)?
-    else {
+    let Some(mut opened) = startup_session(&data_dir, &commands, events, &mut startup)? else {
         return Ok(());
     };
-    worker.acceptance = acceptance;
+    opened.worker.acceptance = acceptance;
     // The guard has accepted the folder; `serve_accepted` keeps any stop beside the database.
-    serve_accepted(usage, startup, store, worker, commands, events, &data_dir)
+    serve_accepted(usage, startup, opened, commands, events, &data_dir)
 }
 
 /// Serves commands on the accepted folder. The one place a stop is kept in the log, written
@@ -647,32 +646,23 @@ fn run(
 fn serve_accepted(
     usage: Arc<UsageRecorder>,
     startup: StartupFacts,
-    store: Store,
-    mut worker: Worker,
+    opened: Opened,
     commands: mpsc::Receiver<SessionCommand>,
     events: &UnboundedSender<SessionEvent>,
     data_dir: &std::path::Path,
 ) -> Result<(), SessionError> {
+    let Opened {
+        store,
+        mut worker,
+        plugin_cache,
+    } = opened;
     worker.survival.keep_in(data_dir.to_path_buf());
     // The session owns the plugin runtime, which shares its store; plugins never stop browsing.
     let store = Arc::new(store);
-    // The cache folder is held until the runtime has closed; a refused one is reported.
-    let (cache_folder, refused) = match worker.plugin_cache.take() {
-        Some(Ok(folder)) => (Some(folder), Ok(())),
-        Some(Err(error)) => (
-            None,
-            emit_recoverable(events, SessionError::PluginCache(error)),
-        ),
-        None => (None, Ok(())),
-    };
-    let cache_path = cache_folder.as_ref().map(CacheFolder::path);
-    let (plugins, started) = match plugins::start(&store, data_dir, cache_path) {
-        Ok(plugins) => (Some(plugins), refused),
-        Err(error) => (
-            None,
-            refused.and_then(|()| emit_recoverable(events, SessionError::Plugins(error))),
-        ),
-    };
+    let (plugins, problems) = plugins::start(&store, data_dir, plugin_cache);
+    let started = problems
+        .into_iter()
+        .try_for_each(|error| emit_recoverable(events, error));
     let result = started.and_then(|()| {
         serve_counted(
             &usage,
@@ -785,7 +775,7 @@ fn startup_session(
     commands: &mpsc::Receiver<SessionCommand>,
     events: &UnboundedSender<SessionEvent>,
     facts: &mut StartupFacts,
-) -> Result<Option<(Store, Worker)>, SessionError> {
+) -> Result<Option<Opened>, SessionError> {
     // The guarded preflight retains either the existing primary or the exact recovery offer.
     let confirmed = match recovery::prepare_startup(data_dir)? {
         StartupStorage::Ready(lease) => match open_session(lease, false) {
@@ -823,7 +813,7 @@ fn open_with_repair(
     error: SessionError,
     commands: &mpsc::Receiver<SessionCommand>,
     events: &UnboundedSender<SessionEvent>,
-) -> Result<Option<(Store, Worker)>, SessionError> {
+) -> Result<Option<Opened>, SessionError> {
     let Some(reason) = history_repair::repairable(&error) else {
         return Err(error);
     };
@@ -836,16 +826,25 @@ fn open_with_repair(
     open_session(lease, true).map(Some)
 }
 
+/// What a successful open hands the session: the store, the restored worker, and the
+/// compiled-code cache's folder opened under the same lease (#137).
+struct Opened {
+    store: Store,
+    worker: Worker,
+    plugin_cache: Result<CacheFolder, LocationError>,
+}
+
 /// Opens the store and the deletion journal; `repair` rebuilds the journal and clears all
 /// history first, which the owner has confirmed.
-fn open_session(
-    lease: WindowsDirectoryLease,
-    repair: bool,
-) -> Result<(Store, Worker), SessionError> {
+fn open_session(lease: WindowsDirectoryLease, repair: bool) -> Result<Opened, SessionError> {
     let lease = Arc::new(lease);
     let store = Store::open(lease.clone()).map_err(SessionError::Store)?;
     match open_worker(&store, &lease, repair) {
-        Ok(worker) => Ok((store, worker)),
+        Ok(worker) => Ok(Opened {
+            store,
+            worker,
+            plugin_cache: lease.cache_folder(plugins::CACHE_FOLDER),
+        }),
         Err(error) => {
             // Recovery cannot overlap live connections or conceal a failed close.
             finish_store(Err(error), store.shutdown())
@@ -861,9 +860,7 @@ fn open_worker(
 ) -> Result<Worker, SessionError> {
     let page_text = open_page_text(lease, repair)?;
     let journal = open_journal(store, lease, repair)?;
-    let mut worker = Worker::restore(store, journal, page_text)?;
-    worker.plugin_cache = Some(lease.cache_folder(plugins::CACHE_FOLDER));
-    Ok(worker)
+    Worker::restore(store, journal, page_text)
 }
 
 /// Opens the full-text index; a repair first removes its page text, before the journal is
@@ -937,9 +934,6 @@ struct Worker {
     survival: stop::Survival,
     /// A tab model a busy database refused, and when to try it again (#9).
     unsaved: unsaved::Unsaved,
-    /// The compiled-code cache's folder, opened under the lease for the plugin runtime (#137);
-    /// taken when the runtime starts.
-    plugin_cache: Option<Result<CacheFolder, LocationError>>,
     /// Whether the window missed the zoom levels a clear applied; an idle tick resends them (#196).
     zoom_levels: zoom_levels::ZoomLevelsReport,
 }
@@ -1024,7 +1018,6 @@ impl Worker {
             survival: stop::Survival::new(),
             unsaved: unsaved::Unsaved::default(),
             zoom_levels: zoom_levels::ZoomLevelsReport::default(),
-            plugin_cache: None,
         })
     }
 

@@ -346,7 +346,8 @@ fn a_confirmed_history_repair_clears_page_text_even_when_the_index_matches_the_n
     seed_index_ahead_of_a_repair(&fixture);
 
     let lease = WindowsDirectoryLease::prepare(&fixture.0).expect("guard synthetic data");
-    let (store, worker) = open_session(lease, true).expect("open with a confirmed repair");
+    let Opened { store, worker, .. } =
+        open_session(lease, true).expect("open with a confirmed repair");
     let index = worker.page_text.index().expect("the index is open");
     assert!(ids_in(index, Namespace::page()).is_empty());
     assert_eq!(ids_in(index, notes()), ["kept"]);
@@ -476,7 +477,9 @@ fn a_repair_goes_ahead_when_a_file_stands_where_the_index_folder_belongs() {
     checked_io(fs::write(index_folder(&fixture), b"synthetic blocker"));
 
     let lease = WindowsDirectoryLease::prepare(&fixture.0).expect("guard synthetic data");
-    let (store, mut worker) = open_session(lease, true).expect("open with a confirmed repair");
+    let Opened {
+        store, mut worker, ..
+    } = open_session(lease, true).expect("open with a confirmed repair");
     assert!(worker.page_text.index().is_none());
     // The guard's refusal at opening and again at the repair are both kept.
     let blocked = |operation| SessionError::During {
@@ -1007,7 +1010,9 @@ mod windows {
         let held = hold_index_metadata(&fixture, SHARE_DELETE_ONLY);
 
         let lease = WindowsDirectoryLease::prepare(&fixture.0).expect("guard synthetic data");
-        let (store, mut worker) = open_session(lease, true).expect("open with a confirmed repair");
+        let Opened {
+            store, mut worker, ..
+        } = open_session(lease, true).expect("open with a confirmed repair");
         drop(held);
         let index = worker.page_text.index().expect("a fresh index is open");
         assert!(ids_in(index, Namespace::page()).is_empty());
@@ -1054,7 +1059,8 @@ mod windows {
         drop(held);
 
         let lease = WindowsDirectoryLease::prepare(&fixture.0).expect("guard synthetic data");
-        let (store, worker) = open_session(lease, true).expect("repair once the index is free");
+        let Opened { store, worker, .. } =
+            open_session(lease, true).expect("repair once the index is free");
         let index = worker.page_text.index().expect("the index is open");
         assert!(ids_in(index, Namespace::page()).is_empty());
         assert_eq!(index.cleared_generation(), 1);
@@ -1103,7 +1109,8 @@ mod windows {
         assert_eq!(segment_files(&fixture), std::slice::from_ref(&segment));
 
         let lease = WindowsDirectoryLease::prepare(&fixture.0).expect("guard synthetic data");
-        let (store, worker) = open_session(lease, true).expect("repair once the segment is free");
+        let Opened { store, worker, .. } =
+            open_session(lease, true).expect("repair once the segment is free");
         let index = worker.page_text.index().expect("the index is open");
         assert!(ids_in(index, Namespace::page()).is_empty());
         assert_eq!(index.cleared_generation(), 1);
@@ -1136,7 +1143,9 @@ mod windows {
         );
 
         let lease = WindowsDirectoryLease::prepare(&fixture.0).expect("guard synthetic data");
-        let (store, mut worker) = open_session(lease, true).expect("open with a confirmed repair");
+        let Opened {
+            store, mut worker, ..
+        } = open_session(lease, true).expect("open with a confirmed repair");
         assert!(worker.page_text.index().is_none());
         let Err(SessionError::AfterEarlier { error, .. }) = worker.page_text.take_problem() else {
             panic!("expected the junction to be reported");
