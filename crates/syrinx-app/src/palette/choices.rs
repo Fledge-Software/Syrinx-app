@@ -91,11 +91,12 @@ impl PaletteChoices {
         self.entry = text.trim().to_owned();
         self.matched = ParsedQuery::parse(text).text.trim().to_owned();
         self.web_search = accepts_address && matches!(recognized, Ok(None));
-        // A refused address explains itself only where an address could be entered.
+        // A refused address explains itself only where an address could be entered, and an
+        // empty bar has nothing to explain.
         self.refusal = recognized
             .as_ref()
             .err()
-            .filter(|_| accepts_address)
+            .filter(|_| accepts_address && !text.trim().is_empty())
             .map(|error| (*error).to_owned());
         self.status = self.refusal.clone().unwrap_or_default();
         self.address = match recognized {
@@ -541,8 +542,9 @@ mod tests {
             let mut choices = PaletteChoices::default();
             let request = choices.query(input);
             assert_eq!(choices.address, None);
-            if let Err(error) = navigation::recognized_address(input) {
-                assert_eq!(choices.status, error);
+            match navigation::recognized_address(input) {
+                Err(error) if !input.is_empty() => assert_eq!(choices.status, error),
+                _ => assert_eq!(choices.status, "", "an empty bar shows no status line"),
             }
             assert!(choices.submission(input.to_owned(), false).is_none());
             assert!(choices.receive(request, Ok(results(&targets()))));
