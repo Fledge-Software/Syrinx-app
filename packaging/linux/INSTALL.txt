@@ -46,7 +46,7 @@ It checks every file against SHA256SUMS, then copies:
     syrinx.desktop  to ~/.local/share/applications/syrinx.desktop
     syrinx.png      to ~/.local/share/icons/hicolor/256x256/apps/syrinx.png
 
-(~/.local/share is $XDG_DATA_HOME when that is set.) Nothing outside your home
+(~/.local/share is $XDG_DATA_HOME when that is set to an absolute path.) Nothing outside your home
 folder changes, and Syrinx is not made your default browser. Syrinx keeps its
 data in ~/.local/share/Syrinx/data.
 

@@ -40,12 +40,32 @@ impl InstanceNames {
                 .join(format!("{stem}.lock"))
                 .to_string_lossy()
                 .into_owned(),
-            pipe: folder
-                .join(format!("{stem}.sock"))
-                .to_string_lossy()
-                .into_owned(),
+            pipe: socket_path(&folder, stem)?,
         })
     }
+}
+
+/// Bytes `sockaddr_un.sun_path` holds, including the terminating NUL.
+#[cfg(unix)]
+const SUN_PATH_CAPACITY: usize =
+    std::mem::size_of::<libc::sockaddr_un>() - std::mem::offset_of!(libc::sockaddr_un, sun_path);
+
+/// The socket's path in `folder`, refused before anything is bound when `sun_path` cannot
+/// hold it. Only lengths are reported, never the path.
+#[cfg(unix)]
+fn socket_path(folder: &Path, stem: &str) -> Result<String, InstanceError> {
+    let path = folder
+        .join(format!("{stem}.sock"))
+        .to_string_lossy()
+        .into_owned();
+    let limit = SUN_PATH_CAPACITY - 1;
+    if path.len() > limit {
+        return Err(InstanceError::SocketPathTooLong {
+            length: path.len(),
+            limit,
+        });
+    }
+    Ok(path)
 }
 
 /// `XDG_RUNTIME_DIR` when it is this user's private folder; otherwise `syrinx-<uid>` in the
@@ -164,6 +184,39 @@ mod unix_tests {
         std::fs::set_permissions(&folder, std::fs::Permissions::from_mode(mode))
             .expect("scratch mode");
         folder
+    }
+
+    #[test]
+    fn a_socket_path_that_fits_sun_path_is_accepted_and_one_that_does_not_is_refused() {
+        let stem = "SyrinxInstance-synthetic";
+        let path = socket_path(&std::env::temp_dir(), stem).expect("short path fits");
+        assert!(path.ends_with(".sock"));
+
+        // Pad a generated folder so the full path is one byte over the limit.
+        let limit = SUN_PATH_CAPACITY - 1;
+        let filler = limit - "/".len() - format!("/{stem}.sock").len();
+        let exact = Path::new("/").join("x".repeat(filler));
+        assert_eq!(socket_path(&exact, stem).expect("fits").len(), limit);
+        let long = Path::new("/").join("x".repeat(filler + 1));
+        assert_eq!(
+            socket_path(&long, stem),
+            Err(InstanceError::SocketPathTooLong {
+                length: limit + 1,
+                limit
+            })
+        );
+    }
+
+    #[test]
+    fn the_too_long_message_names_lengths_and_the_variable_but_no_path() {
+        let message = InstanceError::SocketPathTooLong {
+            length: 120,
+            limit: 107,
+        }
+        .to_string();
+        assert!(message.contains("120") && message.contains("107"));
+        assert!(message.contains("XDG_RUNTIME_DIR"));
+        assert!(!message.contains('/'));
     }
 
     #[test]
