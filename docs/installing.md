@@ -665,7 +665,7 @@ home):
    temporary name and a rename, so a running Syrinx keeps its file.
 4. It writes `~/.local/share/applications/syrinx.desktop` last, with `Exec=`
    naming the installed program by its full path, because `~/.local/bin` is
-   not on every PATH. `$XDG_DATA_HOME` replaces `~/.local/share` when set.
+   not on every PATH. An absolute `$XDG_DATA_HOME` replaces `~/.local/share`; a relative one is ignored, as the app ignores it.
 
 It does not make Syrinx the default browser and does not declare it a link
 handler: the entry has no `MimeType=` line. Syrinx accepts a link only after
@@ -678,6 +678,17 @@ removes the program and icon first and the entry last (so an interrupted run
 can be repeated), and never touches the data folder,
 `~/.local/share/Syrinx/data`; it names that folder for the person to delete
 by hand if they want their data gone.
+
+**Releases and Arch (2026-11-19).** The weekly release's `linux` job checks
+out the tag the Windows job pushed, runs `cargo xtask package` on
+`ubuntu-24.04` and adds the tarball to the same GitHub release, with its
+line folded into `SHA256SUMS.txt` (`.github/scripts/package-linux-release.sh`).
+`packaging/arch/syrinx-bin/` is a `syrinx-bin` PKGBUILD for the AUR: it
+unpacks that tarball, checks its `SHA256SUMS`, and installs `/usr/bin/syrinx`,
+the icon and the desktop entry (without the per-user marker, so the tarball's
+`uninstall.sh` leaves a pacman install alone). After a release,
+`packaging/arch/update-pkgbuild.sh <version>` sets the version, commit and
+checksum and rewrites `.SRCINFO`; push those two files to the AUR repository.
 
 **Updates.** In-app updates install only on Windows. On Linux, Settings and
 "Check for updates" say that Syrinx doesn't update itself on Linux yet and

@@ -30,7 +30,7 @@ impl Installer {
         ));
         fs::DirBuilder::new().mode(0o700).create(&root).unwrap();
         for name in [
-            "package", "home", "tools", "data", "cache", "config", "runtime",
+            "package", "home", "tools", "data", "cache", "config", "runtime", "cwd",
         ] {
             fs::create_dir(root.join(name)).unwrap();
         }
@@ -41,7 +41,17 @@ impl Installer {
             root,
         };
         // Keep every command deterministic; only ordinary file-copy tools are real.
-        for tool in ["dirname", "sha256sum", "grep", "mkdir", "cp", "chmod", "mv"] {
+        for tool in [
+            "dirname",
+            "sha256sum",
+            "grep",
+            "mkdir",
+            "cp",
+            "chmod",
+            "mv",
+            "rm",
+            "rmdir",
+        ] {
             symlink(system_tool(tool), fixture.tools.join(tool)).unwrap();
         }
         fixture.tool("id", "printf '1000\\n'");
@@ -59,6 +69,11 @@ impl Installer {
         fs::copy(
             repository().join("packaging/linux/install.sh"),
             fixture.package.join("install.sh"),
+        )
+        .unwrap();
+        fs::copy(
+            repository().join("packaging/linux/uninstall.sh"),
+            fixture.package.join("uninstall.sh"),
         )
         .unwrap();
         fs::copy(
@@ -88,9 +103,15 @@ impl Installer {
     }
 
     fn run(&self) -> std::process::Output {
+        self.run_script("install.sh", None)
+    }
+
+    /// Runs a package script from the scratch `cwd` folder, optionally overriding XDG_DATA_HOME.
+    fn run_script(&self, script: &str, data_home: Option<&str>) -> std::process::Output {
         let mut command = Command::new(system_tool("sh"));
         command
-            .arg(self.package.join("install.sh"))
+            .arg(self.package.join(script))
+            .current_dir(self.root.join("cwd"))
             .env("HOME", &self.home)
             .env("PATH", &self.tools)
             .stdin(Stdio::null());
@@ -101,6 +122,9 @@ impl Installer {
                 format!("XDG_{kind}_HOME")
             };
             command.env(variable, self.root.join(kind.to_ascii_lowercase()));
+        }
+        if let Some(value) = data_home {
+            command.env("XDG_DATA_HOME", value);
         }
         command.output().unwrap()
     }
@@ -143,4 +167,38 @@ fn media_check_warns_without_blocking_installation() {
         );
         fs::remove_dir_all(installer.root).unwrap();
     }
+}
+
+#[test]
+fn a_relative_xdg_data_home_is_ignored_like_the_app_does() {
+    let installer = Installer::new(None);
+    let installed = installer
+        .home
+        .join(".local/share/applications/syrinx.desktop");
+    let stray = installer.root.join("cwd/share");
+    let output = installer.run_script("install.sh", Some("share"));
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        installed.is_file(),
+        "the entry belongs under HOME's default data folder"
+    );
+    assert!(
+        !stray.exists(),
+        "nothing may be written under the current folder"
+    );
+
+    let output = installer.run_script("uninstall.sh", Some("share"));
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(!installed.exists(), "uninstall removes what install wrote");
+    assert!(!stray.exists());
+    assert_eq!(fs::read_dir(installer.root.join("cwd")).unwrap().count(), 0);
+    fs::remove_dir_all(installer.root).unwrap();
 }

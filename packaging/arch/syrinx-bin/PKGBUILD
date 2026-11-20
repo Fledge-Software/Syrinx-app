@@ -1,0 +1,41 @@
+# Maintainer: Zan
+# Syrinx's Linux tarball from a GitHub release, installed system-wide for pacman.
+# packaging/arch/update-pkgbuild.sh <version> fills pkgver, _commit and the checksum.
+pkgname=syrinx-bin
+pkgver=0.9.0
+_commit=000000000000
+pkgrel=1
+pkgdesc='Browser-first workspace: a web browser with a vertical-tab sidebar and a command palette'
+arch=('x86_64')
+url='https://syrinxapp.dev'
+license=('MPL-2.0')
+depends=(
+  'webkit2gtk-4.1' 'gtk3' 'libsoup3' 'bubblewrap' 'libxkbcommon-x11' 'fontconfig'
+  'gstreamer' 'gst-plugins-base' 'gst-plugins-good'
+)
+optdepends=(
+  'gst-plugins-bad: more audio and video formats'
+  'gst-libav: more audio and video codecs'
+)
+provides=('syrinx')
+conflicts=('syrinx')
+options=('!strip' '!debug')
+_name="Syrinx-${pkgver}-${_commit}-linux-x64"
+source=("https://github.com/Fledge-Software/Syrinx-app/releases/download/v${pkgver}/${_name}.tar.gz")
+sha256sums=('SKIP')
+
+check() {
+  cd "$_name"
+  sha256sum -c SHA256SUMS
+}
+
+package() {
+  cd "$_name"
+  install -Dm755 syrinx "$pkgdir/usr/bin/syrinx"
+  install -Dm644 syrinx.png "$pkgdir/usr/share/icons/hicolor/256x256/apps/syrinx.png"
+  install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+  # The tarball's entry says Exec=syrinx, which /usr/bin answers; drop the per-user marker,
+  # so the tarball's uninstall.sh never mistakes this install for its own.
+  grep -v '^X-Syrinx-Packaging=' syrinx.desktop > syrinx.pacman.desktop
+  install -Dm644 syrinx.pacman.desktop "$pkgdir/usr/share/applications/syrinx.desktop"
+}
