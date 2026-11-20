@@ -63,7 +63,10 @@ pub fn run(root: &Path) -> Result<(), String> {
 
 /// Starts the visible app on a fresh synthetic profile; a hidden launch cannot test focus.
 fn launch(root: &Path, report: &Path, base: &str) -> Result<std::process::ExitStatus, String> {
-    let executable: PathBuf = root.join("target").join("local").join("syrinx.exe");
+    let executable: PathBuf = root
+        .join("target")
+        .join("local")
+        .join(format!("syrinx{}", std::env::consts::EXE_SUFFIX));
     Command::new(&executable)
         .arg("--test-palette-acceptance")
         .arg(report)

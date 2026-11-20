@@ -71,6 +71,7 @@ pub enum LocationOperation {
     ReadDeletionJournal,
     WriteDeletionJournal,
     FlushDeletionJournal,
+    EmptyCacheFolder,
 }
 
 /// Reports structural failures; native error messages may contain private data.

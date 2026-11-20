@@ -325,6 +325,8 @@ fn a_refused_copy_whose_removal_stops_is_removed_and_reported_at_the_next_start(
     assert!(!sandbox.layout.previous().exists(), "nothing was swapped");
 }
 
+// Needs Windows refusing to delete a file another handle holds.
+#[cfg(windows)]
 #[test]
 fn a_refused_copy_held_open_is_removed_and_reported_once_a_start_succeeds() {
     // DW-69: a held file stops the helper's discard and the next start's; the outcome waits.
@@ -579,6 +581,8 @@ fn a_rollback_stopped_part_way_keeps_both_versions_and_stages_nothing() {
     assert_untouched(&sandbox);
 }
 
+// Needs Windows deny-write sharing on the held helper.
+#[cfg(windows)]
 #[test]
 fn the_handoff_checks_the_helper_and_holds_the_lock() {
     let (sandbox, keys) = staged_sandbox();
@@ -630,6 +634,8 @@ fn the_helper_starts_programs_outside_every_folder_it_renames() {
     );
 }
 
+// Needs Windows refusing to rename a folder another process is working in.
+#[cfg(windows)]
 #[test]
 fn a_process_working_in_the_program_folder_stops_the_swap_but_not_elsewhere() {
     // Reproduces the review's finding with real processes: Windows refuses to rename a folder
@@ -667,6 +673,8 @@ fn a_process_working_in_the_program_folder_stops_the_swap_but_not_elsewhere() {
     assert_eq!(applied, Ok(Applied::Installed(NEW)));
 }
 
+// Needs Windows refusing to rename a folder another process is working in.
+#[cfg(windows)]
 #[test]
 fn a_rollback_that_cannot_move_the_failed_version_tells_the_owner() {
     let (sandbox, keys) = staged_sandbox();
@@ -717,6 +725,8 @@ fn a_new_version_that_cannot_be_watched_is_stopped_and_rolled_back() {
     assert_eq!(outcome.result, UpdateResult::ApplyRolledBack);
 }
 
+// Needs Windows sharing rules: an open handle there blocks renaming or removing the file.
+#[cfg(windows)]
 #[test]
 fn a_rollback_that_cannot_record_still_restarts_and_never_offers_the_failed_build() {
     // Hold `pending` so it cannot be removed, as a failing disk or a scanner might.

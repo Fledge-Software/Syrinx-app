@@ -1,15 +1,7 @@
 //! Suspends hidden controllers and rejects callbacks after their native lifetime or suspension changes.
 
-use super::{BrowserError, BrowserEvent, EventSink, hidden_timer::HiddenTimer};
-use std::{
-    cell::RefCell,
-    rc::Rc,
-    sync::{
-        Arc,
-        atomic::{AtomicU64, Ordering},
-    },
-    time::Instant,
-};
+use super::{BrowserError, BrowserEvent, CallbackLife, EventSink, hidden_timer::HiddenTimer};
+use std::{cell::RefCell, rc::Rc, sync::atomic::Ordering, time::Instant};
 use webview2_com::{
     ContainsFullScreenElementChangedEventHandler, IsDocumentPlayingAudioChangedEventHandler,
     Microsoft::Web::WebView2::Win32::{ICoreWebView2_3, ICoreWebView2_8},
@@ -92,35 +84,8 @@ fn focus_succeeded(had_previous: bool, error: WIN32_ERROR) -> bool {
     had_previous || error == ERROR_SUCCESS
 }
 
-/// Carries validity across the worker/UI queue without retaining a native controller.
-#[derive(Clone)]
-pub struct CallbackTicket {
-    epoch: Arc<AtomicU64>,
-    captured: u64,
-    lifetime_only: bool,
-}
-
-impl CallbackTicket {
-    pub(super) fn current(&self) -> bool {
-        let now = self.epoch.load(Ordering::Acquire);
-        now != 0 && (self.lifetime_only || now == self.captured && !now.is_multiple_of(2))
-    }
-}
-
-#[derive(Clone)]
-pub(super) struct CallbackLife(Arc<AtomicU64>);
-
+/// Suspension changes a page's epoch, so callbacks captured before it are dropped (Windows only).
 impl CallbackLife {
-    pub(super) fn new() -> Self {
-        Self(Arc::new(AtomicU64::new(1)))
-    }
-    pub(super) fn ticket(&self, lifetime_only: bool) -> CallbackTicket {
-        CallbackTicket {
-            epoch: self.0.clone(),
-            captured: self.0.load(Ordering::Acquire),
-            lifetime_only,
-        }
-    }
     fn suspend(&self) {
         self.0.fetch_add(1, Ordering::AcqRel);
     }
@@ -128,9 +93,6 @@ impl CallbackLife {
         if self.0.load(Ordering::Acquire).is_multiple_of(2) {
             self.0.fetch_add(1, Ordering::AcqRel);
         }
-    }
-    pub(super) fn retire(&self) {
-        self.0.store(0, Ordering::Release);
     }
 }
 
@@ -242,12 +204,12 @@ impl Lifecycle {
         let id = self.id;
         let handler =
             IsDocumentPlayingAudioChangedEventHandler::create(Box::new(move |core, _| {
-                let playing = match core
+                let read = core
                     .ok_or_else(|| windows::core::Error::from(E_POINTER))
                     .and_then(|core| core.cast::<ICoreWebView2_8>())
-                    .and_then(|core| playing_audio(&core))
-                {
-                    Ok(playing) => playing,
+                    .and_then(|core| playing_audio(&core).map(|playing| (core, playing)));
+                let (core, playing) = match read {
+                    Ok(read) => read,
                     Err(error) => {
                         events.emit(BrowserEvent::Error {
                             tab: Some(id),
@@ -256,8 +218,13 @@ impl Lifecycle {
                         return Err(error);
                     }
                 };
-                playback_reported(&changes, playing);
-                Ok(())
+                // The timer is already updated when only the mute read for the sidebar fails.
+                playback_reported(&changes, &events, id, &core, playing).inspect_err(|_| {
+                    events.emit(BrowserEvent::Error {
+                        tab: Some(id),
+                        error: BrowserError::PageControl,
+                    })
+                })
             }));
         let mut token = 0;
         unsafe { core.add_IsDocumentPlayingAudioChanged(&handler, &mut token) }
@@ -265,7 +232,13 @@ impl Lifecycle {
         // Seed from the current state: an adopted popup may already be playing. A failed read is
         // `Metadata` here as in the handler; only the registration itself is `EventRegistration`.
         let playing = playing_audio(&core).map_err(|_| BrowserError::Metadata)?;
-        playback_reported(&self.state, playing);
+        // As in the handler, an unreadable mute state is reported but still opens the page.
+        if playback_reported(&self.state, &self.events, self.id, &core, playing).is_err() {
+            self.events.emit(BrowserEvent::Error {
+                tab: Some(self.id),
+                error: BrowserError::PageControl,
+            });
+        }
         Ok(())
     }
 
@@ -368,17 +341,44 @@ impl Drop for Lifecycle {
 }
 
 /// The one place a page's audio state fans out from, at creation and on every change, so each
-/// page registers `IsDocumentPlayingAudioChanged` once. Today it feeds the keep-awake timer;
-/// #117's sidebar `AudioChanged` event is to be fed from this same call, not a second handler.
-fn playback_reported(state: &Rc<RefCell<HiddenState>>, playing: bool) {
+/// page registers `IsDocumentPlayingAudioChanged` once. It feeds two consumers: the keep-awake
+/// timer (#130), updated first so a page playing sound is never suspended, and the sidebar's
+/// `AudioChanged` event (#95), which also carries the page's current `IsMuted`. A mute state
+/// that cannot be read is returned after the timer has already been updated.
+fn playback_reported(
+    state: &Rc<RefCell<HiddenState>>,
+    events: &EventSink,
+    id: u64,
+    core: &ICoreWebView2_8,
+    playing: bool,
+) -> windows::core::Result<()> {
     state
         .borrow_mut()
         .timer
         .playback_changed(playing, Instant::now());
+    emit_audio_changed(events, id, core, playing)
+}
+
+/// Emits the sidebar's `AudioChanged` with the page's current `IsMuted`. Both audio handlers,
+/// this file's playback one and the essentials' mute one, report through it.
+pub(super) fn emit_audio_changed(
+    events: &EventSink,
+    id: u64,
+    core: &ICoreWebView2_8,
+    playing: bool,
+) -> windows::core::Result<()> {
+    let mut muted = BOOL::default();
+    unsafe { core.IsMuted(&mut muted) }?;
+    events.emit(BrowserEvent::AudioChanged {
+        id,
+        muted: muted.as_bool(),
+        playing,
+    });
+    Ok(())
 }
 
 /// Whether the document is playing audio, muted or not, as WebView2 reports it.
-fn playing_audio(core: &ICoreWebView2_8) -> windows::core::Result<bool> {
+pub(super) fn playing_audio(core: &ICoreWebView2_8) -> windows::core::Result<bool> {
     let mut playing = BOOL::default();
     unsafe { core.IsDocumentPlayingAudio(&mut playing) }?;
     Ok(playing.as_bool())

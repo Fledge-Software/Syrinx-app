@@ -11,8 +11,11 @@ use std::time::{Duration, Instant};
 use syrinx_update::install::{InstallError, PackageSource, SignedFile, TransferProblem};
 use syrinx_update::{FileEntry, Version};
 
+#[cfg(windows)]
 use crate::endpoint::Endpoint;
-use crate::winhttp::{Body, Transport, WinHttp};
+use crate::transport::{Body, Transport};
+#[cfg(windows)]
+use crate::winhttp::WinHttp;
 
 /// Bytes asked of WinHTTP per read.
 const READ_CHUNK: usize = 64 * 1024;
@@ -29,6 +32,7 @@ pub(crate) struct Pace {
 
 /// Two minutes plus 32 KiB/s: a 38 MB package file may take about 22 minutes, and a signed
 /// file two minutes plus its limit (about three minutes for the 2 MiB manifest cap).
+#[cfg(any(windows, test))]
 const PRODUCTION_PACE: Pace = Pace {
     allowance: Duration::from_secs(120),
     bytes_per_second: 32 * 1024,
@@ -95,12 +99,20 @@ pub struct RemotePackage {
 
 impl RemotePackage {
     /// The compiled-in host. Opening the session makes no network call.
+    #[cfg(windows)]
     pub fn production() -> Result<Self, InstallError> {
         let endpoint = Endpoint::production();
         let transport = WinHttp::open(endpoint).map_err(InstallError::Transfer)?;
         Ok(Self::with_transport(Box::new(transport), endpoint.host()))
     }
 
+    /// Only an installed Windows copy downloads updates; elsewhere no client is built (D9).
+    #[cfg(not(windows))]
+    pub fn production() -> Result<Self, InstallError> {
+        Err(InstallError::NotInstalled)
+    }
+
+    #[cfg(any(windows, test))]
     pub(crate) fn with_transport(transport: Box<dyn Transport>, host: &'static str) -> Self {
         Self {
             transport,

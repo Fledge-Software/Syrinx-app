@@ -11,6 +11,7 @@ fn range() -> DeletionRange {
     DeletionRange::new(100, 200).expect("synthetic interval")
 }
 
+#[cfg(windows)]
 #[test]
 fn journal_is_created_once_appended_durably_and_reloaded() {
     let fixture = Fixture::new();

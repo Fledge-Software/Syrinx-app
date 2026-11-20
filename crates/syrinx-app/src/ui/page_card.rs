@@ -9,6 +9,7 @@ use gpui::{
 use syrinx_platform::browser::PageBounds;
 use syrinx_ui::metrics::chrome::CARD_INSET;
 
+use super::title_bar::caption_buttons_width;
 use super::{FOOTER_HEIGHT, TITLE_BAR_HEIGHT};
 use crate::theme;
 
@@ -51,10 +52,10 @@ pub(super) fn chrome_height() -> f32 {
     TITLE_BAR_HEIGHT
 }
 
-/// The title bar pads left by 12 px and has three square Windows controls.
+/// The title bar pads left by 12 px and ends with the square Windows caption buttons.
 /// Leave another 64 px empty so the title bar can still be dragged when navigation fills it.
 pub(super) fn titlebar_navigation_width(viewport_width: f32) -> f32 {
-    (finite_or_zero(viewport_width) - 12. - 64. - 3. * TITLE_BAR_HEIGHT).max(0.)
+    (finite_or_zero(viewport_width) - 12. - 64. - caption_buttons_width()).max(0.)
 }
 
 /// The page card's physical bounds. The child web view does not follow the window on its own

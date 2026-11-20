@@ -38,7 +38,13 @@ impl Signer for Watched<'_> {
 
     fn sign_digest(&self, digest: &[u8; 32]) -> Result<[u8; 64], UpdateError> {
         self.signed.set(true);
-        self.inner.sign(digest)
+        Signer::sign_digest(self.inner, digest)
+    }
+
+    // The portable test key signs whole messages only, so record this path too.
+    fn sign_message(&self, message: &[u8]) -> Result<[u8; 64], UpdateError> {
+        self.signed.set(true);
+        Signer::sign_message(self.inner, message)
     }
 }
 

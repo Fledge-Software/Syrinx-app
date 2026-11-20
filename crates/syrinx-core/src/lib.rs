@@ -3,6 +3,7 @@
 mod activation;
 mod address_display;
 mod address_entry;
+mod address_prefix;
 mod bookmark_import;
 mod commands;
 mod destinations;
@@ -14,12 +15,13 @@ mod web_address;
 
 pub use address_display::readable_address;
 pub use address_entry::{EntryError, entry_destination, google_search, recognized_address};
+pub use address_prefix::{AddressPrefix, address_prefix, is_bare_host};
 pub use web_address::{WebAddressError, web_address};
 
 pub use page_text::{
     DocumentFacts, EligibleDocument, Ineligible, LeftDocument, ObservedResponse, PageTextPolicy,
-    PolicyError, SAME_DOCUMENT_INTERVAL, SETTLE_DELAY, TEXT_LIMIT_BYTES, judge,
-    same_document_address, same_document_due,
+    PolicyError, SAME_DOCUMENT_INTERVAL, SETTLE_DELAY, TEXT_LIMIT_BYTES, address_within_site,
+    excluded_site, judge, same_document_address, same_document_due,
 };
 
 pub use bookmark_import::{
@@ -44,7 +46,9 @@ pub use downloads::{
 };
 
 pub use tabs::{
-    Activation, AppendedSavedTree, BLANK_ADDRESS, FolderContents, FolderRemoval, NewSavedItem,
+    Activation, AppendedSavedTree, BLANK_ADDRESS, BulkScope, FolderContents, FolderRemoval,
+    HISTORY_ENTRY_LIMIT, HISTORY_ROW_LIMIT, HistoryChange, HistoryDirection, HistoryObserved,
+    HistoryReach, HistoryReport, HistoryRow, NavigationList, NavigationLists, NewSavedItem,
     PageOrigin, RemovedSavedEntries, SETTINGS_ADDRESS, SavedEntryId, SavedFolder, SavedFolderId,
     SavedFolderSnapshot, SavedPage, SavedPageId, SavedPageSnapshot, SavedPlacement, SidebarRow,
     SnapshotError, Tab, TabError, TabId, TabKind, TabMetadata, TabModel, TabModelSnapshot,

@@ -35,12 +35,13 @@ manager (`docs/decisions.md`, 2026-10-14). The release fixes are already
 on `main`.
 
 - **Approve the workflow change first.** The agent half of issue #55 is on
-  the branch `feat/55-workflow-signing`, committed but not pushed, because
-  changing the release workflow needs your yes. It signs each release,
+  the branch `feat/55-workflow-signing`, draft pull request #119, which
+  waits because changing the release workflow needs your yes. It signs each release,
   re-signs `latest` in quiet weeks and produces the `updates/v1/` files as a
   workflow artifact (`docs/releasing.md`, "Signed updates"). Publishing those
   files to `https://syrinxapp.dev/updates/v1/` (404 on 2026-10-14) still
-  waits for your decision on where they go while the repository is private.
+  waits for your decision on where they go. The Linux tarball is not
+  signed by this branch; whether it should be is issue #238.
 - **Then create the two keys, outside any agent session** (commands below).
   Until an agent pins them, releases stay unsigned with a warning, so
   setting the secret first breaks nothing.
@@ -125,7 +126,8 @@ cargo xtask palette-acceptance
 
 Reports go to `target\p1-33\`. Check that the opening p95 is under one
 refresh interval, `escape_returns_page_focus` passes 20 of 20 and
-`enter_activates_selected_tab` passes every time. Then the hand checks in
+`enter_activates_selected_tab` and `enter_activates_title_row_after_down` pass
+every time. Then the hand checks in
 [`docs/p1-33-palette-acceptance.md`](https://github.com/Fledge-Software/Syrinx-app/blob/af3de53/docs/p1-33-palette-acceptance.md), "Owner checks" 3 and 4 (a playing
 video under the palette, Alt Tab, a second monitor).
 
@@ -188,10 +190,11 @@ home and settings, history, clear data, restore after restart).
   sleep itself). The native audio suite proves the timing; run it on a
   quiet machine:
   `cargo run --offline --locked --profile local --package syrinx-platform --example page_close -- --audio-only`.
-  It plays a faint 30 Hz tone for about 20 seconds (most speakers cannot
-  reproduce it) and must print that the tone page stayed awake while hidden
-  and then slept about a minute after the tone stopped. Record pass or fail
-  and the printed seconds in #130.
+  It mutes its page first, so it makes no sound, then plays a synthetic tone
+  for about 20 seconds. It must print that WebView2 reports the muted page as
+  playing audio, that the tone page stayed awake while hidden, and that it
+  then slept about a minute after the tone stopped. Record pass or fail
+  and the printed seconds in #130 and #157.
 
 ### 7. Downloads and see-through themes (PR #145: #143, #151)
 
@@ -303,3 +306,44 @@ a closed issue is enough).
   changed since; anything in it that still matters to you, such as the
   third-party skills under `.claude/skills/` or what the history shows, is
   yours to decide.
+
+### 10. Linux camera and microphone iframe delegation
+
+The 2026-11-02 loopback matrix verified geolocation and notification
+delegation enforcement. **Camera and microphone delegation are unverified
+on this machine:** the positive controls had no usable device. The honest
+"or a site it embeds" prompt remains for all four kinds.
+
+With a webcam and microphone attached, repeat the synthetic loopback iframe
+tests for camera and microphone separately. A virtual v4l2loopback device
+is fine if you choose it; agents must not install anything to create devices.
+Use a fresh scratch profile and retain the normal display, bus and input
+method. For each kind:
+
+1. Check that a top-level request reaches Syrinx's permission handler with
+   the device present. Deny it; no capture or grant is needed.
+2. Request it from a cross-origin iframe (127.0.0.1 parent, localhost child)
+   with no `allow` attribute and no Permissions-Policy header. Record whether
+   WebKit blocks it before the handler.
+3. Repeat with explicit delegation (`allow="camera"` or `allow="microphone"`,
+   and a compatible policy if supplied). Record whether the handler runs,
+   then deny it.
+4. Record only pass/fail, error categories and static handler counts in
+   [#234](https://github.com/Fledge-Software/Syrinx-app/issues/234). Keep the
+   kind unverified if its positive control cannot reach the handler. Never
+   include device labels, identifiers, pictures or audio. Report any
+   undelegated request reaching the handler before choosing another policy.
+
+The authored-page method and engine-source limitation are in
+`docs/dev/linux-permission-delegation.md`. No account or real page is needed.
+
+### 11. Landing checks for the Linux port (#226)
+
+Before approving #226, work through
+[#241](https://github.com/Fledge-Software/Syrinx-app/issues/241):
+
+- Windows tab switches (sidebar, Ctrl Tab, a menu, the download flyout): the
+  page gets the keys and nothing flickers;
+- a link from another program while Syrinx is behind;
+- the reparenting X11 check, if a GNOME or KDE X11 session is available;
+- confirmation of the coordinator-recorded part of the 2026-10-31 decision.

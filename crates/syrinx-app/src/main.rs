@@ -5,6 +5,7 @@ mod acceptance;
 mod appearance;
 mod controls;
 mod ground_image;
+mod icon;
 mod navigation;
 mod palette;
 mod palette_sample;
@@ -38,20 +39,30 @@ use syrinx_platform::{
     notice,
 };
 
-#[cfg(not(target_os = "windows"))]
-compile_error!("Syrinx v1 supports Windows 11 only.");
+#[cfg(not(any(target_os = "windows", target_os = "linux")))]
+compile_error!("Syrinx builds for Windows and Linux; its macOS platform layer is not written yet.");
 
-/// Profile folder under `%LOCALAPPDATA%`: the installed package (owner decision, 2026-10-12)
-/// uses `Syrinx\data`; development and preview runs keep `SyrinxProductPreview`.
-const DATA_FOLDER: &str = if cfg!(feature = "installed") {
-    r"Syrinx\data"
+/// Profile folder under the local app-data folder: the installed package (owner decision,
+/// 2026-10-12) uses `Syrinx/data`; development and preview runs keep `SyrinxProductPreview`.
+const DATA_FOLDER: &[&str] = if cfg!(feature = "installed") {
+    &["Syrinx", "data"]
 } else {
-    "SyrinxProductPreview"
+    &["SyrinxProductPreview"]
 };
+
+/// The per-user data folder that is never roamed or synced (D13), as the storage guard
+/// resolves it: Windows' local app data, or `$XDG_DATA_HOME` (`~/.local/share`) on Linux.
+/// Keeps the storage guard's reason, which names only the step and the OS error code.
+fn local_app_data() -> Result<PathBuf, String> {
+    syrinx_platform::local_app_data()
+        .map_err(|error| format!("The local data folder is unavailable: {error}."))
+}
 
 fn main() -> ExitCode {
     // AN-01's start-up timings begin here, as close to process start as Syrinx can measure.
     let launched = Instant::now();
+    // SAFETY: nothing has started another thread yet.
+    unsafe { syrinx_platform::prepare_process() };
     let arguments: Vec<OsString> = std::env::args_os().skip(1).collect();
     // Unattended runs report startup problems on stderr only, never in an invisible message box.
     let smoke_requested = arguments
@@ -60,11 +71,14 @@ fn main() -> ExitCode {
     if !smoke_requested {
         show_panics_in_a_message_box();
     }
-    let mut options = match parse_arguments(arguments).and_then(run_mode) {
+    let mut options = match parse_arguments(arguments)
+        .map_err(String::from)
+        .and_then(run_mode)
+    {
         Ok(RunMode::Browser(options)) => options,
         Ok(RunMode::Review(review)) => return run_review(review),
         Err(message) => {
-            report_startup_problem(message, smoke_requested);
+            report_startup_problem(&message, smoke_requested);
             return ExitCode::FAILURE;
         }
     };
@@ -127,7 +141,7 @@ fn main() -> ExitCode {
     let options_smoke = options.smoke;
     // Smoke and acceptance runs succeed only when they report success themselves.
     let mut links = Some(links);
-    gpui_platform::application().run(move |cx: &mut App| {
+    application().run(move |cx: &mut App| {
         gpui_component::init(cx);
         theme::apply_component_theme(cx);
         ui::bind_keys(cx);
@@ -148,6 +162,8 @@ fn main() -> ExitCode {
                 // page's child window and hides it (`docs/dev/trapstoknow.md`).
                 window_background: WindowBackgroundAppearance::MicaBackdrop,
                 window_min_size: Some(size(px(800.), px(500.))),
+                // Linux's X11 WM_CLASS, which pairs the window with `syrinx.desktop`.
+                app_id: Some("syrinx".into()),
                 ..Default::default()
             },
             |window, cx| {
@@ -299,11 +315,23 @@ fn hand_off_update(
     }
 }
 
+/// GPUI's application; Windows draws icons from a system font and needs no assets.
+#[cfg(windows)]
+fn application() -> gpui::Application {
+    gpui_platform::application()
+}
+
+/// GPUI's application, serving Syrinx's own icons to its SVG renderer.
+#[cfg(not(windows))]
+fn application() -> gpui::Application {
+    gpui_platform::application().with_assets(icon::svg::Assets)
+}
+
 fn run_review(review: Review) -> ExitCode {
     // Development review windows open no profile, page or worker.
     let failed = Arc::new(AtomicU8::new(0));
     let result = failed.clone();
-    gpui_platform::application().run(move |cx: &mut App| {
+    application().run(move |cx: &mut App| {
         let opened = match review {
             Review::PaletteSample => palette_sample::open(cx),
             Review::ThemeLab => theme_lab::open(cx),
@@ -501,7 +529,7 @@ fn link_after_marker(
     link_argument(&link)
 }
 
-fn run_mode(arguments: Arguments) -> Result<RunMode, &'static str> {
+fn run_mode(arguments: Arguments) -> Result<RunMode, String> {
     if let Some(review) = arguments.review {
         return Ok(RunMode::Review(review));
     }
@@ -521,10 +549,9 @@ fn run_mode(arguments: Arguments) -> Result<RunMode, &'static str> {
     } else if let Some(directory) = test_directory.clone() {
         directory
     } else {
-        PathBuf::from(
-            std::env::var_os("LOCALAPPDATA").ok_or("Windows local app data is unavailable.")?,
-        )
-        .join(DATA_FOLDER)
+        DATA_FOLDER
+            .iter()
+            .fold(local_app_data()?, |folder, name| folder.join(name))
     };
     // Only a smoke run deletes its profile; measurement and acceptance keep theirs as before.
     let mut smoke_profile = None;

@@ -2,7 +2,7 @@
 name: designflow
 description: Design and build polished, interactive UI in the repository open in this session. It stacks the design skills (Impeccable, frontend-design, shadcn, Vercel React rules, Emil Kowalski motion, accessibility audits, webapp-testing) across subagents and uses Claude Design as the visual source of truth. It works on what the user describes, or else on open issues labelled "design", shipping a PR with screenshots. Use when the user runs /designflow or asks to design, redesign or polish a page, flow or component.
 argument-hint: "[what to design, in words | #issue ... | label:<name>]"
-user-invocable: true
+disable-model-invocation: true
 ---
 
 # /designflow — design it, build it, polish it, prove it with screenshots
@@ -86,11 +86,11 @@ half-finished ones.
 ## Subagents and stacked skills
 
 Each subagent invokes its stacked skills through the Skill tool. They may be
-namespaced as `fledge-skills:impeccable`, `fledge-skills:supabase`.
+namespaced as `zans-skills:impeccable`, `zans-skills:supabase`.
 The rules and budget in this file always win over a stacked skill's own
 process.
 
-### How subagents are used (same rules as the other Fledge skills)
+### How subagents are used (same rules as the other Zan skills)
 
 - **You, the main session, are the coordinator.** You own the target choice,
   claims, every question to the human, the PR and the report. Subagents do

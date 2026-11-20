@@ -127,17 +127,14 @@ impl BrowserView {
     /// − and + step the level, and a click on the percentage resets it.
     pub(super) fn essential_controls(&self, cx: &mut Context<Self>) -> Div {
         let factor = self.shown_zoom();
-        let downloads = crate::controls::icon_button(
-            div().id("downloads"),
-            crate::controls::glyph::DOWNLOADS,
-            "Downloads",
-        )
-        .aria_keyshortcuts("Control+J")
-        .occlude()
-        .on_click(cx.listener(|this, _, window, cx| {
-            this.toggle_downloads(window, cx);
-            cx.notify();
-        }));
+        let downloads =
+            crate::controls::icon_button(div().id("downloads"), Icon::Downloads, "Downloads")
+                .aria_keyshortcuts("Control+J")
+                .occlude()
+                .on_click(cx.listener(|this, _, window, cx| {
+                    this.toggle_downloads(window, cx);
+                    cx.notify();
+                }));
         div()
             .flex()
             .items_center()
@@ -195,10 +192,7 @@ pub(super) fn zoom_stepper(
         .rounded(px(11.))
         .text_size(px(syrinx_ui::metrics::text::SMALL))
         .child(
-            part(0, "Zoom out", "Control+-")
-                .font_family(crate::controls::glyph::FONT)
-                .text_size(px(10.))
-                .child(crate::controls::glyph::REMOVE)
+            with_icon(part(0, "Zoom out", "Control+-"), Icon::Remove, 10.)
                 .on_click(on(BrowserShortcut::ZoomOut)),
         )
         .child(
@@ -208,10 +202,7 @@ pub(super) fn zoom_stepper(
                 .on_click(on(BrowserShortcut::ZoomReset)),
         )
         .child(
-            part(2, "Zoom in", "Control+=")
-                .font_family(crate::controls::glyph::FONT)
-                .text_size(px(10.))
-                .child(crate::controls::glyph::ADD)
+            with_icon(part(2, "Zoom in", "Control+="), Icon::Add, 10.)
                 .on_click(on(BrowserShortcut::ZoomIn)),
         )
 }

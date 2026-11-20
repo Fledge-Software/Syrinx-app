@@ -10,6 +10,9 @@ const MAX_TITLE_LENGTH: usize = 120;
 pub struct CommandId(String);
 
 impl CommandId {
+    /// Longest command id, in bytes.
+    pub const MAX_BYTES: usize = MAX_ID_LENGTH;
+
     pub fn new(value: impl Into<String>) -> Result<Self, CommandError> {
         let value = value.into();
         if !is_valid_id(&value) {
@@ -239,6 +242,10 @@ pub enum CommandError {
     DuplicateShortcut,
     ReservedShortcut,
     TooManyCommands,
+    /// One plugin already holds `CommandRegistry::MAX_COMMANDS_PER_PLUGIN` commands.
+    PluginQuotaReached,
+    /// The command's scope and its action name different owners.
+    ForeignAction,
 }
 
 impl fmt::Display for CommandError {
@@ -250,7 +257,22 @@ impl fmt::Display for CommandError {
             Self::DuplicateId => "a command with this identifier is already registered",
             Self::DuplicateShortcut => "another command already uses this shortcut",
             Self::ReservedShortcut => "this shortcut belongs to the command palette",
-            Self::TooManyCommands => "the command registry is full",
+            Self::TooManyCommands => {
+                // Name the cap from its constant so the message cannot drift from it.
+                return write!(
+                    formatter,
+                    "the command registry is full ({} commands)",
+                    CommandRegistry::MAX_COMMANDS
+                );
+            }
+            Self::PluginQuotaReached => {
+                return write!(
+                    formatter,
+                    "this plugin already has {} commands, the most one plugin may register",
+                    CommandRegistry::MAX_COMMANDS_PER_PLUGIN
+                );
+            }
+            Self::ForeignAction => "a command may only run an action of its own plugin",
         };
         formatter.write_str(message)
     }
@@ -265,6 +287,13 @@ pub struct CommandRegistry {
 }
 
 impl CommandRegistry {
+    /// The most commands the registry holds, so the palette's per-keystroke ranking stays bounded.
+    pub const MAX_COMMANDS: usize = 1_024;
+    /// The most commands one plugin may hold, so no plugin can take every free slot.
+    pub const MAX_COMMANDS_PER_PLUGIN: usize = 128;
+    /// Longest command title, in characters.
+    pub const MAX_TITLE_CHARS: usize = MAX_TITLE_LENGTH;
+
     pub fn new() -> Self {
         Self::default()
     }
@@ -282,6 +311,10 @@ impl CommandRegistry {
 
     /// Adds a command and returns its key; an invalid or conflicting command changes nothing.
     pub fn register(&mut self, command: Command) -> Result<NonZeroU64, CommandError> {
+        // Refuse a command past the cap before anything else is checked or stored.
+        if self.commands.len() >= Self::MAX_COMMANDS {
+            return Err(CommandError::TooManyCommands);
+        }
         self.validate(&command)?;
         let key = u64::try_from(self.commands.len() + 1)
             .ok()
@@ -291,7 +324,24 @@ impl CommandRegistry {
         Ok(key)
     }
 
+    /// Adds every command or none; a refusal names the first refused command's index.
+    pub fn register_all(
+        &mut self,
+        commands: Vec<Command>,
+    ) -> Result<Vec<NonZeroU64>, (usize, CommandError)> {
+        let mut staged = self.clone();
+        let keys = commands
+            .into_iter()
+            .enumerate()
+            .map(|(index, command)| staged.register(command).map_err(|error| (index, error)))
+            .collect::<Result<Vec<_>, _>>()?;
+        *self = staged;
+        Ok(keys)
+    }
+
     fn validate(&self, command: &Command) -> Result<(), CommandError> {
+        check_ownership(command)?;
+        self.check_plugin_quota(command)?;
         let title = command.title.trim();
         if title.is_empty() || command.title.chars().count() > MAX_TITLE_LENGTH {
             return Err(CommandError::InvalidTitle);
@@ -320,6 +370,22 @@ impl CommandRegistry {
         Ok(())
     }
 
+    /// Refuse a plugin's command once that plugin holds its quota.
+    fn check_plugin_quota(&self, command: &Command) -> Result<(), CommandError> {
+        let CommandScope::Plugin { .. } = &command.scope else {
+            return Ok(());
+        };
+        let held = self
+            .commands
+            .iter()
+            .filter(|existing| existing.scope == command.scope)
+            .count();
+        if held >= Self::MAX_COMMANDS_PER_PLUGIN {
+            return Err(CommandError::PluginQuotaReached);
+        }
+        Ok(())
+    }
+
     pub fn get(&self, key: NonZeroU64) -> Option<&Command> {
         let index = usize::try_from(key.get() - 1).ok()?;
         self.commands.get(index)
@@ -343,6 +409,21 @@ impl CommandRegistry {
     pub fn is_empty(&self) -> bool {
         self.commands.is_empty()
     }
+}
+
+/// A browser command runs a browser action; a plugin's command runs only its own plugin's action.
+fn check_ownership(command: &Command) -> Result<(), CommandError> {
+    let owned = match (&command.scope, &command.action) {
+        (CommandScope::Browser, CommandAction::Browser(_)) => true,
+        (CommandScope::Plugin { plugin }, CommandAction::Plugin { plugin: owner, .. }) => {
+            plugin == owner
+        }
+        _ => false,
+    };
+    if !owned {
+        return Err(CommandError::ForeignAction);
+    }
+    Ok(())
 }
 
 /// The built-in commands, in the order the palette lists them for `>`.
@@ -534,16 +615,21 @@ mod tests {
     use super::*;
 
     fn plugin_command(id: &str, shortcut: Option<&str>) -> Command {
+        owned_command("synthetic", id, shortcut)
+    }
+
+    /// A command owned by `plugin`, both in its scope and in its action.
+    fn owned_command(plugin: &str, id: &str, shortcut: Option<&str>) -> Command {
         Command {
             id: CommandId::new(id).expect("synthetic identifier"),
             title: "Synthetic plugin action".to_owned(),
             keywords: String::new(),
             scope: CommandScope::Plugin {
-                plugin: "synthetic".to_owned(),
+                plugin: plugin.to_owned(),
             },
             enablement: Enablement::Always,
             action: CommandAction::Plugin {
-                plugin: "synthetic".to_owned(),
+                plugin: plugin.to_owned(),
                 action: "create".to_owned(),
             },
             shortcut: shortcut.map(|keys| Shortcut::new(keys).expect("synthetic shortcut")),
@@ -632,6 +718,138 @@ mod tests {
             .expect("plugin command registers");
         assert_eq!(key.get(), before as u64 + 1);
         assert!(registry.get(key).is_some_and(Command::is_plugin_action));
+    }
+
+    #[test]
+    fn registry_holds_exactly_its_cap_and_refuses_the_next_command_whole() {
+        // Fill the browser registry to the cap with synthetic plugin commands.
+        let mut registry = CommandRegistry::browser();
+        // Spread them over several plugins, so no plugin reaches its own quota first.
+        for index in registry.len()..CommandRegistry::MAX_COMMANDS {
+            let plugin = format!(
+                "synthetic{}",
+                index / CommandRegistry::MAX_COMMANDS_PER_PLUGIN
+            );
+            let id = format!("synthetic.action-{index}");
+            registry
+                .register(owned_command(&plugin, &id, None))
+                .expect("commands up to the cap register");
+        }
+        assert_eq!(registry.len(), CommandRegistry::MAX_COMMANDS);
+        let (last, _) = registry
+            .find(&format!(
+                "synthetic.action-{}",
+                CommandRegistry::MAX_COMMANDS - 1
+            ))
+            .expect("the last command fits");
+        assert_eq!(last.get(), CommandRegistry::MAX_COMMANDS as u64);
+
+        // One more is refused by name and leaves no trace, even a valid, distinct one.
+        let extra = plugin_command("synthetic.one-too-many", Some("ctrl-alt-n"));
+        assert_eq!(registry.register(extra), Err(CommandError::TooManyCommands));
+        assert_eq!(registry.len(), CommandRegistry::MAX_COMMANDS);
+        assert!(registry.find("synthetic.one-too-many").is_none());
+        let refused_shortcut = Shortcut::new("ctrl-alt-n").expect("synthetic shortcut");
+        assert!(
+            registry
+                .iter()
+                .all(|(_, command)| command.shortcut.as_ref() != Some(&refused_shortcut))
+        );
+        assert_eq!(
+            CommandError::TooManyCommands.to_string(),
+            "the command registry is full (1024 commands)"
+        );
+    }
+
+    #[test]
+    fn one_plugin_holds_at_most_its_quota_and_others_still_register() {
+        let mut registry = CommandRegistry::browser();
+        for index in 0..CommandRegistry::MAX_COMMANDS_PER_PLUGIN {
+            let id = format!("crowded.action-{index}");
+            registry
+                .register(owned_command("crowded", &id, None))
+                .expect("commands up to the quota register");
+        }
+        let before = registry.len();
+        assert_eq!(
+            registry.register(owned_command("crowded", "crowded.one-too-many", None)),
+            Err(CommandError::PluginQuotaReached)
+        );
+        assert_eq!(registry.len(), before);
+        assert!(registry.find("crowded.one-too-many").is_none());
+
+        // The quota is per plugin: another plugin's first command still fits.
+        assert!(
+            registry
+                .register(owned_command("quiet", "quiet.create", None))
+                .is_ok()
+        );
+        assert_eq!(
+            CommandError::PluginQuotaReached.to_string(),
+            "this plugin already has 128 commands, the most one plugin may register"
+        );
+    }
+
+    #[test]
+    fn a_plugin_command_must_run_an_action_of_its_own_plugin() {
+        let mut registry = CommandRegistry::browser();
+        let before = registry.len();
+        let mut foreign = owned_command("thief", "thief.create", None);
+        foreign.action = CommandAction::Plugin {
+            plugin: "victim".to_owned(),
+            action: "create".to_owned(),
+        };
+        assert_eq!(
+            registry.register(foreign.clone()),
+            Err(CommandError::ForeignAction)
+        );
+        foreign.action = CommandAction::Browser(BrowserAction::ClearBrowsingData);
+        assert_eq!(registry.register(foreign), Err(CommandError::ForeignAction));
+
+        // A browser-scoped command cannot run a plugin's action either.
+        let mut disguised = owned_command("victim", "browser.disguised", None);
+        disguised.scope = CommandScope::Browser;
+        assert_eq!(
+            registry.register(disguised),
+            Err(CommandError::ForeignAction)
+        );
+        assert_eq!(registry.len(), before);
+    }
+
+    #[test]
+    fn a_batch_registers_whole_or_not_at_all() {
+        let mut registry = CommandRegistry::browser();
+        let before = registry.len();
+        let clashing = vec![
+            owned_command("batch", "batch.first", None),
+            owned_command("batch", "batch.second", Some("ctrl-t")),
+        ];
+        assert_eq!(
+            registry.register_all(clashing),
+            Err((1, CommandError::DuplicateShortcut))
+        );
+        assert_eq!(registry.len(), before);
+        assert!(registry.find("batch.first").is_none());
+
+        // A repeat inside the batch itself is caught too.
+        let repeated = vec![
+            owned_command("batch", "batch.first", None),
+            owned_command("batch", "batch.first", None),
+        ];
+        assert_eq!(
+            registry.register_all(repeated),
+            Err((1, CommandError::DuplicateId))
+        );
+        assert_eq!(registry.len(), before);
+
+        let keys = registry
+            .register_all(vec![
+                owned_command("batch", "batch.first", None),
+                owned_command("batch", "batch.second", None),
+            ])
+            .expect("a valid batch registers");
+        assert_eq!(keys.len(), 2);
+        assert_eq!(registry.len(), before + 2);
     }
 
     #[test]

@@ -9,11 +9,13 @@ publish.workspace = true
 license.workspace = true
 
 [dependencies]
-windows = { workspace = true, features = ["Win32_Foundation", "Win32_Security_Cryptography"] }
 
 [features]
 # Opens Windows key storage to sign releases; only the release tool enables it, never Syrinx itself.
 release-tool = []
+# Exposes in-memory test key pairs to other crates' tests. Only `[dev-dependencies]` enable it,
+# so no shipped build signs anything (owner, 2026-11-10).
+test-keys = []
 
 # Swaps a staged update into place after Syrinx exits (P1-39b); ships in every package.
 [[bin]]
@@ -27,3 +29,14 @@ required-features = ["release-tool"]
 
 [lints]
 workspace = true
+
+[target.'cfg(windows)'.dependencies]
+windows = { workspace = true, features = ["Win32_Foundation", "Win32_Security_Cryptography"] }
+
+# Linux and macOS have no CNG; `ring` (Apache-2.0 AND ISC) hashes and checks signatures there.
+[target.'cfg(not(windows))'.dependencies]
+ring = "=0.17.14"
+
+# `flock` and `O_NOFOLLOW` stand in for Windows' exclusive and link-refusing opens.
+[target.'cfg(unix)'.dependencies]
+libc = "=0.2.190"

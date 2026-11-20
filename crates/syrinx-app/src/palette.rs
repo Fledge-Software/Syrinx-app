@@ -48,12 +48,18 @@ pub enum PaletteEvent {
     Run(CommandAction),
     Shortcut(BrowserShortcut),
     Closed,
+    /// A press in Syrinx's chrome ended the entry; focus stays where that press put it (#172).
+    ClickedAway,
 }
 
 impl PaletteEvent {
     pub fn finishes_entry(&self) -> bool {
         match self {
-            Self::Submit { .. } | Self::Activate(_) | Self::Run(_) | Self::Closed => true,
+            Self::Submit { .. }
+            | Self::Activate(_)
+            | Self::Run(_)
+            | Self::Closed
+            | Self::ClickedAway => true,
             Self::Query { .. } | Self::Shortcut(_) => false,
         }
     }
@@ -197,8 +203,19 @@ impl PaletteView {
     /// Ends the entry as if Esc were pressed; the browser then returns focus to the page.
     /// The popup is hidden even without an entry, so a stray visible popup can always close.
     pub fn dismiss(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.end_entry(PaletteEvent::Closed, window, cx);
+    }
+
+    /// Ends the entry for a press in the main window, without sending the keys to the page:
+    /// the press chooses where focus goes, as it does for the menus (#172).
+    pub fn dismiss_for_chrome_press(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.end_entry(PaletteEvent::ClickedAway, window, cx);
+    }
+
+    /// Reports how an open entry ended, then hides the popup.
+    fn end_entry(&mut self, event: PaletteEvent, window: &mut Window, cx: &mut Context<Self>) {
         if self.is_open() {
-            self.emit(PaletteEvent::Closed);
+            self.emit(event);
         }
         self.close(window, cx);
     }
@@ -292,7 +309,7 @@ impl PaletteView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
-        if !self.is_open() || !self.choices.receive(request_id, result) {
+        if !self.is_open() || !self.choices.receive_ordered(request_id, result) {
             return false;
         }
         if let Some(probe) = &self.probe {
@@ -316,6 +333,16 @@ impl PaletteView {
     /// The row Enter would open or run, for P1-33's acceptance run.
     pub fn selected_target(&self) -> Option<Target> {
         self.choices.selected_hit().map(|hit| hit.target)
+    }
+
+    /// Whether the typed row leads and is Enter's choice, for P1-33's acceptance run.
+    pub fn typed_row_selected(&self) -> bool {
+        self.choices.lead_rows() > 0 && self.choices.selected == Some(0)
+    }
+
+    /// Moves the selection down as the Down key does, for P1-33's acceptance run.
+    pub fn press_down(&mut self, cx: &mut Context<Self>) {
+        self.move_selection(true, cx);
     }
 
     /// The typed text, for P1-33's acceptance run.
@@ -413,7 +440,10 @@ impl PaletteView {
         if selected == 0
             && let Some(address) = &self.choices.address
         {
-            return Some(Preview::address(address));
+            return Some(Preview::address(&self.choices.entry, address));
+        }
+        if selected == 0 && self.choices.web_search {
+            return Some(Preview::search(&self.choices.entry));
         }
         let hit = self.choices.selected_hit()?;
         let Some(command) = self.commands.command(hit.target) else {
@@ -549,7 +579,7 @@ impl Render for PaletteView {
             .on_action(cx.listener(|this, _: &ui::Reload, _, _| {
                 this.emit(PaletteEvent::Shortcut(BrowserShortcut::Reload));
             }))
-            // Tab leaves the query for the scope chips and the web search button.
+            // Tab leaves the query for the scope chips.
             .on_action(|_: &ui::FocusNextControl, window, cx| window.focus_next(cx))
             .on_action(|_: &ui::FocusPreviousControl, window, cx| window.focus_prev(cx))
             .child(
@@ -632,6 +662,7 @@ mod tests {
             PaletteEvent::Activate(Target::Tab(TabId::new(1).expect("synthetic tab"))),
             PaletteEvent::Run(CommandAction::Browser(BrowserAction::Reload)),
             PaletteEvent::Closed,
+            PaletteEvent::ClickedAway,
         ] {
             let (sender, mut receiver) = unbounded();
             // Typing and further shortcuts must reach the same receiver before entry finishes.

@@ -11,6 +11,7 @@ use syrinx_ui::Palette;
 use syrinx_ui::metrics::{chrome, radius, text};
 
 use super::BrowserView;
+use super::customize::switch_control;
 use super::home_palette::HomePaletteIntent;
 use super::updates::pill;
 use crate::controls::control;
@@ -30,6 +31,7 @@ const SECTION_MAX_WIDTH: f32 = 560.;
 pub(super) enum SettingsSection {
     #[default]
     Appearance,
+    Tabs,
     Privacy,
     UsageReport,
     Updates,
@@ -38,8 +40,9 @@ pub(super) enum SettingsSection {
 impl SettingsSection {
     /// The sections in list order. #91 also names About, which waits until Syrinx has
     /// something to say there beyond the version Updates already shows.
-    pub(super) const ALL: [Self; 4] = [
+    pub(super) const ALL: [Self; 5] = [
         Self::Appearance,
+        Self::Tabs,
         Self::Privacy,
         Self::UsageReport,
         Self::Updates,
@@ -48,6 +51,7 @@ impl SettingsSection {
     pub(super) fn name(self) -> &'static str {
         match self {
             Self::Appearance => "Appearance",
+            Self::Tabs => "Tabs",
             Self::Privacy => "Privacy",
             Self::UsageReport => "Usage report",
             Self::Updates => "Updates",
@@ -58,15 +62,17 @@ impl SettingsSection {
     fn index(self) -> usize {
         match self {
             Self::Appearance => 0,
-            Self::Privacy => 1,
-            Self::UsageReport => 2,
-            Self::Updates => 3,
+            Self::Tabs => 1,
+            Self::Privacy => 2,
+            Self::UsageReport => 3,
+            Self::Updates => 4,
         }
     }
 
     fn element_id(self) -> &'static str {
         match self {
             Self::Appearance => "settings-appearance",
+            Self::Tabs => "settings-tabs",
             Self::Privacy => "settings-privacy",
             Self::UsageReport => "settings-usage-report",
             Self::Updates => "settings-updates",
@@ -197,6 +203,7 @@ impl BrowserView {
     pub(super) fn close_settings_subviews(&mut self) {
         self.home.site_permissions.close();
         self.usage.report.close();
+        self.page_text_site = None;
     }
 
     /// Whether the active tab is the Settings page.
@@ -360,19 +367,45 @@ impl BrowserView {
                 .child(self.theme_choices(palette, window, cx))
                 .child(self.accent_choices(palette, window, cx))
                 .child(self.transparency_switch(palette, cx)),
+            SettingsSection::Tabs => column.child(self.bulk_close_entry(palette, cx)),
             // Managing permissions or reading the report replaces its section's summary.
             SettingsSection::Privacy if self.home.site_permissions.is_open() => {
                 self.site_permissions_view(palette, cx)
             }
             SettingsSection::Privacy => column
+                .children(engine_limit_notes(palette))
                 .child(self.site_permissions_entry(palette, cx))
-                .child(self.clear_data_entry(palette, cx)),
+                .child(self.clear_data_entry(palette, cx))
+                .child(self.page_text_section(palette, window, cx)),
             SettingsSection::UsageReport if self.usage.report.is_open() => {
                 self.usage_report_view(palette, cx)
             }
             SettingsSection::UsageReport => self.usage_section(palette, cx),
             SettingsSection::Updates => self.updates_section(palette, cx),
         }
+    }
+
+    /// Whether Close other tabs and Close tabs below ask first; the confirmation's "Close and
+    /// don't ask again" turns it off, and this turns it back on (owner, 2026-10-27).
+    fn bulk_close_entry(&self, palette: &Palette, cx: &mut Context<Self>) -> Div {
+        let on = self.ask_before_bulk_close;
+        let switch = switch_control(
+            "ask-before-bulk-close",
+            "Ask before closing several tabs",
+            on,
+            palette,
+        )
+        .on_click(cx.listener(move |this, _, _, cx| {
+            // From the current state, not the one this frame drew.
+            this.set_ask_before_bulk_close(!this.ask_before_bulk_close);
+            cx.notify();
+        }));
+        entry_row(
+            palette,
+            "Ask before closing several tabs",
+            "Before Close other tabs or Close tabs below, Syrinx says how many tabs will close and asks first.",
+            switch,
+        )
     }
 
     /// Privacy's way to the existing clear browsing data dialog, which asks before deleting.
@@ -399,6 +432,29 @@ impl BrowserView {
     }
 }
 
+/// Keeps platform-specific engine limits beside Privacy's existing explanations.
+fn engine_limit_notes(palette: &Palette) -> impl Iterator<Item = Stateful<Div>> + '_ {
+    syrinx_platform::browser::ENGINE_LIMITS
+        .iter()
+        .enumerate()
+        .map(move |(index, &(title, description))| {
+            div()
+                .id(gpui::SharedString::from(format!("engine-limit-{index}")))
+                .role(Role::Label)
+                .aria_label(format!("{title}. {description}"))
+                .flex()
+                .flex_col()
+                .gap(px(2.))
+                .child(div().font_weight(FontWeight::MEDIUM).child(title))
+                .child(
+                    div()
+                        .text_size(px(text::SMALL))
+                        .text_color(rgba(palette.text_muted))
+                        .child(description),
+                )
+        })
+}
+
 /// A heading screen readers can jump to.
 fn heading(id: &'static str, level: usize, title: &'static str, size: f32) -> Stateful<Div> {
     div()
@@ -412,7 +468,7 @@ fn heading(id: &'static str, level: usize, title: &'static str, size: f32) -> St
 }
 
 /// A divided row: a title and a line of explanation, with its one action on the right.
-fn entry_row(
+pub(super) fn entry_row(
     palette: &Palette,
     title: &'static str,
     description: &'static str,
@@ -599,7 +655,10 @@ mod tests {
     #[test]
     fn the_sections_are_the_settings_syrinx_has_in_list_order() {
         let names: Vec<_> = SettingsSection::ALL.map(SettingsSection::name).into();
-        assert_eq!(names, ["Appearance", "Privacy", "Usage report", "Updates"]);
+        assert_eq!(
+            names,
+            ["Appearance", "Tabs", "Privacy", "Usage report", "Updates"]
+        );
         assert_eq!(SettingsSection::default(), SettingsSection::Appearance);
         // Each section's list entry has its own element id, as GPUI's accessibility tree needs.
         let mut ids: Vec<_> = SettingsSection::ALL.map(SettingsSection::element_id).into();

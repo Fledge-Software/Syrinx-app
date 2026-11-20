@@ -1,0 +1,13 @@
+[Desktop Entry]
+Type=Application
+Version=1.5
+Name=Syrinx
+GenericName=Web Browser
+Comment=Browse the web with vertical tabs and a command palette
+Exec=syrinx
+Icon=syrinx
+Terminal=false
+Categories=Network;WebBrowser;
+StartupNotify=true
+StartupWMClass=syrinx
+X-Syrinx-Packaging=syrinx-packaging-v1

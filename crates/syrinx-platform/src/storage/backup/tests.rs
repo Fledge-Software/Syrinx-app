@@ -10,7 +10,7 @@ struct CountingProbe {
 
 impl crate::storage::LocationProbe for CountingProbe {
     fn drive_type(&self, root: &Path) -> Result<u32, LocationError> {
-        crate::storage::LocationProbe::drive_type(&native::WindowsProbe, root)
+        crate::storage::LocationProbe::drive_type(&native::NativeProbe, root)
     }
 
     fn sync_roots(&self) -> Result<Vec<PathBuf>, LocationError> {
@@ -23,7 +23,7 @@ impl crate::storage::LocationProbe for CountingProbe {
 }
 
 fn archive(fixture: &Fixture) -> WindowsBackupArchive {
-    let prepared = prepare_directory(&fixture.root, Arc::new(native::WindowsProbe))
+    let prepared = prepare_directory(&fixture.root, Arc::new(native::NativeProbe))
         .expect("prepare synthetic backup directory");
     WindowsBackupArchive::new(prepared)
 }
@@ -119,6 +119,7 @@ fn archive_is_lazy_and_a_reserved_incomplete_output_is_not_a_candidate() {
     assert!(!bundle.exists());
 }
 
+#[cfg(windows)]
 #[test]
 fn publication_freezes_files_and_removal_requires_only_this_owned_bundle() {
     let fixture = Fixture::new();

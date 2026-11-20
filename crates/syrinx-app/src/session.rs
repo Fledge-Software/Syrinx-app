@@ -1,9 +1,13 @@
 //! Keeps model, persistence and catalogue work off the browser's event thread.
 
+mod back_forward;
 mod deletions;
 mod folders;
 mod history;
 mod history_repair;
+mod page_text;
+mod page_text_setting;
+mod plugins;
 mod preferences;
 mod recovery;
 mod retention;
@@ -11,9 +15,13 @@ mod stop;
 mod synthetic;
 mod unsaved;
 mod usage;
+mod zoom_levels;
 
+pub use back_forward::HistoryListRow;
 pub use folders::FolderCommand;
 pub use history_repair::{HistoryRepairPrompt, HistoryRepairReason};
+pub use page_text::CapturedPage;
+pub use page_text_setting::PageTextSetting;
 pub use recovery::RecoveryPrompt;
 pub use synthetic::SyntheticCatalogue;
 pub use usage::{STATE_FOLDER, UsageControl, UsageError, UsageStatus, usage_file};
@@ -40,6 +48,7 @@ use syrinx_core::{
 use syrinx_platform::{DeletionJournal, JournalError, StartupStorage, WindowsDirectoryLease};
 use syrinx_search::{
     Catalogue, Entry, Scope, SearchError, SearchPolicy, SearchResults, Target, Usage,
+    fulltext::FullTextError,
 };
 use syrinx_store::{BackupOutcome, HistoryVisit, LocationError, ShutdownState, Store, StoreError};
 use usage::UsageCollector;
@@ -105,15 +114,11 @@ pub enum SessionCommand {
         backwards: bool,
     },
     FocusTab(TabId),
-    // TODO(#95): send from the row menu, then drop cfg(test).
     /// Opens a selected copy of a web tab right after it (#95).
-    #[cfg(test)]
     Duplicate(TabId),
     /// Closes every ordinary tab but this one, sparing open saved pages (#95).
-    #[cfg(test)]
     CloseOthers(TabId),
     /// Closes the ordinary tabs below this one, sparing open saved pages (#95).
-    #[cfg(test)]
     CloseBelow(TabId),
     OpenSaved(SavedPageId),
     SaveActive,
@@ -164,6 +169,23 @@ pub enum SessionCommand {
         scope: Scope,
         policy: SearchPolicy,
     },
+    /// A page's back and forward list changed; its tab's list follows it, in memory only.
+    ObserveHistory {
+        id: TabId,
+        report: syrinx_core::HistoryReport,
+    },
+    /// The window is sending `steps` Back or Forward calls; the tab's list checks the landing.
+    StartHistoryJump {
+        id: TabId,
+        direction: syrinx_core::HistoryDirection,
+        steps: u32,
+    },
+    /// Reads tab `id`'s list in `direction` for Back or Forward's menu, nearest first.
+    HistoryRows {
+        request_id: u64,
+        id: TabId,
+        direction: syrinx_core::HistoryDirection,
+    },
     /// A page's navigation finished; a failure retracts the visit its address change recorded.
     ObserveNavigation {
         id: TabId,
@@ -197,6 +219,14 @@ pub enum SessionCommand {
         request_id: u64,
         period: ReportPeriod,
     },
+    /// Keeps one page's captured text in the full-text index for seven days (#54). The window
+    /// sends it only while capture is on and the page is still allowed, so nothing else is
+    /// checked here.
+    StorePageText(CapturedPage),
+    /// Saves the owner's page-text setting (#54). Switching capture off erases all page text,
+    /// and excluding a site erases that site's, before the save and whatever it returns; a
+    /// refused save is retried until it is kept.
+    SavePageTextSetting(PageTextSetting),
     /// Earlier commands finish first; commands sent after this are not accepted.
     Shutdown,
 }
@@ -219,6 +249,9 @@ pub struct SessionSnapshot {
     pub home_entry: Option<u64>,
     /// Native popup request correlated only after durable tab allocation.
     pub popup: Option<(u64, Option<TabId>)>,
+    /// The created tabs that put back a page an earlier tab showed (reopened or duplicated),
+    /// whose first page page text must not read (#54).
+    pub reopened: Vec<TabId>,
     pub previous_shutdown: ShutdownState,
 }
 
@@ -276,8 +309,20 @@ pub enum SessionEvent {
         result: Result<Vec<HistoryVisit>, SessionError>,
     },
     /// The saved zoom levels after a clear the window did not ask for finished (#121): one a
-    /// busy database interrupted, completed while idle or ahead of a later history clear.
+    /// busy database interrupted, completed while idle or ahead of any later journaled clear.
     SiteZoomsReplaced(SiteZoomLevels),
+    /// Whether tab `id`'s list now has rows behind and ahead, and whether its engine can go
+    /// either way; it carries no address or title.
+    HistoryReach {
+        id: TabId,
+        reach: syrinx_core::HistoryReach,
+        engine: syrinx_core::HistoryReach,
+    },
+    /// The answer to `HistoryRows`: the rows of one Back or Forward menu, held in memory only.
+    HistoryRows {
+        request_id: u64,
+        rows: Vec<HistoryListRow>,
+    },
     /// What a `ClearSiteZooms` request removed, or why it failed.
     SiteZoomsCleared {
         request_id: u64,
@@ -342,11 +387,21 @@ pub enum SessionError {
     Model(TabError),
     Snapshot(SnapshotError),
     Search(SearchError),
+    /// The full-text index failed; it is closed for the session and catches up at the next
+    /// start (#53). Never fatal: the index is a cache.
+    FullText(FullTextError),
+    /// The full-text index's folder failed the storage guard; the session runs without it.
+    IndexFolder(LocationError),
+    /// A confirmed history repair was refused because the index's folder could not be
+    /// emptied, so old page text would outlive the rebuilt journal (#53).
+    IndexNotEmptied(LocationError),
     Destination(DestinationError),
     /// The deletion journal refused or failed a record (D47).
     Deletion(JournalError),
     /// The usage file could not be read, written or deleted (AN-01); never fatal.
     Usage(UsageError),
+    /// The plugin runtime could not start; browsing goes on without plugins (#136).
+    Plugins(syrinx_plugin_host::owner::OwnerError),
     NoActiveTab,
     /// The session worker could not take a request, or stopped before answering it.
     StorageUnavailable,
@@ -378,6 +433,11 @@ pub enum SessionError {
         attempts: u32,
         error: Box<SessionError>,
     },
+    /// A failure that came after an earlier one; both are kept, so neither cause is lost.
+    AfterEarlier {
+        earlier: Box<SessionError>,
+        error: Box<SessionError>,
+    },
     /// The error that ended the worker's loop, with the fixed name of what it was doing.
     During {
         operation: &'static str,
@@ -394,9 +454,22 @@ impl fmt::Display for SessionError {
             Self::Model(error) => write!(formatter, "Cannot change this tab: {error}"),
             Self::Snapshot(error) => write!(formatter, "Cannot restore the session: {error}"),
             Self::Search(error) => write!(formatter, "Local search failed: {error}"),
+            Self::FullText(error) => write!(formatter, "{error}"),
+            Self::IndexFolder(error) => {
+                write!(formatter, "Cannot open the search index's folder: {error}")
+            }
+            Self::IndexNotEmptied(error) => write!(
+                formatter,
+                "The history repair was not done, because Syrinx could not empty its search \
+                 index. Close any program using a file in the \"fulltext\" folder of Syrinx's \
+                 data folder (normally %LOCALAPPDATA%\\Syrinx\\data\\fulltext), or delete \
+                 everything inside that folder, then start Syrinx again; the index is a cache \
+                 Syrinx rebuilds ({error})"
+            ),
             Self::Destination(error) => write!(formatter, "Cannot change this tile: {error}"),
             Self::Deletion(error) => write!(formatter, "Cannot clear history safely: {error}"),
             Self::Usage(error) => write!(formatter, "{error}"),
+            Self::Plugins(error) => write!(formatter, "Plugins are unavailable: {error}"),
             Self::NoActiveTab => formatter.write_str("There is no active page to save"),
             Self::StorageUnavailable => formatter.write_str("Local storage is unavailable"),
             Self::HistoryUnavailable => {
@@ -435,6 +508,9 @@ impl fmt::Display for SessionError {
                     formatter,
                     "The tabs could not be saved ({attempts} tries): {error}"
                 )
+            }
+            Self::AfterEarlier { earlier, error } => {
+                write!(formatter, "{error} (after an earlier failure: {earlier})")
             }
             Self::During { operation, error } => write!(formatter, "{error} (while {operation})"),
         }
@@ -565,21 +641,29 @@ fn serve_accepted(
     data_dir: &std::path::Path,
 ) -> Result<(), SessionError> {
     worker.survival.keep_in(data_dir.to_path_buf());
-    let result = serve_counted(
-        &usage,
-        startup,
-        &store,
-        &mut worker,
-        commands,
-        events,
-        data_dir,
-    );
+    // The session owns the plugin runtime, which shares its store; plugins never stop browsing.
+    let store = Arc::new(store);
+    let (plugins, started) = match plugins::start(&store, data_dir) {
+        Ok(plugins) => (Some(plugins), Ok(())),
+        Err(error) => (None, emit_recoverable(events, SessionError::Plugins(error))),
+    };
+    let result = started.and_then(|()| {
+        serve_counted(
+            &usage,
+            startup,
+            &store,
+            &mut worker,
+            commands,
+            events,
+            data_dir,
+        )
+    });
     worker.survival.finish();
     if let Err(error) = &result {
         stop::keep_stop(data_dir, error);
     }
     // A shutdown failure after the line is written goes to the window and stderr only.
-    finish_store(result, store.shutdown())
+    finish_store(result, plugins::close(plugins, store))
 }
 
 /// Loads usage counting, serves until the loop ends and saves the counts.
@@ -644,22 +728,19 @@ fn start_usage(
     Ok(collector)
 }
 
-/// Today's local date; the UTC day when Windows cannot say, and `None` only without any clock.
+/// Today's local date; the UTC day when the system cannot say, and `None` only without any clock.
 fn local_today() -> Option<UsageDate> {
     match syrinx_platform::calendar::local_iso_date() {
         Ok(text) => UsageDate::parse(&text),
         Err(error) => {
-            // Only the Windows error code is logged; the UTC day is at most one day off.
-            eprintln!(
-                "Windows could not report today's local date ({:?})",
-                error.code()
-            );
+            // Only the system's error is logged; the UTC day is at most one day off.
+            eprintln!("The system could not report today's local date ({error})");
             utc_today()
         }
     }
 }
 
-/// The UTC calendar day, used only when Windows cannot report the local one.
+/// The UTC calendar day, used only when the system cannot report the local one.
 fn utc_today() -> Option<UsageDate> {
     let seconds = match utc_seconds() {
         Ok(seconds) => seconds,
@@ -737,15 +818,37 @@ fn open_session(
 ) -> Result<(Store, Worker), SessionError> {
     let lease = Arc::new(lease);
     let store = Store::open(lease.clone()).map_err(SessionError::Store)?;
-    let opened =
-        open_journal(&store, &lease, repair).and_then(|journal| Worker::restore(&store, journal));
-    match opened {
+    match open_worker(&store, &lease, repair) {
         Ok(worker) => Ok((store, worker)),
         Err(error) => {
             // Recovery cannot overlap live connections or conceal a failed close.
             finish_store(Err(error), store.shutdown())
         }
     }
+}
+
+/// Opens the full-text index, then the journal, then restores the worker from the store.
+fn open_worker(
+    store: &Store,
+    lease: &WindowsDirectoryLease,
+    repair: bool,
+) -> Result<Worker, SessionError> {
+    let page_text = open_page_text(lease, repair)?;
+    let journal = open_journal(store, lease, repair)?;
+    Worker::restore(store, journal, page_text)
+}
+
+/// Opens the full-text index; a repair first removes its page text, before the journal is
+/// rebuilt (#53). Only a repair can fail here: an index that will not open is reported later.
+fn open_page_text(
+    lease: &WindowsDirectoryLease,
+    repair: bool,
+) -> Result<page_text::PageText, SessionError> {
+    let mut page_text = page_text::PageText::open(lease);
+    if repair {
+        page_text.restart_before_repair(lease)?;
+    }
+    Ok(page_text)
 }
 
 /// The journal lives beside the database and is held for the whole session (D47).
@@ -785,6 +888,10 @@ struct Worker {
     deletions: DeletionJournal,
     /// When history retention next expires old visits, and how far it last reached (DW-4).
     retention: retention::Schedule,
+    /// The full-text index's page text, kept level with the journal and D40 (#53).
+    page_text: page_text::PageText,
+    /// The owner's page-text setting, held until the database has taken it (#54).
+    page_text_setting: page_text_setting::AppliedSetting,
     revision: u64,
     previous_shutdown: ShutdownState,
     destinations: QuickDestinations,
@@ -802,6 +909,15 @@ struct Worker {
     survival: stop::Survival,
     /// A tab model a busy database refused, and when to try it again (#9).
     unsaved: unsaved::Unsaved,
+    /// Whether the window missed the zoom levels a clear applied; an idle tick resends them (#196).
+    zoom_levels: zoom_levels::ZoomLevelsReport,
+}
+
+/// The tabs a command created, and those of them that put back an earlier tab's page.
+#[derive(Default)]
+struct Opened {
+    created: Vec<TabId>,
+    reopened: Vec<TabId>,
 }
 
 /// The model after a command, and the failures it survived, reported once it is published.
@@ -811,20 +927,29 @@ struct Persisted {
 }
 
 impl Worker {
-    fn restore(store: &Store, mut deletions: DeletionJournal) -> Result<Self, SessionError> {
-        // Cleared history must be gone before the catalogue or any list can read it.
-        deletions::reconcile(store, &mut deletions)?;
+    fn restore(
+        store: &Store,
+        mut deletions: DeletionJournal,
+        mut page_text: page_text::PageText,
+    ) -> Result<Self, SessionError> {
+        // Cleared history and page text must be gone before the catalogue or any list reads them.
+        deletions::reconcile(store, &mut deletions, &mut page_text)?;
         let mut stored_preferences = preferences::restore(store)?;
         let site_zooms = preferences::restore_site_zooms(store)?;
         // Expired visits go before the catalogue loads; a large backlog continues while idle.
+        let now = utc_seconds()?;
         let mut schedule = retention::Schedule::take_saved(&mut stored_preferences.settings);
         retention::expire_at_startup(
             store,
             &mut deletions,
-            utc_seconds()?,
+            &mut page_text,
+            now,
             &mut schedule,
             retention::EXPIRY_BATCH,
         )?;
+        page_text.expire_if_due(now);
+        let restored = PageTextSetting::restored(&stored_preferences.settings);
+        erase_what_the_setting_forbids(&mut page_text, &restored, now);
         let stored = store.load().map_err(SessionError::Store)?;
         let model = TabModel::from_snapshot(stored.snapshot).map_err(SessionError::Snapshot)?;
         let snapshot = model.snapshot();
@@ -849,6 +974,8 @@ impl Worker {
             history: HistoryRecorder::restored(&snapshot),
             deletions,
             retention: schedule,
+            page_text,
+            page_text_setting: page_text_setting::AppliedSetting::restored(restored.setting),
             revision: stored.revision,
             previous_shutdown: store.previous_shutdown(),
             destinations: stored_preferences.destinations,
@@ -859,6 +986,7 @@ impl Worker {
             usage: Arc::default(),
             survival: stop::Survival::new(),
             unsaved: unsaved::Unsaved::default(),
+            zoom_levels: zoom_levels::ZoomLevelsReport::default(),
         })
     }
 
@@ -878,8 +1006,16 @@ impl Worker {
             },
         )
         .map_err(stop::during("sending the saved settings"))?;
-        self.publish(events, self.model.snapshot(), Vec::new(), None, None, None)
-            .map_err(stop::during("sending the restored tabs"))?;
+        self.publish(
+            events,
+            self.model.snapshot(),
+            Opened::default(),
+            None,
+            None,
+            None,
+        )
+        .map_err(stop::during("sending the restored tabs"))?;
+        self.report_page_text(events)?;
         let mut delay = IDLE_DELAY;
         loop {
             // Held page titles are written once they settle, even while nothing else happens.
@@ -934,6 +1070,7 @@ impl Worker {
                     self.survival.operation = command.operation();
                     let handled = self.handle(store, command, events);
                     self.survival.result(handled, events)?;
+                    self.report_page_text(events)?;
                     delay = IDLE_DELAY;
                 }
                 Err(mpsc::RecvTimeoutError::Timeout) if self.history.has_pending_titles() => {
@@ -962,6 +1099,10 @@ impl Worker {
         self.survival.operation = "saving the tabs";
         let retried = self.retry_unsaved(store);
         self.survival.result(retried, events)?;
+        // A failed report of the zoom levels a clear left is sent again on a later tick (#196).
+        self.survival.operation = "resending the zoom levels";
+        let resent = self.zoom_levels.retry(store, events);
+        self.survival.result(resent, events)?;
         // A clear that a busy database interrupted must not leave cleared data showing (D47).
         self.survival.operation = "finishing an interrupted clear";
         let cleared = self.finish_pending_clear(store, events);
@@ -972,7 +1113,13 @@ impl Worker {
             self.survival.operation = "expiring old history";
             let expired = self.expire_while_idle(store, *now, retention::EXPIRY_BATCH, events);
             self.survival.result(expired, events)?;
+            self.page_text.expire_if_due(*now);
         }
+        self.page_text.retry_cleanup();
+        self.report_page_text(events)?;
+        self.survival.operation = SAVING_PAGE_TEXT_SETTING_AGAIN;
+        let resaved = self.page_text_setting.retry(store);
+        self.survival.result(resaved, events)?;
         // The store retains its daily due state; retries remain idle and bounded.
         self.survival.operation = "taking the daily backup";
         let backed_up = backup_while_idle(store, now, &self.usage, events);
@@ -991,6 +1138,10 @@ impl Worker {
             self.save_model(store, &model)
                 .map_err(stop::during("saving the tabs at shutdown"))?;
         }
+        // The last chance to keep a page-text switch-off the database refused.
+        self.survival.operation = SAVING_PAGE_TEXT_SETTING_AGAIN;
+        let resaved = self.page_text_setting.retry(store);
+        self.survival.result(resaved, events)?;
         // A title still held at exit most likely names the tab's current page.
         self.survival.operation = "saving page titles at shutdown";
         let settled = self.settle_titles(store, true);
@@ -1018,6 +1169,24 @@ impl Worker {
             | SessionCommand::ConfirmHistoryRepair { .. } => {
                 return recovery::reject_command(events);
             }
+            SessionCommand::ObserveHistory { id, report } => {
+                return self.observe_history(id, &report, events);
+            }
+            SessionCommand::StartHistoryJump {
+                id,
+                direction,
+                steps,
+            } => {
+                self.start_history_jump(id, direction, steps);
+                return Ok(());
+            }
+            SessionCommand::HistoryRows {
+                request_id,
+                id,
+                direction,
+            } => {
+                return self.history_rows(request_id, id, direction, events);
+            }
             SessionCommand::ObserveNavigation { id, success } => {
                 let result = self.history.navigation(
                     store,
@@ -1037,6 +1206,16 @@ impl Worker {
             } => return self.answer_query(request_id, &text, scope, policy, events),
             SessionCommand::GrowSyntheticCatalogue { total } => {
                 return self.grow_synthetic(total, events);
+            }
+            SessionCommand::StorePageText(page) => {
+                self.page_text.store(page, utc_seconds()?);
+                return Ok(());
+            }
+            SessionCommand::SavePageTextSetting(setting) => {
+                let now = utc_seconds()?;
+                return self
+                    .page_text_setting
+                    .apply(setting, &mut self.page_text, store, now);
             }
             SessionCommand::RecentHistory { request_id, limit } => {
                 let result = store.recent_visits(limit).map_err(SessionError::Store);
@@ -1133,6 +1312,7 @@ impl Worker {
             _ => None,
         };
         let counted = counted_feature(&command);
+        let reopening = reopens_a_page(&command);
         let before = self.model.snapshot();
         if let Err(error) = apply_model(&mut self.model, command) {
             // A refused popup must not leave its native request waiting for a tab.
@@ -1161,7 +1341,13 @@ impl Worker {
             stop::keep_refused(&mut refused, registered)?;
         }
         // Survived failures follow the state, so its "Saved locally" cannot hide them.
-        let published = self.publish(events, after, created, navigate, home_entry, popup);
+        let reopened = if reopening {
+            created.clone()
+        } else {
+            Vec::new()
+        };
+        let opened = Opened { created, reopened };
+        let published = self.publish(events, after, opened, navigate, home_entry, popup);
         self.survival.report_refused(refused, events)?;
         published
     }
@@ -1242,19 +1428,24 @@ impl Worker {
     }
 
     /// Finishes a clear of either category that a busy database interrupted, if one is pending,
-    /// and hands the window the zoom levels left when that clear removed any (#121).
+    /// and hands the window the zoom levels left whenever that clear was of zoom levels (#121).
     fn finish_pending_clear(
         &mut self,
         store: &Store,
         events: &UnboundedSender<SessionEvent>,
     ) -> Result<(), SessionError> {
-        let finished = deletions::finish_pending(
+        deletions::finish_interrupted(
             store,
             &mut self.deletions,
-            &mut self.catalogue,
-            &mut self.history,
-        )?;
-        deletions::report_replaced_site_zooms(store, &finished, events)
+            &mut deletions::Followers::new(
+                &mut self.catalogue,
+                &mut self.history,
+                &mut self.page_text,
+                &mut self.zoom_levels,
+                events,
+            ),
+        )
+        .map(drop)
     }
 
     /// Adds the whole import in memory, then commits it with a single save.
@@ -1279,7 +1470,7 @@ impl Worker {
         self.usage.count(Feature::ImportCompleted);
         let result = Ok(commit);
         let published = emit(events, SessionEvent::Imported { request_id, result })
-            .and_then(|()| self.publish(events, after, Vec::new(), None, None, None));
+            .and_then(|()| self.publish(events, after, Opened::default(), None, None, None));
         self.survival.report_refused(refused, events)?;
         published
     }
@@ -1347,19 +1538,23 @@ impl Worker {
         end: i64,
         events: &UnboundedSender<SessionEvent>,
     ) -> Result<(), SessionError> {
-        // An interrupted zoom clear finished on the way leaves the window's levels stale (#121).
+        // A capture of a page visited in this range may still be in flight; it must not land
+        // after the clear (D47).
+        self.page_text.fence_clear(start, end, utc_seconds()?);
         let result = deletions::clear(
             store,
             &mut self.deletions,
-            &mut self.catalogue,
-            &mut self.history,
+            deletions::Followers::new(
+                &mut self.catalogue,
+                &mut self.history,
+                &mut self.page_text,
+                &mut self.zoom_levels,
+                events,
+            ),
             start,
             end,
         )
-        .and_then(|finished| {
-            deletions::report_replaced_site_zooms(store, &finished, events)?;
-            Ok(finished.history)
-        });
+        .map(|finished| finished.history);
         self.report_cleared(result, events, |result| SessionEvent::HistoryCleared {
             request_id,
             result,
@@ -1378,8 +1573,13 @@ impl Worker {
         let result = deletions::clear_site_zooms(
             store,
             &mut self.deletions,
-            &mut self.catalogue,
-            &mut self.history,
+            deletions::Followers::new(
+                &mut self.catalogue,
+                &mut self.history,
+                &mut self.page_text,
+                &mut self.zoom_levels,
+                events,
+            ),
             start,
             end,
         );
@@ -1409,6 +1609,16 @@ impl Worker {
         delivered
     }
 
+    /// Shows the owner, once, a failure that closed the full-text index; the session goes on.
+    /// The failure already names what the index was doing.
+    fn report_page_text(
+        &mut self,
+        events: &UnboundedSender<SessionEvent>,
+    ) -> Result<(), SessionError> {
+        let problem = self.page_text.take_problem();
+        self.survival.result(problem, events)
+    }
+
     /// Expires history past the retention when due, one bounded batch per idle check.
     fn expire_while_idle(
         &mut self,
@@ -1423,8 +1633,13 @@ impl Worker {
         let expired = retention::expire_live(
             store,
             &mut self.deletions,
-            &mut self.catalogue,
-            &mut self.history,
+            deletions::Followers::new(
+                &mut self.catalogue,
+                &mut self.history,
+                &mut self.page_text,
+                &mut self.zoom_levels,
+                events,
+            ),
             now,
             &mut self.retention,
             limit,
@@ -1473,7 +1688,7 @@ impl Worker {
         &self,
         events: &UnboundedSender<SessionEvent>,
         model: TabModelSnapshot,
-        created: Vec<TabId>,
+        opened: Opened,
         navigate: Option<TabId>,
         home_entry: Option<u64>,
         popup: Option<(u64, Option<TabId>)>,
@@ -1483,10 +1698,11 @@ impl Worker {
             SessionEvent::State(SessionSnapshot {
                 revision: self.revision,
                 model,
-                created,
+                created: opened.created,
                 navigate,
                 home_entry,
                 popup,
+                reopened: opened.reopened,
                 previous_shutdown: self.previous_shutdown,
             }),
         )
@@ -1561,7 +1777,6 @@ fn counted_feature(command: &SessionCommand) -> Counted {
         SessionCommand::Unsave(_) => Counted::IfChanged(Feature::SavedRemoved),
         SessionCommand::SaveTab(_) => Counted::IfChanged(Feature::SavedSaved),
         // D39's schema has no counter for duplicating or bulk closes until the owner approves one.
-        #[cfg(test)]
         SessionCommand::Duplicate(_)
         | SessionCommand::CloseOthers(_)
         | SessionCommand::CloseBelow(_) => Counted::Nothing,
@@ -1574,6 +1789,86 @@ fn counted_feature(command: &SessionCommand) -> Counted {
         _ => Counted::Nothing,
     }
 }
+
+/// Whether a command puts back a page an earlier tab showed, which may have been reached from
+/// an excluded site, so page text must not read it from the start (#54, D35).
+/// Every command is listed, so a new one that puts back a page cannot be read by default.
+fn reopens_a_page(command: &SessionCommand) -> bool {
+    match command {
+        SessionCommand::ReopenClosed
+        | SessionCommand::Duplicate(_)
+        | SessionCommand::HomeEntry {
+            action: HomeEntryAction::ReopenClosed,
+            ..
+        } => true,
+        SessionCommand::HomeEntry {
+            action: HomeEntryAction::NewTab | HomeEntryAction::OpenSaved(_),
+            ..
+        }
+        | SessionCommand::CheckPermission { .. }
+        | SessionCommand::RememberPermission { .. }
+        | SessionCommand::RememberedPermissions { .. }
+        | SessionCommand::ForgetPermission { .. }
+        | SessionCommand::ConfirmRecovery { .. }
+        | SessionCommand::ConfirmHistoryRepair { .. }
+        | SessionCommand::NewTab { .. }
+        | SessionCommand::AdoptPopup { .. }
+        | SessionCommand::NavigateActive { .. }
+        | SessionCommand::CloseTab(_)
+        | SessionCommand::ObserveClosed(_)
+        | SessionCommand::CloseActive
+        | SessionCommand::CycleActive { .. }
+        | SessionCommand::FocusTab(_)
+        | SessionCommand::CloseOthers(_)
+        | SessionCommand::CloseBelow(_)
+        | SessionCommand::OpenSaved(_)
+        | SessionCommand::SaveActive
+        | SessionCommand::SaveTab(_)
+        | SessionCommand::Unsave(_)
+        | SessionCommand::Folder(_)
+        | SessionCommand::UpdateMetadata { .. }
+        | SessionCommand::ObserveMetadata { .. }
+        | SessionCommand::ImportBookmarks { .. }
+        | SessionCommand::SaveSettings(_)
+        | SessionCommand::SiteZoom { .. }
+        | SessionCommand::ClearSiteZooms { .. }
+        | SessionCommand::EditDestinations { .. }
+        | SessionCommand::Query { .. }
+        | SessionCommand::ObserveNavigation { .. }
+        | SessionCommand::ObserveHistory { .. }
+        | SessionCommand::StartHistoryJump { .. }
+        | SessionCommand::HistoryRows { .. }
+        | SessionCommand::OpenHistory(_)
+        | SessionCommand::RecentHistory { .. }
+        | SessionCommand::ClearHistory { .. }
+        | SessionCommand::GrowSyntheticCatalogue { .. }
+        | SessionCommand::SnapshotBeforeUpdate
+        | SessionCommand::Usage(_)
+        | SessionCommand::UsageReport { .. }
+        | SessionCommand::StorePageText(_)
+        | SessionCommand::SavePageTextSetting(_)
+        | SessionCommand::Shutdown => false,
+    }
+}
+
+/// What the stored page-text setting no longer allows, erased at start-up: everything when
+/// capture is off, or text of an excluded site an earlier erase left behind (#54).
+fn erase_what_the_setting_forbids(
+    page_text: &mut page_text::PageText,
+    restored: &page_text_setting::RestoredSetting,
+    now: i64,
+) {
+    if restored.leaves_text_to_erase() {
+        page_text.erase(now);
+        return;
+    }
+    if restored.setting.on {
+        page_text.erase_sites(&restored.setting.excluded, now);
+    }
+}
+
+/// What a refused page-text setting is retried as, while idle and at shutdown.
+const SAVING_PAGE_TEXT_SETTING_AGAIN: &str = "saving the page text setting again";
 
 fn apply_model(model: &mut TabModel, command: SessionCommand) -> Result<(), SessionError> {
     match command {
@@ -1646,15 +1941,12 @@ fn apply_model(model: &mut TabModel, command: SessionCommand) -> Result<(), Sess
         }
         SessionCommand::CycleActive { backwards } => cycle_active(model, backwards)?,
         SessionCommand::FocusTab(id) => model.select(id).map_err(SessionError::Model)?,
-        #[cfg(test)]
         SessionCommand::Duplicate(id) => {
             model.duplicate(id).map_err(SessionError::Model)?;
         }
-        #[cfg(test)]
         SessionCommand::CloseOthers(id) => {
             model.close_others(id).map_err(SessionError::Model)?;
         }
-        #[cfg(test)]
         SessionCommand::CloseBelow(id) => {
             model.close_below(id).map_err(SessionError::Model)?;
         }
@@ -1720,6 +2012,9 @@ fn apply_model(model: &mut TabModel, command: SessionCommand) -> Result<(), Sess
         | SessionCommand::ClearHistory { .. }
         | SessionCommand::OpenHistory(_)
         | SessionCommand::ObserveNavigation { .. }
+        | SessionCommand::ObserveHistory { .. }
+        | SessionCommand::StartHistoryJump { .. }
+        | SessionCommand::HistoryRows { .. }
         | SessionCommand::SaveSettings(_)
         | SessionCommand::SiteZoom { .. }
         | SessionCommand::ClearSiteZooms { .. }
@@ -1728,6 +2023,8 @@ fn apply_model(model: &mut TabModel, command: SessionCommand) -> Result<(), Sess
         | SessionCommand::SnapshotBeforeUpdate
         | SessionCommand::Usage(_)
         | SessionCommand::UsageReport { .. }
+        | SessionCommand::StorePageText(_)
+        | SessionCommand::SavePageTextSetting(_)
         | SessionCommand::Shutdown => {}
     }
     Ok(())
@@ -2279,6 +2576,7 @@ mod tests {
             navigate: None,
             home_entry: None,
             popup: None,
+            reopened: Vec::new(),
             previous_shutdown: ShutdownState::Clean,
         });
         assert!(!format!("{event:?}").contains(address));

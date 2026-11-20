@@ -11,6 +11,11 @@ license.workspace = true
 syrinx-core = { path = "../syrinx-core" }
 syrinx-search = { path = "../syrinx-search" }
 serde_json.workspace = true
+# The licence check reads licences.toml (#28, G4); both are already in Cargo.lock.
+serde = { version = "=1.0.229", features = ["derive"] }
+toml = { version = "=1.1.8", default-features = false, features = ["std", "parse", "serde"] }
+# The gate parses the plugin contract with the parser wasmtime 48 already locks (#28).
+wit-parser = { version = "=0.254.2", default-features = false, features = ["std"] }
 
 [lints]
 workspace = true

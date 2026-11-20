@@ -65,6 +65,22 @@ To release outside the schedule, run the workflow from the Actions tab
 ("Run workflow"). Tick **force** to release even when `main` has not
 changed.
 
+## The Linux package
+
+Since 2026-10-31 Syrinx is one app for Windows and Linux, and `cargo xtask
+package` run on Linux writes the Linux artifact:
+`target/package/Syrinx-<version>-<commit>-linux-x64.tar.gz`, a portable
+folder with the `syrinx` binary, its desktop entry and icon, `INSTALL.txt`,
+the licence, a `SHA256SUMS` list and per-user `install.sh` and `uninstall.sh`
+scripts (`docs/installing.md`, "Linux"). The weekly workflow's `linux` job
+builds it on `ubuntu-24.04` from the tag the Windows job pushed, so the
+tarball names the same release commit, then attaches it to the release and
+adds its line to `SHA256SUMS.txt` (`.github/scripts/package-linux-release.sh`).
+The `site` job passes its address, checksum and size to the website's
+`publish-release.mjs`, which shows the Linux download. If the Linux job fails,
+the site still publishes the Windows release and hides the Linux download for
+that week rather than pointing at last week's tarball.
+
 ## Signed updates
 
 **Why.** An installed Syrinx installs an update only if it is signed by a
@@ -120,9 +136,17 @@ is skipped with a notice instead of failing on tools the tag lacks.
 **Where the files go.** The `update-site` artifact holds exactly what
 belongs under `https://syrinxapp.dev/updates/v1/`. It is public, signed
 data, not a secret: anyone may read it, and its safety rests on the
-signatures, which only the release key can make. Like the website step,
-copying it to the host waits until the repository is public; until then
-the owner decides where, if anywhere, the files are published (issue #55).
+signatures, which only the release key can make. Nothing copies it to the
+host yet: the repository is now public, but where the files are published
+is still the owner's decision (issue #55).
+
+**What the signature does not cover.** The signed statement and manifest
+describe the Windows program folder only, which is all an installed Syrinx
+updates itself from. The Linux tarball and the release's `SHA256SUMS.txt`
+are outside them: the `linux` job holds no key, names no environment and is
+unchanged by signing, and Linux packages stay unsigned as
+`docs/installing.md`, "Linux", says. Whether and how the same release key
+should also sign them is the owner's open question, tracked in issue #238.
 
 ## Keeping main releasable
 
@@ -152,9 +176,11 @@ debugger stack run only when a test process actually crashed (a Windows
 ## One-time setup by the owner
 
 These steps need the owner's GitHub account, so no agent does them. All
-four are done: the repository is public, and the website step, which needs
-the `SITE_REPO_TOKEN` secret, has published releases since 2026-10-14. What
-remains is renewing that token before it expires (step 2).
+but step 4 are done: the repository is public, and the website step, which
+needs the `SITE_REPO_TOKEN` secret, has published releases since 2026-10-14.
+What remains is renewing that token before it expires (step 2), and step 4,
+the release keys, which the owner put on hold on 2026-10-24
+(`docs/decisions.md`).
 
 1. **Review the pre-publication checklist below**, then make this repository
    public: Settings → General → Danger zone → Change visibility.

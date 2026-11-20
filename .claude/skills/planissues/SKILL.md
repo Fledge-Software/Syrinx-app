@@ -1,8 +1,8 @@
 ---
 name: planissues
-description: Turn a braindump into researched, iterated plans and then into GitHub issues in the Fledge format — discuss the idea and how realistic it is, research it, organise it (splitting it into several plans when it holds several), write the plan into the knowledge base, iterate on it with the user as many rounds as it takes, then slice the approved plan into an epic, milestone and issues. Use when the user runs /planissues. The argument is the braindump, a plan to resume, or "issues <plan>" to go straight to writing issues.
+description: Turn a braindump into researched, iterated plans and then into GitHub issues in a standard, educational format — discuss the idea and how realistic it is, research it, organise it (splitting it into several plans when it holds several), write the plan into the knowledge base, iterate on it with the user as many rounds as it takes, then slice the approved plan into an epic, milestone and issues. Use when the user runs /planissues. The argument is the braindump, a plan to resume, or "issues <plan>" to go straight to writing issues.
 argument-hint: "[braindump | <path to a plan .md> | issues <path to a plan .md>]"
-user-invocable: true
+disable-model-invocation: true
 ---
 
 # /planissues — braindump to plan to issues
@@ -40,20 +40,20 @@ Input from the user: `$ARGUMENTS`
    Default branch: `git symbolic-ref refs/remotes/origin/HEAD` (fall back to
    `main`, then `master`).
 2. Read `CLAUDE.md` / `AGENTS.md` / `CONTRIBUTING.md` and follow them; they
-   override this skill on conventions. In the Fledge repositories that means:
-   - **Plans live in `Fledge-Software/Fledge-Dev-Docs`**, in
-     `Fledge Knowledge Base/<product>/`. A new product with no folder yet goes
-     in `Planned New Apps/`; an idea that is not yet a product goes in
-     `Ideation/`. If this session is in a code repository, attach the docs
-     repository with `add_repo` (`access: "push"`, since you will commit to
-     it) and write the plan there.
-   - **Issues live in the code repository** the plan is about (for example
-     `Fledge-Software/Fledge-Workspace`), never in the docs repository.
+   override this skill on conventions. Where the project keeps a separate docs
+   or knowledge-base repository, that usually means:
+   - **Plans live in the docs repository**, in a folder per product. A new
+     product with no folder yet goes in a "planned" folder; an idea that is not
+     yet a product goes in an "ideation" one. If this session is in a code
+     repository, attach the docs repository with `add_repo` (`access: "push"`,
+     since you will commit to it) and write the plan there.
+   - **Issues live in the code repository** the plan is about, never in the
+     docs repository.
    - **`status: active` is the source of truth.** Read the active documents
      for the subject before proposing anything, and grep them rather than
      reading them whole. Archived and superseded documents are history: read
      them for reasoning, never for current fact.
-   - Outside Fledge, with no knowledge base: plans go in `docs/plans/`.
+   - With no knowledge base: plans go in `docs/plans/`.
 3. GitHub access: `gh` if it is available and authenticated, otherwise the
    GitHub MCP tools (`mcp__github__*`, load them with ToolSearch). Attach any
    repository you need to read with `add_repo`.
@@ -81,7 +81,7 @@ This skill spreads its work across subagents, and each subagent invokes the stac
 skills relevant to its job through the Skill tool. The rules and budget in this
 file always win over a stacked skill's own process.
 
-### How subagents are used (same rules in all the Fledge skills)
+### How subagents are used (same rules in all the Zan skills)
 
 - **You, the main session, are the coordinator.** You own:
   - orientation;
@@ -111,7 +111,7 @@ file always win over a stacked skill's own process.
   conversation, so each brief includes:
   - the repositories, the branch and the goal;
   - the relevant stacked skills, to invoke through the Skill tool (they may
-    be namespaced, e.g. `fledge-skills:<name>`);
+    be namespaced, e.g. `zans-skills:<name>`);
   - the run-discipline rules;
   - the **rules of engagement, verbatim**;
   - "never create issues, never push to the default branch, never ask the
@@ -163,7 +163,7 @@ NEW QUESTIONS: <any, one line each>
   plan as it goes, not at the end.
 - `research` saves its notes next to the plan, in `research/`, and the plan
   links them from its Provenance section.
-- `to-tickets` says to leave file paths out of tickets. **Fledge issues name
+- `to-tickets` says to leave file paths out of tickets. **Issues here name
   the files**, because AGENTS.md asks for that, so use `to-tickets` for its
   slicing rules, blocking edges and quiz, and `issue-format.md` for the issue
   itself. It also applies a `ready-for-agent` label: use the repository's own
@@ -230,7 +230,7 @@ question with your recommended answer.
 - **The first round always covers realism.** For each: what it would take,
   what could kill it, and your honest recommendation, even when that is "don't
   build this".
-  - Is it feasible with the stack Fledge has, and what would have to be built?
+  - Is it feasible with the stack the project has, and what would have to be built?
   - What does it cost to build, and to run each month?
   - Does it contradict an active plan, a recorded decision or a standing
     rule?
@@ -252,9 +252,9 @@ the specific questions the discussion left open, not "research this idea".
 - **Primary sources only**: the code, the active documents, the issue tracker,
   official vendor documentation and pricing pages. A blog post about an API is
   a lead, not a source.
-- **Check what already exists.** In Fledge's record, a surprising amount was
-  built once and dropped, or decided and reversed. The Databases plan's
-  "Fledge built this once, and dropped it" is the model: find it before
+- **Check what already exists.** In a project's record, a surprising amount is
+  built once and dropped, or decided and reversed. "We built this once, and
+  dropped it" is the model finding: look for it before
   designing it again.
 - **Feasibility spikes**, when a question can only be answered by trying it:
   ask the user first, run it in a worktree on a throwaway branch, record the
@@ -294,8 +294,8 @@ numbers, and the second links to them.
 
 Fill in the rest of the plan file created in step 1 (from `plan-template.md`),
 and split it into sibling files if step 4 decided to. It follows the
-shape of Fledge's existing plans, such as the Databases & Notion Import plan
-and the Workspace implementation plan. The essentials:
+shape of a good implementation plan: reconciliation of known
+contradictions, decisions with rejected alternatives, phases. The essentials:
 
 - **Frontmatter `status: draft`.** A draft is not a source of truth, and never
   outranks an active document.
@@ -426,8 +426,8 @@ This skill is one bounded run. A goal turns it into a sequence of runs
 aimed at an outcome, for example:
 
 ```
-/goal every item in the Databases plan's Issue map has an issue number, or stop after 4 turns
-/planissues issues "Fledge Knowledge Base/Fledge Workspace/Databases & Notion Import — Plan.md"
+/goal every item in the plan's Issue map has an issue number, or stop after 4 turns
+/planissues issues "docs/plans/Example — Plan.md"
 ```
 
 **When a goal is active:**

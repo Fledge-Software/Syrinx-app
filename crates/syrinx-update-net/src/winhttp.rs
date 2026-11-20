@@ -28,22 +28,10 @@ use windows::Win32::Networking::WinHttp::{
 use windows::core::{HSTRING, PCWSTR};
 
 use crate::endpoint::{Endpoint, Timeouts};
+pub(crate) use crate::transport::{Body, Transport};
 
 /// The only agent string Syrinx sends (the proposal's "What the host learns").
 pub(crate) const USER_AGENT: &str = "Syrinx-Update";
-
-/// Fetches one file at a path under the endpoint's prefix.
-pub(crate) trait Transport: Send + Sync {
-    fn get(&self, path: &str) -> Result<Box<dyn Body + '_>, TransferProblem>;
-}
-
-/// A response body with status 200.
-pub(crate) trait Body {
-    /// The declared `Content-Length`, when the host sent one.
-    fn length(&self) -> Option<u64>;
-    /// Read the next bytes; 0 means the body has ended.
-    fn read(&mut self, buffer: &mut [u8]) -> Result<usize, TransferProblem>;
-}
 
 /// A WinHTTP handle, closed when dropped.
 struct Handle(*mut c_void);

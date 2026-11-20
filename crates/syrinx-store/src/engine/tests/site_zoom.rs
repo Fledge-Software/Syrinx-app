@@ -33,10 +33,10 @@ fn object_exists(connection: &Connection, name: &str) -> bool {
 }
 
 /// The real scripts for versions 1 to 6, so a test can stop before version 7.
-struct VersionSixScripts([String; 6]);
+pub(super) struct VersionSixScripts([String; 6]);
 
 impl VersionSixScripts {
-    fn new() -> Self {
+    pub(super) fn new() -> Self {
         Self([
             schema::initial_schema(),
             schema::folders_migration(),
@@ -47,7 +47,7 @@ impl VersionSixScripts {
         ])
     }
 
-    fn migrations(&self) -> Vec<M<'_>> {
+    pub(super) fn migrations(&self) -> Vec<M<'_>> {
         let [
             initial,
             folders,
@@ -68,7 +68,7 @@ impl VersionSixScripts {
 }
 
 /// Builds the version 6 (permissions) schema with the fixture session and one remembered choice.
-fn permissions_database(directory: &TestDirectory) -> Connection {
+pub(super) fn permissions_database(directory: &TestDirectory) -> Connection {
     let mut connection = directory.connection();
     schema::configure_connection(&connection).expect("configure synthetic connection");
     let scripts = VersionSixScripts::new();
@@ -117,7 +117,7 @@ fn version_6_upgrades_to_7_keeping_session_and_permissions_with_no_zoom() {
 
     let connection = directory.connection();
     assert_eq!(user_version(&connection), schema::SCHEMA_VERSION);
-    assert_eq!(schema::SCHEMA_VERSION, 7);
+    assert_eq!(schema::SCHEMA_VERSION, 8);
     assert!(object_exists(&connection, "site_zoom"));
     close(connection);
     directory.cleanup();

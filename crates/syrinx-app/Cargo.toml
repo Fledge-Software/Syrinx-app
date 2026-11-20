@@ -22,6 +22,8 @@ path = "src/bin/syrinx-setup.rs"
 [dependencies]
 syrinx-core = { path = "../syrinx-core" }
 syrinx-platform = { path = "../syrinx-platform" }
+# The session owns the plugin runtime and its grant store (#136).
+syrinx-plugin-host = { path = "../syrinx-plugin-host", features = ["store"] }
 syrinx-search = { path = "../syrinx-search" }
 syrinx-store = { path = "../syrinx-store" }
 syrinx-ui = { path = "../syrinx-ui" }
@@ -36,9 +38,15 @@ futures.workspace = true
 raw-window-handle.workspace = true
 url.workspace = true
 
+# GPUI draws through X11 on Linux, since wry can embed its child web views only there.
+[target.'cfg(target_os = "linux")'.dependencies]
+gpui_platform = { workspace = true, features = ["x11"] }
+
 # #9's survival tests hold SQLite's write lock from a second connection.
 [dev-dependencies]
 rusqlite.workspace = true
+# The plugin package tests sign a fixture with a fresh test key (#134).
+syrinx-update = { path = "../syrinx-update", features = ["test-keys"] }
 
 [features]
 # Set only by `cargo xtask package`, so the installed app keeps its data apart from preview runs.

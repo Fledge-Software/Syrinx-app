@@ -2,6 +2,9 @@
 
 use std::fs::{self, File, OpenOptions};
 use std::io;
+#[cfg(unix)]
+use std::os::unix::fs::OpenOptionsExt;
+#[cfg(windows)]
 use std::os::windows::fs::{MetadataExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
 
@@ -10,11 +13,15 @@ use crate::path::PackagePath;
 use crate::payload::{Payload, read_error};
 
 /// Share only reading, so no other handle can write, rename or delete while one is held.
+#[cfg(windows)]
 const FILE_SHARE_READ: u32 = 0x0000_0001;
 /// Required to open a directory handle.
+#[cfg(windows)]
 const FILE_FLAG_BACKUP_SEMANTICS: u32 = 0x0200_0000;
 /// Open a link itself rather than its target, so the attribute check below sees it.
+#[cfg(windows)]
 const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+#[cfg(windows)]
 const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0000_0400;
 /// Most entries a staging directory may hold before listing stops.
 const MAX_ENTRIES: usize = 65_536;
@@ -125,6 +132,7 @@ fn entry_name(relative: &str, entry: &fs::DirEntry) -> Result<String, UpdateErro
 }
 
 /// Open read-only with deny-write sharing, then refuse links and the wrong kind of entry.
+#[cfg(windows)]
 fn open_plain(path: &Path, name: &str, directory: bool) -> Result<File, UpdateError> {
     let mut flags = FILE_FLAG_OPEN_REPARSE_POINT;
     if directory {
@@ -147,6 +155,44 @@ fn open_plain(path: &Path, name: &str, directory: bool) -> Result<File, UpdateEr
     Ok(handle)
 }
 
+#[cfg(windows)]
 fn is_reparse_point(metadata: &fs::Metadata) -> bool {
     metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
+}
+
+/// A link is the one entry Unix uses where Windows has a reparse point.
+#[cfg(unix)]
+fn is_reparse_point(metadata: &fs::Metadata) -> bool {
+    metadata.file_type().is_symlink()
+}
+
+/// Open read-only without following a final link, then refuse the wrong kind of entry.
+///
+/// Unix has no deny-write sharing, so unlike Windows the opened entry can still be changed by
+/// another process; a staging root inside a folder only Syrinx can write keeps that out.
+#[cfg(unix)]
+fn open_plain(path: &Path, name: &str, directory: bool) -> Result<File, UpdateError> {
+    let opened = OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW)
+        .open(path);
+    let handle = match opened {
+        Ok(handle) => handle,
+        // `O_NOFOLLOW` refuses a link with `ELOOP`; report it as the unsafe entry it is.
+        Err(error) if error.raw_os_error() == Some(libc::ELOOP) => {
+            return Err(UpdateError::UnsafeEntry {
+                name: name.to_owned(),
+            });
+        }
+        Err(error) => return Err(read_error(name, &error)),
+    };
+    let metadata = handle
+        .metadata()
+        .map_err(|error| read_error(name, &error))?;
+    if metadata.is_dir() != directory {
+        return Err(UpdateError::UnsafeEntry {
+            name: name.to_owned(),
+        });
+    }
+    Ok(handle)
 }

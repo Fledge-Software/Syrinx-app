@@ -1,0 +1,6 @@
+# One exact toolchain with the plugin target, so the host's test plugins build everywhere (G7, 2026-10-26).
+[toolchain]
+channel = "1.97.1"
+targets = ["wasm32-wasip2"]
+components = ["rustfmt", "clippy"]
+profile = "minimal"

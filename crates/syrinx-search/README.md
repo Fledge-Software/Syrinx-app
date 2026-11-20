@@ -68,3 +68,73 @@ The workspace benchmark measures the complete synthetic 100,000-entry query
 path, including counts, boosts, finalist highlights and owned result strings.
 The owner-approved gate is p95 below 5 ms with the maximum reported as well;
 the measured result belongs in the benchmark report, not a library claim.
+
+# Full-text index (tier 2)
+
+`fulltext::FullText` is the durable word index (P1-24, #53) on Tantivy 0.27.0,
+which the owner chose over SQLite's FTS5 on 2026-10-24 (#52). It lives in a
+folder the caller opens and owns exclusively. That folder is a cache: it must be
+local, outside D13's backups and outside any synced folder, and it can always
+be rebuilt from its sources. Syrinx's session worker opens it as `fulltext`
+beside `syrinx.db`, through the storage guard's `cache_folder`
+(`crates/syrinx-app/src/session/page_text.rs`).
+
+Every document belongs to one namespace. `Namespace::page()` holds captured page
+text, which expires seven days after capture (D40) and follows D47's history
+clears. `Namespace::feed(name)` holds a plugin's search feed, such as Notes';
+it never expires and is cleared only by deleting its documents or by `reset`.
+Expiry, clears and resets never touch another namespace, and the same id in two
+namespaces names two documents.
+
+Writes are staged and then committed. `stage` decides each change against what
+the index already holds: a newer revision replaces, the same revision is a
+no-op, and an older revision, or one at or below a deletion's tombstone, is
+refused. Page text already older than seven days is refused too. Nothing staged
+is visible or durable until `commit` returns; a crash or `discard` before then
+loses all of it. `expire`, `reset` and `apply_clears` refuse to run while
+changes are staged, and commit on their own.
+
+Every commit rewrites the segments that hold deleted rows and deletes the
+files no commit uses, because Tantivy otherwise keeps a deleted document's
+stored text on disk until a merge. A replacement can rewrite a large segment,
+so callers commit in batches rather than per page. If a file cannot be deleted
+yet (on Windows, another program may hold it open), the commit still stands,
+`commit` returns `CleanupPending`, `cleanup_pending()` stays true, and the next
+commit or `retry_cleanup` tries again. Opening the index finishes a cleanup a
+crash interrupted. A failed `discard` leaves the handle refusing all work
+(`NeedsReopen`), because Tantivy has already released the folder's lock. `apply_clears` stores the last applied journal
+generation in the same commit as its deletions, so replaying the journal after
+a crash or a backup restore applies each clear exactly once. The journal numbers
+every clear, so a clear of something the index does not hold, such as site zoom
+levels, arrives as `ClearScope::Elsewhere` and only advances the generation. An
+index ahead of its journal (the journal was lost and recreated) cannot know
+what the new journal cleared: its owner calls `restart_clears`, which removes
+all page text and counts from generation 0 again, and then applies the journal.
+An owner-confirmed journal repair restarts generations at the database's, so
+Syrinx calls `restart_clears` before rebuilding the journal; if the index cannot
+open or restart, it empties the index's folder instead. If the folder cannot be
+emptied (another program holds a file open, say), the repair is refused and
+that start fails, telling the owner to free or clear the `fulltext` folder; the
+next start offers the repair again. A file or link where the folder belongs is
+only reported, since no index is ever opened through it.
+
+Emptying the folder removes every namespace, plugin feeds included, not only
+page text. That is unavoidable: an index that will not open, or will not
+commit, cannot be read to remove page text alone, and leaving its files would
+strand that page text past D40. It is also what already happens to a damaged
+index. A feed's text is a cache of what the plugin keeps, so it is rebuilt by
+feeding it again: plugin feeds (#141) must notice an emptied index, which no
+longer holds their documents, and re-feed from their source. The restart
+itself, the usual path, leaves feeds untouched.
+
+Search does not filter by age, so whoever owns the index calls `expire` at
+start-up and at least daily. A feed's tombstones never expire; `reset` is how
+a feed starts afresh.
+
+Queries match every word in the title or the body, after folding case and
+accents; `prefix_last` matches the last word as a prefix. A query returns at
+most 1,000 hits. Each hit carries a snippet of at most 160 bytes, cut at a
+character boundary, with highlighted byte ranges. Snippet terms
+for a prefix are expanded by hand, since Tantivy's own prefix query leaves them
+out (see `docs/dev/trapstoknow.md`). Documents, hits, requests and errors
+never print ids, titles or text.

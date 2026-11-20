@@ -12,29 +12,9 @@ use windows::{
 };
 use wry::{WebView, WebViewExtWindows};
 
-use super::{BrowserError, BrowserEvent, EventSink};
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum ConnectionScheme {
-    Http,
-    Https,
-    Other,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum ConnectionStatus {
-    Loading,
-    Loaded,
-    Failed,
-    CertificateRejected,
-    Unavailable,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct ConnectionState {
-    pub scheme: ConnectionScheme,
-    pub status: ConnectionStatus,
-}
+use super::{
+    BrowserError, BrowserEvent, ConnectionScheme, ConnectionState, ConnectionStatus, EventSink,
+};
 
 struct Security {
     navigation: Option<u64>,

@@ -12,3 +12,9 @@ __pycache__/
 
 # JetBrains IDE settings are per machine.
 /.idea/
+
+# The plugin host's test plugins build into the test target folder; a manual build lands here.
+/crates/syrinx-plugin-host/tests/fixtures/plugins/target/
+
+# The editor bundle's npm packages install here when #37 builds it; only the lockfile is committed.
+/editor/node_modules/

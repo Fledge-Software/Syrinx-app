@@ -3,8 +3,7 @@
 Copy everything below the line into the new plan file, named
 `<Subject> — Plan.md`. Delete a section only when it truly has nothing in
 it, and say so in one line rather than leaving it empty. The shape follows
-Fledge's existing plans (the Databases & Notion Import plan and the
-Workspace implementation plan), so a reader who knows one knows them all.
+a well-run implementation plan, so a reader who knows one knows them all.
 
 Writing rules, from AGENTS.md: say **why before what**; define terms on first
 use; name real files and documents; record every decision **with the

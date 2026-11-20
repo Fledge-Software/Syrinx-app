@@ -13,7 +13,7 @@ use syrinx_core::{
 use syrinx_platform::file_dialog::choose_file;
 use syrinx_ui::metrics::{radius, space, text};
 
-use super::*;
+use super::{owned_popup::main_window_bounds, *};
 
 /// Skipped entries named in the preview; the rest are only counted.
 const LISTED_SKIPS: usize = 50;
@@ -149,7 +149,7 @@ impl BrowserView {
         let (events, mut receiver) = unbounded();
         let parent = self.parent_hwnd;
         let close_events = events.clone();
-        let opened = cx.open_window(preview_options(window), move |popup, cx| {
+        let opened = cx.open_window(preview_options(window, parent), move |popup, cx| {
             popup.set_window_title("Import bookmarks");
             if let Err(error) = native_handle(popup).and_then(|handle| {
                 set_overlay_owner(handle, parent)
@@ -294,8 +294,8 @@ impl BrowserView {
     }
 }
 
-fn preview_options(window: &Window) -> WindowOptions {
-    let main = window.bounds();
+fn preview_options(window: &Window, parent: isize) -> WindowOptions {
+    let main = main_window_bounds(window, parent);
     let width = f32::from(main.size.width).min(PREVIEW_WIDTH);
     let origin = point(
         main.origin.x + px((f32::from(main.size.width) - width) / 2.),

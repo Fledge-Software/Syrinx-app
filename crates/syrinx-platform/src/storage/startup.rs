@@ -20,7 +20,7 @@ pub fn prepare_startup(
     directory: &Path,
     deletions: &DeletionLog,
 ) -> Result<StartupStorage, RecoveryError> {
-    prepare_with_probe(directory, deletions, Arc::new(native::WindowsProbe))
+    prepare_with_probe(directory, deletions, Arc::new(native::NativeProbe))
 }
 
 fn prepare_with_probe(

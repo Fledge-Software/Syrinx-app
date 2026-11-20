@@ -1,9 +1,12 @@
-//! Ranks local catalogue metadata without owning tab state or performing I/O.
+//! Syrinx's local search: the in-memory catalogue (tier 1) and the full-text index (tier 2).
+//!
+//! The catalogue ranks metadata without I/O; only `fulltext` reads and writes files.
 
 mod candidate;
 mod catalogue;
 mod digit_counts;
 mod field_groups;
+pub mod fulltext;
 mod highlights;
 mod membership;
 mod score_cache;

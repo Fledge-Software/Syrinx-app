@@ -20,11 +20,13 @@ use crate::error::{
 use crate::history::{
     self, HistoryEntry, HistoryOutcome, HistoryRequest, HistoryVisit, HistoryWrite, RecordedVisit,
 };
+use crate::plugins::{PluginWrite, PluginWritten};
 use crate::preferences::{self, PreferenceWrite, StoredPreferences};
 use crate::replay::{self, AppliedDeletions};
 use crate::{BackupOutcome, DirectoryLease, ShutdownState};
 use crate::{backup, records, schema};
 
+mod plugins;
 mod session;
 
 use session::HeldSession;
@@ -467,6 +469,12 @@ enum WriterRequest {
         modified_at: i64,
         reply: mpsc::SyncSender<Result<(), StoreError>>,
     },
+    Plugin {
+        write: PluginWrite,
+        /// A plugin's own write must start and finish in time; the owner's waits as usual.
+        limit: Option<plugins::WriteLimit>,
+        reply: mpsc::SyncSender<Result<PluginWritten, StoreError>>,
+    },
     /// D47 journal requests to apply in one transaction, whatever their categories.
     Deletions {
         requests: Vec<DeletionRequest>,
@@ -599,6 +607,11 @@ fn serve_writes(
                     crate::site_zoom::write(&writer.connection, &host, factor, modified_at);
                 reply.send(result).map_err(|_| StoreError::ReplyAbandoned)?;
             }
+            WriterRequest::Plugin {
+                write,
+                limit,
+                reply,
+            } => serve_plugin_write(&writer.connection, &write, limit, &reply)?,
             WriterRequest::Deletions { requests, reply } => {
                 let result = replay::apply_live(&mut writer.connection, &requests);
                 reply.send(result).map_err(|_| StoreError::ReplyAbandoned)?;
@@ -689,6 +702,28 @@ fn serve_writes(
     }
 }
 
+/// Apply one plugin write and answer it; an error stops the writer.
+fn serve_plugin_write(
+    connection: &Connection,
+    write: &PluginWrite,
+    limit: Option<plugins::WriteLimit>,
+    reply: &mpsc::SyncSender<Result<PluginWritten, StoreError>>,
+) -> Result<(), StoreError> {
+    let result = plugins::write_within(connection, write, limit);
+    let stop = must_stop(connection);
+    // A caller that gave up on a bounded write no longer listens; nothing is lost.
+    if reply.send(result).is_err() && limit.is_none() {
+        return Err(StoreError::ReplyAbandoned);
+    }
+    stop.map_or(Ok(()), Err)
+}
+
+/// Why the writer must take no further write: its connection was left inside a
+/// transaction, as a failed commit or rollback can leave it.
+fn must_stop(connection: &Connection) -> Option<StoreError> {
+    (!connection.is_autocommit()).then_some(StoreError::TransactionLeftOpen)
+}
+
 struct LeasedConnection {
     // Declaration order keeps the lease alive through connection cleanup, including unwinding.
     connection: Connection,
@@ -713,7 +748,7 @@ impl LeasedConnection {
         let connection = Connection::open_with_flags_and_vfs(
             lease.database_path(),
             access | OpenFlags::SQLITE_OPEN_NO_MUTEX,
-            "win32-longpath",
+            crate::SQLITE_VFS,
         )
         .map_err(|error| database_error(StoreOperation::Open, error))?;
         let mut leased = Self { connection, lease };

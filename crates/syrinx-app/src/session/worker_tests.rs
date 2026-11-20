@@ -19,6 +19,7 @@ use syrinx_store::{
 
 use super::*;
 
+mod plugin_tests;
 mod survival_tests;
 mod usage_tests;
 
@@ -95,6 +96,12 @@ impl Fixture {
             remove_if_present(&self.0.join(name), false);
         }
         remove_if_present(&self.0.join("backups"), true);
+        // The index's files are Tantivy's own names, so its whole folder goes.
+        match fs::remove_dir_all(self.0.join(page_text::INDEX_FOLDER)) {
+            Ok(()) => {}
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => checked_io(Err(error)),
+        }
         checked_io(fs::remove_dir(self.0));
         checked_io(fs::remove_dir(self.1));
     }
@@ -686,7 +693,8 @@ fn worker_idle_path_publishes_the_acknowledged_snapshot_without_waiting_for_a_ti
     let archive = lease.backup_archive().expect("native backup archive");
     let journal = DeletionJournal::open(&lease).expect("open synthetic journal");
     let store = Store::open(lease.clone()).expect("open guarded synthetic store");
-    let mut worker = Worker::restore(&store, journal).expect("restore synthetic worker");
+    let mut worker = Worker::restore(&store, journal, page_text::PageText::open(&lease))
+        .expect("restore synthetic worker");
     let (sender, mut events) = unbounded();
     worker
         .handle(
@@ -845,8 +853,9 @@ fn failed_close_save_reports_fatal_failure_without_acknowledging_native_cleanup(
         WindowsDirectoryLease::prepare(&fixture.0).expect("guard synthetic failure store"),
     );
     let journal = DeletionJournal::open(&lease).expect("open synthetic journal");
+    let page_text = page_text::PageText::open(&lease);
     let store = Store::open(lease).expect("open synthetic failure store");
-    let mut worker = Worker::restore(&store, journal).expect("restore synthetic worker");
+    let mut worker = Worker::restore(&store, journal, page_text).expect("restore synthetic worker");
     let (sender, mut events) = unbounded();
     worker
         .handle(
@@ -895,8 +904,9 @@ fn a_command_that_stops_the_worker_loop_names_its_reason_and_operation() {
     let lease =
         Arc::new(WindowsDirectoryLease::prepare(&fixture.0).expect("guard synthetic stop store"));
     let journal = DeletionJournal::open(&lease).expect("open synthetic journal");
+    let page_text = page_text::PageText::open(&lease);
     let store = Store::open(lease).expect("open synthetic stop store");
-    let mut worker = Worker::restore(&store, journal).expect("restore synthetic worker");
+    let mut worker = Worker::restore(&store, journal, page_text).expect("restore synthetic worker");
     let (sender, mut events) = unbounded();
     worker
         .handle(
@@ -954,8 +964,9 @@ fn a_failure_saving_settled_titles_names_that_operation_not_the_running_command(
     let lease =
         Arc::new(WindowsDirectoryLease::prepare(&fixture.0).expect("guard synthetic title store"));
     let journal = DeletionJournal::open(&lease).expect("open synthetic journal");
+    let page_text = page_text::PageText::open(&lease);
     let store = Store::open(lease).expect("open synthetic title store");
-    let mut worker = Worker::restore(&store, journal).expect("restore synthetic worker");
+    let mut worker = Worker::restore(&store, journal, page_text).expect("restore synthetic worker");
     let (sender, mut events) = unbounded();
     worker
         .handle(
@@ -1404,9 +1415,20 @@ fn assert_unreplaced_primary(fixture: &Fixture) {
     assert!(!fixture.0.join("syrinx.recovery-intent").exists());
 }
 
-fn remove_preserved_recovery_bundle(fixture: &Fixture, expected_primary: Option<&[u8]>) {
+/// Whether an entry is a link or other reparse point, which cleanup must never follow.
+#[cfg(windows)]
+fn is_reparse_point(metadata: &fs::Metadata) -> bool {
     use std::os::windows::fs::MetadataExt;
+    metadata.file_attributes() & 0x400 != 0
+}
 
+/// Whether an entry is a link, which cleanup must never follow.
+#[cfg(unix)]
+fn is_reparse_point(metadata: &fs::Metadata) -> bool {
+    metadata.file_type().is_symlink()
+}
+
+fn remove_preserved_recovery_bundle(fixture: &Fixture, expected_primary: Option<&[u8]>) {
     // Only a successful recovery in this exclusively created fixture owns these originals.
     let mut bundles = Vec::new();
     for entry in checked_io(fs::read_dir(&fixture.0)) {
@@ -1433,11 +1455,7 @@ fn remove_preserved_recovery_bundle(fixture: &Fixture, expected_primary: Option<
         assert_eq!(path.parent(), Some(fixture.0.as_path()));
         let metadata = checked_io(fs::symlink_metadata(&path));
         assert!(metadata.is_dir());
-        assert_eq!(
-            metadata.file_attributes() & 0x400,
-            0,
-            "refuse reparse points"
-        );
+        assert!(!is_reparse_point(&metadata), "refuse reparse points");
         bundles.push(path);
     }
     assert_eq!(
@@ -1461,11 +1479,7 @@ fn remove_preserved_recovery_bundle(fixture: &Fixture, expected_primary: Option<
         assert_eq!(path.parent(), Some(bundle.as_path()));
         let metadata = checked_io(fs::symlink_metadata(&path));
         assert!(metadata.is_file());
-        assert_eq!(
-            metadata.file_attributes() & 0x400,
-            0,
-            "refuse reparse points"
-        );
+        assert!(!is_reparse_point(&metadata), "refuse reparse points");
         checked_io(fs::remove_file(path));
     }
     checked_io(fs::remove_dir(bundle));
@@ -2064,3 +2078,9 @@ mod permission_tests;
 
 #[path = "tab_action_tests.rs"]
 mod tab_action_tests;
+
+#[path = "page_text_tests.rs"]
+mod page_text_tests;
+
+#[path = "back_forward_tests.rs"]
+mod back_forward_tests;

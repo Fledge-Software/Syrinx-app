@@ -1,0 +1,26 @@
+pkgbase = syrinx-bin
+	pkgdesc = Browser-first workspace: a web browser with a vertical-tab sidebar and a command palette
+	pkgver = 0.9.0
+	pkgrel = 1
+	url = https://syrinxapp.dev
+	arch = x86_64
+	license = MPL-2.0
+	depends = webkit2gtk-4.1
+	depends = gtk3
+	depends = libsoup3
+	depends = bubblewrap
+	depends = libxkbcommon-x11
+	depends = fontconfig
+	depends = gstreamer
+	depends = gst-plugins-base
+	depends = gst-plugins-good
+	optdepends = gst-plugins-bad: more audio and video formats
+	optdepends = gst-libav: more audio and video codecs
+	provides = syrinx
+	conflicts = syrinx
+	options = !strip
+	options = !debug
+	source = https://github.com/Fledge-Software/Syrinx-app/releases/download/v0.9.0/Syrinx-0.9.0-000000000000-linux-x64.tar.gz
+	sha256sums = SKIP
+
+pkgname = syrinx-bin

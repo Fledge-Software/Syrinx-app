@@ -2,13 +2,12 @@
 
 use std::time::{Duration, Instant};
 
+use super::AUDIO_GRACE;
+
 /// How long a hidden page stays awake after its navigation finishes or it is hidden idle.
 pub(super) const GRACE: Duration = Duration::from_secs(5);
 /// A load that never finishes must not keep a hidden page awake forever.
 pub(super) const LOADING_LIMIT: Duration = Duration::from_secs(60);
-/// How long a hidden page stays awake after its sound stops, so a pause between tracks or a
-/// short buffer never puts a listening tab to sleep (#130).
-pub const AUDIO_GRACE: Duration = Duration::from_secs(60);
 /// The longest wait between two suspension attempts that WebView2 keeps refusing.
 pub(super) const REFUSAL_CAP: Duration = Duration::from_secs(240);
 
@@ -511,18 +510,6 @@ mod tests {
         let stopped = limit + Duration::from_secs(5);
         timer.playback_changed(false, stopped);
         assert_eq!(timer.due(), Some(stopped + AUDIO_GRACE));
-    }
-
-    /// The timer has no mute input, so this only restates that the one playback flag decides:
-    /// WebView2 documents `IsDocumentPlayingAudio` as true while `IsMuted` is true. The real
-    /// proof, a muted tone page staying awake on this runtime, waits for #157, which needs
-    /// #117's `SetMuted`.
-    #[test]
-    fn a_muted_page_that_plays_counts_as_playing() {
-        let start = Instant::now();
-        let timer = hidden_playing(start);
-        assert_eq!(timer.due(), None);
-        assert!(!timer.suspension_due(start + LOADING_LIMIT * 2));
     }
 
     #[test]

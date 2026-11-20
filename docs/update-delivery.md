@@ -441,9 +441,10 @@ secrets, as the workflow artifact `update-site`:
 `updates/v1/latest`, `latest.sig`, `<version>/manifest`, `manifest.sig` and
 `<version>/files/…`, one file per manifest entry. A re-sign's artifact holds
 only `latest` and `latest.sig`, since nothing else changes. Copying them to
-`https://syrinxapp.dev/updates/v1/` is not wired yet: the site push is
-skipped while the repository is private, and where the files go until then
-is the owner's call (issue #55, "Watch").
+`https://syrinxapp.dev/updates/v1/` is not wired yet: where the files go
+is the owner's call (issue #55, "Watch"). They cover the Windows program
+folder only; the Linux tarball, which has no in-app update, stays unsigned
+(`docs/installing.md`, "Linux", and issue #238).
 
 **What remains the owner's.** Approving this workflow change, creating the
 two keys and the secret, handing an agent the two public points to pin,

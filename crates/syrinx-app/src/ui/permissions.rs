@@ -137,7 +137,7 @@ impl BrowserView {
         let index = self.active_permission()?;
         let prompt = &self.permissions[index];
         let (id, request) = (prompt.id, prompt.request);
-        let question = format!("{} wants to {}", prompt.origin, prompt.kind.label());
+        let question = syrinx_platform::browser::permission_question(&prompt.origin, prompt.kind);
         let bar = div()
             .h(px(HEIGHT))
             .flex_shrink_0()

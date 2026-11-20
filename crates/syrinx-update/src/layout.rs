@@ -117,13 +117,13 @@ fn fresh_root(output: &Path) -> Result<PathBuf, String> {
 fn copy_payload(package: &Path, files: &Path, manifest: &Manifest) -> Result<(), String> {
     create_folder(files)?;
     for entry in manifest.files() {
-        let relative = entry.path().as_str().replace('/', "\\");
-        let target = files.join(&relative);
+        let relative = entry.path().as_str();
+        let target = under(files, relative);
         if let Some(parent) = target.parent() {
             fs::create_dir_all(parent)
                 .map_err(|error| format!("Could not create {}: {error}", parent.display()))?;
         }
-        fs::copy(package.join(&relative), &target)
+        fs::copy(under(package, relative), &target)
             .map_err(|error| format!("Could not copy {relative}: {error}"))?;
     }
     let payload = DirectoryPayload::open(files)
@@ -131,6 +131,13 @@ fn copy_payload(package: &Path, files: &Path, manifest: &Manifest) -> Result<(),
     crate::payload::verify(manifest.files(), payload)
         .map(drop)
         .map_err(|error| format!("The copied files do not match the manifest: {error}."))
+}
+
+/// A manifest's `/`-separated path joined under `root` one component at a time, on any platform.
+fn under(root: &Path, relative: &str) -> PathBuf {
+    relative
+        .split('/')
+        .fold(root.to_path_buf(), |path, part| path.join(part))
 }
 
 fn read_file(package: &Path, name: &str, limit: usize) -> Result<Vec<u8>, String> {
@@ -186,7 +193,7 @@ mod tests {
         let package = scratch.root.join("package");
         let mut entries = Vec::new();
         for (name, bytes) in synthetic_files() {
-            let path = package.join(name.replace('/', "\\"));
+            let path = under(&package, name);
             fs::create_dir_all(path.parent().expect("a parent")).expect("a synthetic folder");
             fs::write(&path, bytes).expect("a synthetic file");
             let checked = PackagePath::parse(name).expect("a safe path");

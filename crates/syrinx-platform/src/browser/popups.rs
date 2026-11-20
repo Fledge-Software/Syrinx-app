@@ -1,6 +1,6 @@
 //! Retains native popup deferrals on their owning thread until the logical tab is committed.
 
-use super::{BrowserError, BrowserEvent, EventSink, page::validate_url};
+use super::{BrowserError, BrowserEvent, EventSink, validate_url};
 use std::{cell::RefCell, collections::HashMap, rc::Rc};
 use webview2_com::{
     CoTaskMemPWSTR,

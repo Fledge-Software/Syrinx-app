@@ -1,8 +1,10 @@
 //! Keeps one running Syrinx per profile and forwards later launches' links to it (P1-34).
 
 mod names;
+#[cfg_attr(unix, path = "instance/pipe_unix.rs")]
 mod pipe;
 mod protocol;
+#[cfg_attr(unix, path = "instance/security_unix.rs")]
 mod security;
 #[cfg(test)]
 mod tests;
@@ -72,30 +74,50 @@ pub enum InstanceError {
     ThreadStart,
     /// The link queue was already handed out or has closed.
     Queue,
+    /// Unix only: the private folder for the lock and socket could not be created.
+    RuntimeFolder(std::io::ErrorKind),
+    /// Unix only: the socket's full path is longer than `sockaddr_un.sun_path` can hold.
+    SocketPathTooLong { length: usize, limit: usize },
 }
 
 impl fmt::Display for InstanceError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(match self {
-            Self::Directory => "Syrinx cannot resolve its profile directory.",
-            Self::Identity => "Syrinx cannot identify the signed-in Windows user.",
-            Self::Security => "Syrinx cannot restrict its link channel to this user.",
-            Self::Mutex => "Syrinx cannot check whether it is already running.",
-            Self::PipeTaken => {
+        match self {
+            Self::Directory => formatter.write_str("Syrinx cannot resolve its profile directory."),
+            Self::Identity => {
+                formatter.write_str("Syrinx cannot identify the signed-in Windows user.")
+            }
+            Self::Security => {
+                formatter.write_str("Syrinx cannot restrict its link channel to this user.")
+            }
+            Self::Mutex => {
+                formatter.write_str("Syrinx cannot check whether it is already running.")
+            }
+            Self::PipeTaken => formatter.write_str(
                 "Another program holds Syrinx's link channel, so Syrinx cannot start. \
-                 Sign out of Windows and back in, then try again."
-            }
-            Self::ForeignListener => {
-                "Syrinx's link channel belongs to another Windows user, so the link was not sent."
-            }
-            Self::Pipe => "Syrinx's link channel failed.",
-            Self::Refused => "The running Syrinx refused the link.",
-            Self::NoResponse => {
-                "Syrinx is running but did not answer in time, so the link was not opened."
-            }
-            Self::ThreadStart => "Syrinx cannot start its link listener.",
-            Self::Queue => "Syrinx's link queue is unavailable.",
-        })
+                 Sign out of Windows and back in, then try again.",
+            ),
+            Self::ForeignListener => formatter.write_str(
+                "Syrinx's link channel belongs to another Windows user, so the link was not sent.",
+            ),
+            Self::Pipe => formatter.write_str("Syrinx's link channel failed."),
+            Self::Refused => formatter.write_str("The running Syrinx refused the link."),
+            Self::NoResponse => formatter.write_str(
+                "Syrinx is running but did not answer in time, so the link was not opened.",
+            ),
+            Self::ThreadStart => formatter.write_str("Syrinx cannot start its link listener."),
+            Self::Queue => formatter.write_str("Syrinx's link queue is unavailable."),
+            Self::RuntimeFolder(kind) => write!(
+                formatter,
+                "Syrinx cannot create its private runtime folder ({kind})."
+            ),
+            Self::SocketPathTooLong { length, limit } => write!(
+                formatter,
+                "Syrinx's link socket path is {length} bytes, but this system allows at most {limit}.\
+                 Its runtime folder (XDG_RUNTIME_DIR, or the temporary folder when that is unset \
+                 or not private) is too long; point XDG_RUNTIME_DIR at a shorter private folder."
+            ),
+        }
     }
 }
 

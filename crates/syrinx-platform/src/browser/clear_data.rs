@@ -16,24 +16,9 @@ use windows::{
     core::Interface,
 };
 
-use super::BrowserError;
-
-/// The owner's choices, mapped onto WebView2's data kinds; Syrinx's own history is separate.
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub struct BrowsingDataKinds {
-    /// WebView2's own visited-page record, beside Syrinx's history database.
-    pub history: bool,
-    /// Cookies plus every kind of site storage, which signs the owner out of sites.
-    pub cookies_and_site_data: bool,
-    /// The HTTP disk cache.
-    pub cached_files: bool,
-}
+use super::{BrowserError, BrowsingDataKinds, ClearOutcome, ClearSpan};
 
 impl BrowsingDataKinds {
-    pub fn is_empty(self) -> bool {
-        !(self.history || self.cookies_and_site_data || self.cached_files)
-    }
-
     fn webview2(self) -> COREWEBVIEW2_BROWSING_DATA_KINDS {
         let mut kinds = 0;
         if self.history {
@@ -47,20 +32,6 @@ impl BrowsingDataKinds {
         }
         COREWEBVIEW2_BROWSING_DATA_KINDS(kinds)
     }
-}
-
-/// A half-open span of Unix seconds; `None` in a command means all time.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct ClearSpan {
-    pub start: i64,
-    pub end: i64,
-}
-
-/// Whether the data was cleared, and separately whether the hidden view closed afterwards.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct ClearOutcome {
-    pub cleared: Result<(), BrowserError>,
-    pub closed: Result<(), BrowserError>,
 }
 
 /// Clears the chosen kinds within `span`, or from all time.
@@ -96,7 +67,7 @@ pub(super) fn clear(
 
 /// Keeps WebView2's HRESULT so a failure can be named; it carries no page content.
 fn clear_error(error: windows::core::Error) -> BrowserError {
-    BrowserError::ClearData {
+    BrowserError::ClearDataHresult {
         code: error.code().0,
     }
 }
@@ -105,7 +76,7 @@ fn clear_error(error: windows::core::Error) -> BrowserError {
 fn pump_error(error: webview2_com::Error) -> BrowserError {
     match error {
         webview2_com::Error::WindowsError(error) => clear_error(error),
-        _ => BrowserError::ClearData {
+        _ => BrowserError::ClearDataHresult {
             code: E_UNEXPECTED.0,
         },
     }
@@ -118,9 +89,9 @@ fn hidden_controller(
     let (send, receive) = mpsc::channel();
     let completion = CreateCoreWebView2ControllerCompletedHandler::create(Box::new(
         move |status, controller| {
-            let result = status
-                .map_err(clear_error)
-                .and_then(|()| controller.ok_or(BrowserError::ClearData { code: E_POINTER.0 }));
+            let result = status.map_err(clear_error).and_then(|()| {
+                controller.ok_or(BrowserError::ClearDataHresult { code: E_POINTER.0 })
+            });
             send.send(result)
                 .map_err(|_| windows::core::Error::from(E_UNEXPECTED))
         },

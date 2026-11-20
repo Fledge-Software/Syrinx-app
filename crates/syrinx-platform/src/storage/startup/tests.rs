@@ -1,9 +1,8 @@
 //! Exercises guarded startup against disposable established and missing primary files.
 
-use std::{
-    process::Command,
-    sync::atomic::{AtomicUsize, Ordering},
-};
+#[cfg(windows)]
+use std::process::Command;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use syrinx_core::{Activation, TabKind, TabMetadata, TabModel};
 use syrinx_store::{BackupMetadata, BackupOutcome, DirectoryLease, Store, StoredSnapshot};
 
@@ -43,6 +42,7 @@ fn seed(fixture: &Fixture) -> (BackupMetadata, StoredSnapshot, PathBuf) {
     (metadata, StoredSnapshot { revision, snapshot }, backup)
 }
 
+#[cfg(windows)]
 #[test]
 fn missing_primary_offer_retains_ownership_and_cancellation_preserves_absence() {
     let fixture = Fixture::new();
@@ -161,6 +161,7 @@ fn missing_primary_with_incomplete_archive_and_malformed_intent_fails_closed() {
     );
 }
 
+#[cfg(windows)]
 #[test]
 fn existing_primary_with_journal_follows_normal_store_open() {
     let fixture = Fixture::new();
@@ -206,6 +207,7 @@ fn fresh_final_directory_initializes_and_reopens_normally() {
     store.shutdown().expect("close reopened store");
 }
 
+#[cfg(windows)]
 #[test]
 fn atomic_creation_retains_the_created_directory_until_release() {
     let fixture = Fixture::new();
@@ -297,7 +299,7 @@ fn unexpected_entries_in_new_state_prevent_fresh_initialization() {
         let fixture = Fixture::new();
         let destination = fixture.root.join("State");
         let (prepared, created) =
-            prepare_directory_with_creation(&destination, Arc::new(native::WindowsProbe), true)
+            prepare_directory_with_creation(&destination, Arc::new(native::NativeProbe), true)
                 .expect("prepare new synthetic State");
         assert!(created);
         fs::write(destination.join(name), b"synthetic competing entry")
@@ -321,7 +323,7 @@ fn archive_directory_in_new_state_prevents_fresh_initialization() {
     let fixture = Fixture::new();
     let destination = fixture.root.join("State");
     let (prepared, created) =
-        prepare_directory_with_creation(&destination, Arc::new(native::WindowsProbe), true)
+        prepare_directory_with_creation(&destination, Arc::new(native::NativeProbe), true)
             .expect("prepare new synthetic State");
     assert!(created);
     fs::create_dir(destination.join("backups")).expect("synthetic unexpected archive");
@@ -338,7 +340,7 @@ fn primary_creation_race_refuses_after_the_empty_inventory_check() {
     let fixture = Fixture::new();
     let destination = fixture.root.join("State");
     let (prepared, created) =
-        prepare_directory_with_creation(&destination, Arc::new(native::WindowsProbe), true)
+        prepare_directory_with_creation(&destination, Arc::new(native::NativeProbe), true)
             .expect("prepare new synthetic State");
     assert!(created);
     assert!(contains_only_control(&prepared).expect("empty checked inventory"));
@@ -357,6 +359,7 @@ fn primary_creation_race_refuses_after_the_empty_inventory_check() {
     );
 }
 
+#[cfg(windows)]
 #[test]
 fn atomic_directory_creation_rejects_invalid_components_and_wrong_parent() {
     let fixture = Fixture::new();
@@ -398,6 +401,7 @@ fn atomic_directory_creation_rejects_invalid_components_and_wrong_parent() {
     assert!(!fixture.root.join("State").exists());
 }
 
+#[cfg(windows)]
 #[test]
 fn existing_junction_is_refused_without_following_or_initializing_its_target() {
     let fixture = Fixture::new();
@@ -447,7 +451,7 @@ impl OnSyncCheck {
 
 impl LocationProbe for OnSyncCheck {
     fn drive_type(&self, root: &Path) -> Result<u32, LocationError> {
-        native::WindowsProbe.drive_type(root)
+        native::NativeProbe.drive_type(root)
     }
 
     fn sync_roots(&self) -> Result<Vec<PathBuf>, LocationError> {
@@ -502,6 +506,7 @@ fn existing_unsafe_primary_and_busy_control_preserve_refusals() {
     drop(lease);
 }
 
+#[cfg(windows)]
 #[test]
 fn existing_empty_directory_acquisitions_retain_the_name_without_child_locks() {
     for optional in [false, true] {
@@ -528,6 +533,7 @@ fn existing_empty_directory_acquisitions_retain_the_name_without_child_locks() {
     }
 }
 
+#[cfg(windows)]
 #[test]
 fn legacy_existing_primary_lease_retains_name_until_drop() {
     let fixture = Fixture::new();
@@ -553,6 +559,7 @@ fn legacy_existing_primary_lease_retains_name_until_drop() {
     );
 }
 
+#[cfg(windows)]
 #[test]
 fn legacy_database_creation_collision_retains_the_existing_file() {
     let fixture = Fixture::new();

@@ -18,6 +18,10 @@ fn open_page(
             address: format!("https://{name}.tab-actions.example.test/"),
         },
     );
+    assert!(
+        opened.reopened.is_empty(),
+        "a new tab is the owner's own choice"
+    );
     opened.created[0]
 }
 
@@ -111,6 +115,9 @@ fn bulk_closes_save_once_drop_closed_rows_and_keep_unloaded_saved_rows() {
     let reopened = change(&handle, &mut events, SessionCommand::ReopenClosed);
     let restored = reopened.created[0];
     assert_eq!(tab_ids(&reopened), vec![saved_live, restored, keep]);
+    // Its first page must not be read: it may have been reached from an excluded site (#54).
+    assert_eq!(reopened.reopened, reopened.created);
+    assert!(after_others.reopened.is_empty());
     stop(handle, &mut events);
     fixture.cleanup();
 }
@@ -126,6 +133,11 @@ fn duplicate_creates_a_selected_copy_after_its_source() {
     let duplicated = change(&handle, &mut events, SessionCommand::Duplicate(source));
     assert_eq!(duplicated.created.len(), 1);
     let copy = duplicated.created[0];
+    assert_eq!(
+        duplicated.reopened,
+        [copy],
+        "a copy is not read from its first page (#54)"
+    );
     assert_eq!(tab_ids(&duplicated), vec![source, copy, after_source]);
     assert_eq!(duplicated.model.active_id, Some(copy));
     assert_eq!(

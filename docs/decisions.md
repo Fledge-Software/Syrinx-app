@@ -17,6 +17,446 @@ Since 2026-10-16 open deferred work is tracked by GitHub issue number
 instead (`docs/dev/deferred-work.md`); where an item became an issue, the
 entry names it.
 
+## 2026-11-03
+
+- **Linux-only licences (owner, 2026-11-03).** The owner's choice, given in
+  the review session of #226 and relayed by its chair: "Approve all", as
+  narrow exceptions at these exact versions: ISC for `ring 0.17.14`,
+  `untrusted 0.9.0`, `inotify 0.11.5`, `inotify-sys 0.1.8` and
+  `libloading 0.8.9`; Zlib for `foldhash 0.1.5`; CC0-1.0 for
+  `hexf-parse 0.2.1`; and entering the 2026-10-31 approvals of
+  `target-lexicon 0.12.16` and `tiny-keccak 2.0.2` in `licences.toml`. The
+  approval also covers making `cargo xtask check-licences` judge the Linux
+  target as well as Windows. It approves nothing else: another version, or
+  the same licence on another package, needs its own approval. The review
+  found these packages because the licence gate judged only
+  `x86_64-pc-windows-msvc`, so the Linux build linked them unchecked.
+  Details are in `docs/dev/dependency-audit.md`, "Linux platform layer".
+
+## 2026-11-02
+
+- **Linux site permissions use the top-level site's delegation (owner,
+  2026-11-02).** The owner's instruction was "test first, then decide".
+  Synthetic cross-origin frames on WebKitGTK 2.54.1 requested location,
+  notifications, camera and microphone without an `allow` attribute or a
+  Permissions-Policy header; none reached Syrinx's `permission-request`
+  handler. Delegation enforcement is verified for geolocation and
+  notifications only. Delegated location and top-level notification
+  controls reached the handler and were denied. Camera and microphone
+  controls had no usable device, so their missing handler calls do not
+  establish a policy block: **camera and microphone delegation are
+  unverified on this machine**. The owner retains the delegation prompt for
+  all four kinds and requests the device-backed follow-up in
+  `docs/owner-checklist.md` (issue #234). The outcome selects
+  the owner's Chrome/Safari delegation model: the top-level origin is the
+  accountable principal, and remembered choices stay keyed by that origin.
+  Prompts explicitly say the request comes from that site "or a site it
+  embeds". WebKit's public request API does not identify the requesting
+  frame; claiming it does was rejected, as was refusing every Linux
+  permission despite the engine's delegation checks. The native location
+  regression and the limits of the four-kind test are recorded in
+  `docs/dev/linux-permission-delegation.md`. No permission was granted.
+
+## 2026-10-31
+
+- **Syrinx is one app for Windows, Linux and macOS (owner, 2026-10-31).**
+  The owner's words: "one standalone app that can run on windows, linux
+  and mac. Just like the docs should say". The rest of this entry is the
+  coordinator's record, and the owner may correct it. This replaces D2's
+  "Windows 11 only": the same workspace builds on each platform, and only
+  `syrinx-platform` (the page engine, windows, storage guard, single
+  instance and dialogs) is written once per platform, as the 2026-10-15
+  macOS entry already planned. The core, store, search, UI and plugin
+  crates are shared unchanged.
+  - **Windows** stays as it is: WebView2 through the pinned, patched wry.
+  - **Linux** renders pages in WebKitGTK, driven directly through
+    `webkit2gtk` rather than wry, because wry's GTK backend injects a
+    `window.ipc` script into every page whether or not an IPC handler is
+    set, which the page rules in `AGENTS.md` forbid. Each page is a GTK
+    window embedded as an X11 child of Syrinx's window, so Syrinx runs on
+    X11, or XWayland under a Wayland compositor such as Hyprland; GPUI is
+    built with its X11 backend only. WebKit's bubblewrap sandbox is on.
+    Known limits, flagged rather than hidden: WebKitGTK has no Widevine, so
+    Disney+ and Hulu do not play; Google may treat WebKitGTK as an
+    unfamiliar browser at sign-in, and the user agent is still never
+    changed (D22); page-text capture, hidden-page suspension, pausing a
+    download and the update download are Windows-only for now.
+  - **macOS** is not built yet: its platform layer (WKWebView, AppKit
+    windows) is the next platform slice, and it needs a Mac to run on.
+  - Rejected: CEF on Linux (one Chromium everywhere, but it bundles
+    Chromium and Google's sign-in block names CEF); a separate Linux fork of
+    the repository (two copies of every rule drift apart); wry's GTK
+    backend (the injected script above).
+
+- **The storage guard reads sync roots from the registry (replaces the
+  2026-10-14 Windows Server entry).** D13 keeps the database out of
+  OneDrive and similar synced folders. The guard
+  (`crates/syrinx-platform/src/storage/native.rs`, `registered_roots`) asked
+  Windows for the registered sync roots through
+  `StorageProviderSyncRootManager::GetCurrentSyncRoots`, which crashed the
+  process on Windows Server, and on 2026-10-31 crashed the same way on the
+  owner's Windows 11 Pro build 26300, a client build that the edition check
+  of 2026-10-14 does not catch. Every test that opened a store crashed, and
+  Syrinx itself would have crashed at start-up. The owner chose to read the
+  registrations Windows keeps under
+  `HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\SyncRootManager`
+  (each provider's `UserSyncRoots` values, one per user, holding the root's
+  folder) instead, so the guard keeps refusing a synced folder everywhere,
+  Windows Server included. The rejected alternative was to treat such builds
+  as having no sync roots, as Server had been, which would switch D13's
+  check off on the owner's own machine. The cost is that this registry
+  layout is not a documented Microsoft interface and a later Windows could
+  change it. Roots registered for any user count, which can only refuse
+  more, never less.
+
+## 2026-10-27
+
+- **Switching page text off erases it at once (#54, owner, 2026-10-27).**
+  The owner's words: "Erase them right away". The rest of this entry is the
+  coordinator's record, and the owner may correct it. Turning "Remember page
+  text" off in Settings > Privacy removes every stored page from the
+  full-text index in one reset of its page namespace, run by the session
+  worker with the switch-off (even if saving it fails, since erasing is the
+  safe direction), as switching usage counting off
+  deletes the counts (AN-01). Notes and other feeds in the index are kept.
+  A failed erase is reported, never swallowed, and tried again the next
+  time the setting is saved or Syrinx starts while capture is off. Letting
+  the text expire within seven days was rejected: an owner switching off a
+  privacy feature expects its data to go with it.
+- **Restored, reopened and duplicated tabs are not read until the owner
+  navigates them (#54, owner, 2026-10-27).** The owner's words: "Keep it".
+  The rest of this entry is the coordinator's record, and the owner may
+  correct it. Page-text taint (P1-25's "skip all exits") is not saved, so
+  a restored tab cannot tell whether its page was reached from a bank's or
+  Google's sign-in. Such tabs, and tabs reopened with Ctrl Shift T or
+  duplicated, therefore open tainted, as crash recovery already does, and
+  are read again once the owner navigates the tab from the address bar,
+  the palette, a tile or Home; resubmitting the same address counts, but
+  reload, back and forward do not. A saved page that is restored at
+  start-up and then opened, as the tab itself or from a bookmark, is not
+  read while that restored tab stays open. The code fails closed there,
+  meaning it skips the page rather than risk reading one reached from a
+  sign-in, and the owner chose to keep it so. Once that tab is closed,
+  opening the bookmark makes a fresh tab, and that tab is read. Saving
+  taint with each tab was rejected: it needs a schema change for the small
+  gain of reading a restored ordinary page before the owner next navigates
+  it. *(Corrected on 2026-10-27 by the owner on #54: the earlier text
+  listed "a bookmark" among the navigations that clear the mark; opening
+  a restored saved page, from its row or from a bookmark, does not.)*
+- **Excluding a site erases its stored page text at once; the switch stays
+  in Settings > Privacy (#54, owner, 2026-10-27).** Recorded on #54 after
+  the independent review of #198; the owner may correct this record.
+  Excluding a site removes every stored page on that site or its
+  subdomains, matched by the same label-boundary rule (`within_domain`) the
+  exclusion itself uses, so `owner.test` takes `www.owner.test` but not
+  `notowner.test` or `owner.test.example`. The rows are deleted outright,
+  with no tombstones, because a tombstone's id is the page's address and
+  would keep the very addresses the owner excluded. This matches switching
+  capture off, which already erases everything. The review that raised the
+  question recommended this because, once the palette searches page text,
+  the owner would otherwise find a site they had just excluded. The capture
+  switch and the excluded sites stay in Settings > Privacy with the other
+  privacy controls, not in Customize as #54 first said. Restoring a backup
+  can bring back an older exclusion list, a D35 risk tracked in #199.
+- **The sidebar row's menu lists its tab actions in Firefox's order; a muted
+  tab shows only a mute icon; bulk closes always ask (owner, 2026-10-27).**
+  #95 slice 4 needed the owner's choice of how a sidebar row offers the tab
+  actions slices 1 to 3 built (Duplicate, Close other tabs, Close tabs
+  below, Mute), and #58 asked for a right-click menu on every row. The
+  coordinator showed the owner design directions, and the owner chose
+  Direction 1 with "1: Firefox order", the playing indicator with "Mute
+  icon only", and bulk-close confirmation with "Always ask but give an
+  option to not ask again". The owner also accepted the coordinator's other
+  recommendations, listed below. Only the quoted words are the owner's; the
+  rest is recorded by the coordinator and the owner may correct it.
+  - **Why.** Every row action was reachable only through small buttons that
+    DW-61 took out of the Tab order, or through keys nothing on screen named.
+    A menu that lists each row's actions with the key that does the same
+    teaches the keys, gives the favicon-only sidebar a way to reach actions
+    it has no room to draw, and is where Firefox, Chrome and Edge put these
+    actions, so the owner's hands already know it.
+  - **What each row offers, as built.** Groups are split by a separator, and
+    a key is named only where pressing it acts on that row: Ctrl R and
+    Ctrl D act on the active tab, so they label only the active row's
+    items; Ctrl W acts on the active tab, or on the focused row when Shift
+    F10 or the Menu key opened the menu there; Delete and F2 act only on
+    the focused row, so a right-click menu does not name them. The keys
+    below are those of a menu opened from the keyboard. Every key label is
+    read from the binding that runs it, so the menu and the keys cannot
+    drift apart.
+    - An open tab: Reload tab, Mute tab (Unmute tab once muted), Duplicate
+      tab, Copy link | Save page | Close tab (Ctrl W, Delete), Close
+      other tabs, Close tabs below | Reopen closed tab (Ctrl Shift T). Home
+      and Settings rows have only the closing and reopening groups. A bulk
+      close that would close nothing is left out of the menu, as Firefox
+      greys it out.
+    - A saved page whose page is open: Unload page (Ctrl W), Remove saved
+      page (Delete) | Reload tab, Mute tab, Duplicate tab, Copy link |
+      Reopen closed tab.
+    - A saved page that is not open: Copy link | Remove saved page (Delete),
+      the second only in the wide sidebar.
+    - A folder: Rename folder (F2), Remove folder (Delete), in the wide
+      sidebar only. A folder in the favicon-only sidebar opens the ⋯ menu
+      instead.
+    - The ⋯ menu gains a separator and Close tab (Ctrl W), acting on the
+      active tab.
+  - **What the owner accepted with it.**
+    - The favicon-only sidebar offers no rename and no removal that needs
+      the wide sidebar's confirmation card (an unopened saved page, a
+      folder), because the card has no room there.
+    - Saved-page rows offer no Close other tabs or Close tabs below; both
+      already spare open saved pages, as Firefox spares pinned tabs.
+    - The peek, the sidebar's popup copy, gets no menu yet.
+    - Shift F10 and the Menu key open a focused row's menu, as in Windows'
+      own lists; Escape gives the keys back to the row.
+  - **Mute icon only.** No speaker icon appears while a page plays sound. A
+    muted tab shows a clickable mute glyph before its × in the wide sidebar,
+    which unmutes it, and a small badge on its icon's bottom-right corner in
+    the favicon-only sidebar. The badge follows only what the page reports
+    through WebView2, so a page that plays sound while muted keeps it, and a
+    runtime that cannot mute shows none: the status line says so instead.
+    Mute is still not saved across a restart (#117) and is never counted in
+    the usage report (D39).
+  - **Bulk closes always ask.** Close other tabs and Close tabs below first
+    ask "Close 3 other tabs?" (with the real count) in the menu's place,
+    offering Close 3 tabs, Close and don't ask again, and Cancel. "Don't ask
+    again" is stored as Syrinx's own setting `tabs.ask_before_bulk_close`
+    and is turned back on under Settings, Tabs, "Ask before closing several
+    tabs". If tabs open or close while it asks, choosing Close asks again
+    with the new count rather than close tabs the question never named.
+    Rejected: asking only above 20 tabs, which #95's plan had recommended,
+    because the owner chose to be asked every time.
+  - **What it does not change.** No palette command was added, so D39's
+    usage schema is unchanged; that choice stays open on #95. #58's item
+    list named Shift Delete for removing a saved page or folder; the binding
+    has always been Delete (Shift Delete deletes a folder with its
+    contents), and the menu shows Delete.
+
+## 2026-10-26
+
+- **The plugin runtime starts now, before Plan 1's exit, with wasmtime
+  pinned at exactly 48.0.7 (owner, 2026-10-26).** The owner's words: "Yes.
+  Start the plugin runtime now, before Plan 1's exit (P1-40), with wasmtime
+  pinned at exactly 48.0.7. Record this as my decision in
+  docs/decisions.md and run #28 with the usual plan, review and build
+  loop." The rest of this entry is the coordinator's record, and the owner
+  may correct it.
+  - **Why.** Notes PR #14 (Fledge-Software/Syrinx-Notes-Plugin) added a
+    folder tree whose Owner check asked for a look in the real window, and
+    nobody could do it: Syrinx has no plugin host, so it cannot load Notes.
+    The owner moved that check to Notes #15, which waits for the host.
+    Every Notes and Forge slice is in the same position. The runtime is
+    what makes plugin work visible, so the owner chose not to let it wait
+    for P1-40, the owner's one-week daily-driver acceptance.
+  - **What changes.** The plugin host (#28 first, then #134 to #137 and
+    Plan 2's Phase 2 slices) no longer waits for Plan 1's exit. The
+    coordinator reads "the plugin runtime" as all of #25, Phase 2's window
+    slices included; the owner may narrow this to Phase 1. This narrows
+    the 2026-10-15 rule that no plugin work starts until Plan 1 closes, as
+    2026-10-20 already did for #26 and #30. Plan 1's open work, P1-40
+    included, stays open and keeps its own order. The plugin host still
+    follows its own order inside #25, and the owner still accepts Plan 2
+    at #25's exit. `AGENTS.md`'s work order, the in-repo wiki page
+    `wiki/Plugin-system.md` and the bodies of #25, #27 and #28 are updated
+    to match.
+  - **The pin.** 2026-10-21's decision 1 pinned wasmtime to `=48.0.x`.
+    The exact version is now `=48.0.7`, the version the template's WIT
+    build ran. The owner's words fix wasmtime itself; the rest of the
+    wasmtime family follows at the versions 48.0.7 requires. Whether
+    `wasmtime-wasi` is a dependency at all is still open: it is the first
+    open question in `docs/dev/vendor-reviews/wasmtime-wit-prebuild-check.md`,
+    where option (b) drops it and Syrinx's host provides the WASI
+    interfaces, and option (c) pins it at `=48.0.7`. The owner decides it
+    before #28 adds the dependency. *(Answered later on 2026-10-26:
+    option (b), so `wasmtime-wasi` is not added; see the next entry.)* #27's audit of every transitive crate,
+    under the 2026-10-21 licence exception, is still done before wasmtime
+    enters `Cargo.lock`. Moving to a later 48.0 security patch remains a
+    routine pin bump that must pass the gate.
+  - **What it costs.** Plugin-host code lands in Syrinx's own crates while
+    Plan 1 is still being accepted, so the gate and the release carry
+    wasmtime before the browser core is signed off. Research note 10, the
+    WASM runtime note at
+    `docs/dev/background-10-wasm-plugin-runtime-draft.md`, measured about
+    17 MiB added on Linux; #28 records the build-time and size cost on
+    Windows. Rejected: waiting for P1-40, which leaves every plugin slice
+    unverifiable in the window until then.
+
+- **The plugin host's first slice (#28): WASI, the licence check and the
+  shape of `syrinx:plugin@0.1.0` (owner, 2026-10-26).** The owner's words:
+  "I accept all the #28 recommendations as written: G1 option (b), G2, G3,
+  G10, G9's eight items, G4, G5 and G7. I'll do O1 and O2 when you ask."
+  The recommendations are those of #28's reviewed plan; the summary below
+  is the coordinator's record of them, and the owner may correct it.
+  - **G1: Syrinx's host provides WASI itself.** A plugin compiled from
+    Rust for `wasm32-wasip2` imports sixteen WASI 0.2 interfaces (output,
+    clocks, randomness and similar basics). Syrinx's plugin host
+    implements them in its own code, about 300 lines, instead of using
+    `wasmtime-wasi`. So the pin is `wasmtime =48.0.7` alone. Why:
+    `wasmtime-wasi` 48.0.7 fails Syrinx's network-code check (D9), because
+    `io-extras` asks `windows-sys` for WinSock, and it brings about eleven
+    more crates and a `tokio` move. Rejected: option (c), pinning
+    `wasmtime-wasi =48.0.7`, which would need a ninth network entry and a
+    change to the headless network rule
+    (`docs/dev/vendor-reviews/wasmtime-wit-prebuild-check.md`, open
+    question 1).
+  - **G2: the WASI interface files are copied in.** The 692 lines of WASI
+    0.2 WIT that the host implements may be committed under
+    `vendor/wasi-0.2.12-wit/`, under `Apache-2.0 WITH LLVM-exception`,
+    with a provenance file. Rejected: registering the interfaces by hand
+    without the files.
+  - **G3: `async` is not compiled in.** The sentence of 2026-10-21's
+    decision 1 that keeps wasmtime's `async` Cargo feature "because
+    `wasmtime-wasi` requires it" no longer applies. Syrinx calls plugins
+    synchronously and builds wasmtime without `async`.
+  - **G10: three compiler crates fall under the licence exception.**
+    `regalloc2` and `target-lexicon` (and `winx`, which option (b) no
+    longer compiles) are covered by the 2026-10-21 exception at the
+    versions wasmtime 48.0.7 requires, as `docs/dev/wasmtime-audit.md`
+    reads it.
+  - **G4: the gate checks licences.** #28 adds to `cargo xtask check` the
+    plugin template's licence check: every package in `Cargo.lock` must
+    carry an allowed licence or its exact approval: `unicode-ident
+    1.0.26`, `foldhash 0.2.0`, the 18 ICU crates, `encoding_rs 0.8.42`,
+    and the wasmtime family by exact name and version (29 lockfile entries
+    under G1's option (b)). Until now only a manual audit protected them.
+  - **G9: the shape of plugin interface 0.1.0 is approved.** It counts as
+    frozen once #28's contract tests pass, and the template (#30) and
+    Notes keep their own draft copies until #28's closing comment names
+    the commit to copy:
+    1. Within 0.1.x, only imports marked `@since` may be added; any other
+       change starts a new version.
+    2. There is no cancel export into a plugin's view code; Syrinx drops
+       queued requests for a cancelled id before delivery.
+    3. `forms.submit` receives a host-chosen request id, and a `pending`
+       answer must return exactly that id.
+    4. Forms gain `date` and `date-time` fields and an `email` or
+       `web-address` text format. `forms.validate` can report its own
+       failure, and the host never runs a command that has a form.
+    5. Thirteen icons are added: file, code, git, diff, symbol, link, tag,
+       calendar, mail, list, image, settings and error.
+    6. `plugin-error` gains `cancelled`, which is never used where a write
+       may have happened.
+    7. A search entry may carry up to 16 keywords of up to 120 characters;
+       an over-limit keyword is dropped and logged, not used to refuse the
+       batch.
+    8. The search-change kinds, the log levels and what a plugin is told
+       when it starts stay as they are; anything new at start, such as a
+       per-call time budget, comes later as a new `@since` service
+       (planned for #135).
+
+    The same approval writes two rules into the contract. The form rule:
+    the host calls `forms.form-for` on preview, `forms.validate` as fields
+    change and `forms.submit` on Enter, never `commands.run` for a command
+    declared with a form, and `form-for` and `validate` have no side
+    effects. The delivery order: the host never calls an export from
+    inside an import; deferred calls run first in, first out, after the
+    current export returns; for each view, `opened` comes before any
+    `message` and `closed` comes last; and `events.deliver(r, ...)` follows
+    the export that returned `pending(r)` or armed `r`.
+
+    The new date fields and icons have no design art yet; they are drawn
+    under `design/README.md` in #29 and #141.
+  - **G5: plugin-view memory moves to #138.** 2026-10-21's decision 3 put
+    it in #28's measurements, but no plugin view exists until #138, so
+    #138 measures it.
+  - **G7: the toolchain is pinned.** A `rust-toolchain.toml` pins Rust
+    1.97.1 (CI's existing pin) with `wasm32-wasip2`, `rustfmt` and
+    `clippy`. The CI `setup-rust` step installs the target, fetches the
+    fixture lockfile and adds it to the cache key, and `LOCAL-DEV.md`
+    records how rustup's auto-install behaves. Because the weekly release
+    uses the same step, it builds on this toolchain too, with unchanged
+    output; inside this repository the file overrides the machine's
+    `stable` default.
+  - **A correction to 2026-10-24's decision 5 (a note, not an owner
+    decision).** The default stubs are
+    written by hand in the guest, because the ones `wit-bindgen` generates
+    trap (#27's pre-build check). The decision itself stands.
+  - **Still the owner's to do.** O1: install `wasm32-wasip2` for 1.97.1
+    and allow downloads of audited crates. O2: give the go-ahead for #28's
+    measurement run on a quiet machine.
+
+## 2026-10-25
+
+- **The palette's first row is always what the owner typed (owner's own
+  decision, 2026-10-25).** The owner typed `youtube` in the palette and
+  found an unrelated open tab first and preselected, with the YouTube
+  history below it and the web search in a footer. The owner's words: "why
+  would anyone want to search youtube and get the recent. The thing the
+  user is searching should obviously be the first option. Then you have
+  other options underneath." Only the quoted words are the owner's; the
+  rest is recorded by the coordinator and the owner may correct it.
+  - **What changes, as recorded.** In the Everything view the first row is
+    the typed text, and it is preselected, so plain Enter runs it: a search
+    of the web for the text ("youtube — Search the web"), or, for a
+    complete address, a visit to that address. The row is built locally
+    and nothing is fetched while typing (D9). Open tabs, bookmarks and
+    history follow in their sections, reached with Down. A row that holds
+    the typed text only as letters scattered through it now ranks below
+    every row holding it as a word or an address prefix; it stays listed.
+    Where one section has both kinds, its scattered rows follow every word
+    match under a second header of the same name (for example Open tabs,
+    History, then Open tabs again). The `>`, `@` and `/` prefixes and the
+    scope chips have no typed row and are unchanged.
+  - **What it supersedes, as recorded.**
+    - The choices of 2026-10-24 made in #127 and recorded in commit
+      `305af76` rather than here: preselecting a confident local match
+      below the search row instead of completing it inline. That match was
+      a page whose address starts with the typed text, an open page's
+      exact title, or a command's exact name. It also covered a typed bare
+      host that only starts a known host: `cloud.exam` used to open a
+      known `cloud.example.test`, and Enter now goes to
+      `https://cloud.exam/`, which may not exist; the known page is one
+      Down away. With the typed row always chosen, Enter in Everything no
+      longer waits for the local results (#127 kept that wait, from P1-33,
+      only because a confident match could still arrive). Without a typed
+      row, in the chips, it still waits.
+    - The pinned "Search the web" footer row under the results, which came
+      from the design canvas (P1-30/31; `design/canvas/project/Palette.dc.html`)
+      and which #127 kept. The footer row is gone, so in the chips and
+      after a prefix the web search is no longer a click or a Tab stop.
+      `design/README.md`'s "always offers Search the web (Alt Enter)" still
+      holds: Alt Enter always searches the web, and the footer's hint line
+      still names it.
+
+- **Notes organises notes in folders; database-style views go to a separate,
+  later plugin (owner's own decision, 2026-10-25).** The owner's words:
+  "dont worry about databases for notes. We will put them in a different
+  plugin. Just have folders that allow the user to organize notes."
+  Only the quoted words are the owner's; everything below is recorded by
+  the coordinator, and the owner may correct it.
+  - **What changes, as recorded.** Database-style views (typed properties,
+    table views and `.base` files) leave the Notes plugin for a separate
+    plugin that comes later and is not scheduled, tracked as #167, *Epic:
+    Databases plugin (typed properties and table views)*. Notes v1
+    organises notes in folders instead. The coordinator's reading of
+    "folders that allow the user to organize notes" is a folder tree in the
+    Vault tab, creating, renaming and deleting folders, moving a note
+    between folders with its links kept, and choosing the folder for a new
+    note, built in #168 on the guarded rename of #38.
+  - **What it supersedes, as recorded.** The spec's "database-style views"
+    for Notes (`docs/spec.md`, § 4, which is kept verbatim; this entry
+    overrides it) and decision N3 of the Notes epic (#35), "Bases in v1 is
+    one table". #39 (the property-type metadata decision) and #40 (typed
+    properties and one table view, formerly Notes 4) stay open as
+    sub-issues of #167 instead of #35, each with a dated banner and its new
+    parent, and Notes' acceptance (#41) no longer includes a table.
+  - **What stays, as the coordinator reads it.** D27's Obsidian
+    compatibility, wikilinks, backlinks and the outline panel. Properties
+    stay in the files untouched, as plain frontmatter: Notes indexes them
+    for search, never retypes or rewrites them, and reads and writes no
+    `.base` file and no property-type metadata, so a vault edited in Syrinx
+    still opens in Obsidian with its properties and bases as they were.
+    D27's "Obsidian's property types" and "a subset of `.base`" then
+    describe what the Databases plugin must keep compatible, not what
+    Notes builds.
+  - **Why, as the coordinator reads it.** The owner gave no reason beyond
+    the quote. The table was the heaviest Notes slice and rested on an
+    Obsidian file whose format is unverified (#39), and moving it out lets
+    Notes reach daily use, and so unblock Forge (#42), sooner. Rejected:
+    keeping the one-table view in Notes v1 (N3), which the owner chose
+    against; dropping database views altogether, which the owner did not
+    ask for.
+
 ## 2026-10-24
 
 - **Syrinx's full-text index uses Tantivy, not SQLite's FTS5 (#52).** The
@@ -152,7 +592,9 @@ entry names it.
   `plugin` world; the guest crate generated by `wit-bindgen` supplies
   default stubs (for example `not-found` or empty results) so a plugin
   implements only what its manifest declares. #27's pre-build check
-  confirms this works. Rejected: one world per plugin role, which would
+  confirms this works. *(Corrected on 2026-10-26: the stubs are
+  written by hand, because the generated ones trap; see that date's
+  entries.)* Rejected: one world per plugin role, which would
   multiply the version tracks to keep compatible.
 
 - **(6) Notes' capability interfaces arrive with `@since(0.1.x)` in the
@@ -237,6 +679,74 @@ entry names it.
   dark-Acrylic floor approved above has since made it readable to 90 %.
   Rejected: keeping #124's automatic thinning beside the Home choice, which
   would make one preset ignore the owner's per-theme setting.
+
+- **A saved folder whose title is blank restores as "Untitled folder" (#80,
+  PR #99).** *Recorded by the coordinator from the owner's merge
+  instruction of 2026-10-24; awaiting the owner's confirmation.* A saved
+  session could carry a folder whose title is empty or only whitespace,
+  although the model refuses such a name when the owner creates or renames
+  a folder (2026-10-12, P1-21). On restore, Syrinx renames such a folder
+  "Untitled folder" in memory, before the session is validated
+  (`TabModel::from_snapshot` in `crates/syrinx-core/src/tabs/snapshot.rs`),
+  and the new name reaches disk with the next session save. Rejected:
+  refusing the session, because `syrinx-store` treats a session that fails
+  validation on read as a damaged database, so one cosmetic field would
+  cost the owner the whole session and send recovery looking at backups;
+  and accepting the blank title as it is, which would leave the model
+  holding a state it refuses to create. Implementation note, not part of
+  the owner's decision: the rename is silent, because the loader has no
+  way to report a repair; a status-line notice would be its own issue if
+  the owner wants one.
+
+- **"Home" is a display name only (#76, PR #100).** *Recorded by the
+  coordinator from the owner's merge instruction of 2026-10-24; awaiting
+  the owner's confirmation.* A saved blank page is shown as "Home"
+  everywhere a saved page is shown (the sidebar row, its accessible name
+  and drag ghost, the peek, the palette, the "Delete saved page" card and a
+  Favorites drop), both while its tab is open and after it closes. Its
+  stored title stays what the page reported, `about:blank`: the shown name
+  comes from the rule an open tab already uses
+  (`TabMetadata::display_title`, through `SavedPageSnapshot::display_title`
+  in `crates/syrinx-core/src/tabs/snapshot.rs`). Rejected: "about:blank",
+  which the sidebar showed while the palette and the page itself said
+  Home; and storing "Home" as the saved title, which would rewrite stored
+  rows where a display rule is enough, and could not be changed later
+  without a migration. Implementation note, not part of the owner's
+  decision: since #91, Ctrl D refuses Home, so only a row saved before
+  that shows the name, and the owner has not yet looked at it in a window.
+
+- **The restore-backup screen is drawn in Graphite, whatever theme is
+  chosen (#51, PR #102).** *Recorded by the coordinator from the owner's
+  merge instruction of 2026-10-24; awaiting the owner's confirmation.* When
+  Syrinx offers to replace a damaged database with the newest verified
+  backup (P1-04, D46), the confirmation screen
+  (`crates/syrinx-app/src/ui/recovery.rs`) uses the default Graphite
+  theme's colours and type. The owner's theme is stored in the database
+  that has just failed to open, and Graphite is the default (2026-10-15).
+  Rejected: reading or guessing the owner's theme, which the screen cannot
+  do reliably when the database is damaged. Implementation notes, not part
+  of the owner's decision: the screen shows the backup's date in the
+  owner's local time, followed by UTC; its failure line uses Graphite's
+  orange accent, because `syrinx-ui` has no error colour; its progress
+  line is not yet announced to screen readers (#101); and its wording and
+  its two choices still wait on the owner's own look, which keeps #51
+  open.
+
+- **The palette and the sidebar peek get the menus' Windows 11 rounded
+  corners and shadow (#85, PR #103).** *Recorded by the coordinator from
+  the owner's merge instruction of 2026-10-24; awaiting the owner's
+  confirmation.* #72 gave the ☰ and ⋯ menus Windows 11 rounded corners and
+  a system drop shadow. The command palette and the sidebar peek, which
+  are popup windows of their own, now get the same, so Syrinx's three
+  popups look like one family; one helper, `round_popup_corners` in
+  `crates/syrinx-app/src/ui/owned_popup.rs`, serves all three. Rejected:
+  keeping the palette and the peek square and shadowless, which left
+  Syrinx's own popups inconsistent with each other. Implementation note,
+  not part of the owner's decision: nobody has looked at it in a running
+  window yet. The owner's eye check from PR #103 stands (Ctrl K over a Home
+  tab, and the peek with the sidebar collapsed, in Graphite and Paper:
+  clean corners, a soft shadow, no black corners and no double shadow),
+  and `design/README.md` records the look once the owner confirms it.
 
 ## 2026-10-22
 
@@ -339,10 +849,12 @@ entry names it.
   plugin host (#28, #29) start once Plan 1 closes, as the 2026-10-20 entry
   required; it does not itself add a dependency, which #27's audit and
   #28's slice still do. `AGENTS.md`'s plugin guardrails are updated by a
-  separate proposal, not by these entries.
+  separate proposal, not by these entries. *(On 2026-10-26 the owner let
+  the host start before Plan 1 closes; see that date's entry.)*
 
 - **Runtime and pin (decision 1): wasmtime with the component model,
-  pinned exactly `=48.0.x`.** Syrinx embeds wasmtime with the component
+  pinned exactly `=48.0.x`.** *(On 2026-10-26 the owner fixed the
+  exact version at `=48.0.7`; see that date's entry.)* Syrinx embeds wasmtime with the component
   model and WIT (WebAssembly Interface Types, the typed interface
   language the owner chose on 2026-10-15), host bindings generated with
   `wasmtime::component::bindgen!`, pinned with `=` on the 48.x
@@ -351,7 +863,9 @@ entry names it.
   `component-model-async`, WASI 0.3 and `wasi-http` off. Syrinx calls
   plugins synchronously; wasmtime's plain `async` Cargo feature is still
   compiled in because `wasmtime-wasi` requires it, so the dependency audit
-  covers the graph with it. Security patch releases within 48.0.x are
+  covers the graph with it. *(Amended on 2026-10-26: `wasmtime-wasi`
+  is not used and `async` is not compiled in; see that date's
+  entries.)* Security patch releases within 48.0.x are
   routine pin bumps that pass the gate; a move to another major line still
   needs the owner. Why: it is the only runtime that meets the WIT decision
   with a support policy Syrinx can pin to; following wasmtime's monthly
@@ -386,7 +900,8 @@ entry names it.
   D6"; section 4, "Memory per extra web view"). Plugin views are reported
   separately, with the ten page tabs still within D6's 10%-of-Edge budget.
   Rejected: counting plugin views inside that budget, which would let a
-  Notes tab push page tabs out of it.
+  Notes tab push page tabs out of it. *(On 2026-10-26 plugin-view memory
+  moved to #138; see that date's entries.)*
 
 - **Interface rules (decision 4): one `syrinx:plugin@0.1.0` WIT package.**
   Typed records everywhere except two named JSON channels (view messages
@@ -577,7 +1092,9 @@ entry names it.
   The plugin host (#28, #29) is different: it adds the interface and host
   to Syrinx's own crates, so it still waits for Plan 1 to close and, in
   addition, for the owner to approve the research note *(approved on
-  2026-10-21; see that date's entries)*. Rejected: holding
+  2026-10-21; see that date's entries)*. *(Superseded on 2026-10-26: the
+  plugin host no longer waits for Plan 1 to close. See that date's
+  entry.)* Rejected: holding
   all plugin work until Plan 1 closes, which would leave the research and
   template idle although they cannot affect Plan 1; and starting the host
   now too, which would change product crates while Plan 1 is still being
@@ -639,7 +1156,8 @@ entry names it.
   reading and writing, not code; the plugin interface, host and template
   still wait for Plan 1's exit, as decided on 2026-10-15. *(The template
   part is superseded on 2026-10-20: the template may also start now; the
-  interface and host still wait. See that entry.)*
+  interface and host still wait. See that entry.)* *(The host's wait for
+  Plan 1 ended on 2026-10-26; see that date's entry.)*
 
 ## 2026-10-15
 
@@ -680,7 +1198,8 @@ entry names it.
     template now, ahead of Plan 1. *(Superseded on 2026-10-20: the plugin
     order is now runtime, template, Notes, Forge, with Fledge on hold, and
     the research note and the template may start before Plan 1 closes;
-    the host still waits. See that date's entries.)*
+    the host still waits. See that date's entries.)* *(The host's wait for
+    Plan 1 ended on 2026-10-26; see that date's entry.)*
   - *Form.* Each plugin is Rust compiled to WebAssembly (WASM) and run by
     Syrinx in a sandbox (the Zed model). It reaches files, git, processes
     and the network only through host functions its manifest asks for and
@@ -902,7 +1421,7 @@ entry names it.
   promise the build cannot keep was the rejected alternative.
 
 - **Where Windows cannot list sync roots, Syrinx treats the machine as
-  having none (narrows D13).** D13 keeps the database out of OneDrive and
+  having none (narrows D13; replaced on 2026-10-31 by a registry read).** D13 keeps the database out of OneDrive and
   similar synced folders; the storage guard
   (`crates/syrinx-platform/src/storage/native.rs`, `registered_roots`) asks
   Windows for its registered sync roots through
@@ -1071,9 +1590,8 @@ entry names it.
   (P1-25, "skip all exits").** A page reached by leaving an excluded document
   (Google, a bank or payment site, or a site the owner excluded) is never
   read, unless Syrinx itself started that navigation from the address bar,
-  the palette, a bookmark, a saved page, a tile or Home. Links, page
-  scripts, auto-submitting forms, popups, back, forward and reload all count
-  as leaving. The taint carries on: a page reached that way passes it to the
+  the palette, a tile or Home. Links, page scripts, auto-submitting forms,
+  popups, back, forward and reload all count as leaving. The taint carries on: a page reached that way passes it to the
   next page it leads to, until Syrinx navigates the tab, so a sign-in
   callback that moves on by script is not read either. A popup opened from
   an excluded or tainted page starts tainted. This replaces the
@@ -1081,7 +1599,13 @@ entry names it.
   follows Chromium's short-lived user activation, so a "Continue" click on a
   bank page counted as the owner's own navigation and its next page was
   read. Keeping the user-initiated test was rejected for that reason. The
-  form-`POST` rule below stands.
+  form-`POST` rule below stands. *(Corrected on 2026-10-27, owner, on #54: the
+  list of navigations that clear the taint first named "a bookmark" and "a
+  saved page". Opening either focuses that saved page's tab if it is
+  already open, and that tab stays unread; once it is closed, opening the
+  bookmark makes a fresh tab, and that tab is read. Resubmitting the same
+  address from the address bar also clears the taint, while reload, back
+  and forward do not. See the 2026-10-27 entry on restored tabs.)*
 
 - **Page text skips sign-in hops (P1-25).** *(Its user-initiated test was
   replaced the same day by "skip all exits" above; the `POST` rule stands.)* A page reached by a navigation
@@ -1312,7 +1836,8 @@ These entries depart from `docs/spec.md`. Each is argued in
 `docs/architecture-decisions.md`, decision number in brackets.
 
 - **v1 runs on Windows 11 only** (D2). No macOS or Linux work or testing in
-  v1, so the Phase 0 verdict is for Windows, not per OS.
+  v1, so the Phase 0 verdict is for Windows, not per OS. *Superseded on
+  2026-10-31: Syrinx is one app for Windows, Linux and macOS (entry above).*
 - **Pages render in WebView2, driven from Rust through wry, without Tauri**
   (D3). Servo is added later as a per-tab engine.
 - **Syrinx's interface is drawn in Rust with GPUI, not Svelte** (D4), unless

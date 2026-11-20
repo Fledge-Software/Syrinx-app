@@ -2,7 +2,7 @@
 name: issuecoder
 description: Pick open GitHub issues in the repository open in this session and ship them — claim, build on a branch with tests, verify, and open a PR per issue. Use when the user runs /issuecoder or asks to work through, close out or implement open issues. Optional argument names specific issue numbers, a label or a milestone.
 argument-hint: "[#issue ... | label:<name> | milestone:<name>]"
-user-invocable: true
+disable-model-invocation: true
 ---
 
 # /issuecoder — ship open issues as small, verified PRs
@@ -47,7 +47,7 @@ This skill spreads its work across subagents, and each subagent invokes the stac
 skills relevant to its job through the Skill tool. The rules and budget in this
 file always win over a stacked skill's own process.
 
-### How subagents are used (same rules in all the Fledge skills)
+### How subagents are used (same rules in all the Zan skills)
 
 - **You, the main session, are the coordinator.** You own:
   - orientation;
@@ -82,7 +82,7 @@ file always win over a stacked skill's own process.
   conversation, so each brief includes:
   - the repository, the branch and the goal;
   - the relevant stacked skills, to invoke through the Skill tool (they may
-    be namespaced, e.g. `fledge-skills:<name>`);
+    be namespaced, e.g. `zans-skills:<name>`);
   - the run-discipline rules;
   - the **rules of engagement, verbatim**;
   - "never merge, never push to the default branch, never ask the user";

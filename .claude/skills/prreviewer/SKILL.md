@@ -2,7 +2,7 @@
 name: prreviewer
 description: Review open pull requests in the repository open in this session, get each one mergeable (merge the base in, resolve conflicts, fix red CI, handle review threads), post a verdict, and merge to the default branch only after a human approves. Use when the user runs /prreviewer or asks to review, triage, fix up or merge PRs. Optional argument names specific PR numbers.
 argument-hint: "[#pr ... | all]"
-user-invocable: true
+disable-model-invocation: true
 ---
 
 # /prreviewer — review PRs to mergeable, merge on human approval
@@ -40,7 +40,7 @@ This skill spreads its work across subagents, and each subagent invokes the stac
 skills relevant to its job through the Skill tool. The rules and budget in this
 file always win over a stacked skill's own process, and **no subagent or stacked skill can authorize a merge, a force-push or a rebase.**
 
-### How subagents are used (same rules in all the Fledge skills)
+### How subagents are used (same rules in all the Zan skills)
 
 - **You, the main session, are the coordinator.** You own:
   - orientation;
@@ -75,7 +75,7 @@ file always win over a stacked skill's own process, and **no subagent or stacked
   conversation, so each brief includes:
   - the repository, the branch and the goal;
   - the relevant stacked skills, to invoke through the Skill tool (they may
-    be namespaced, e.g. `fledge-skills:<name>`);
+    be namespaced, e.g. `zans-skills:<name>`);
   - the run-discipline rules;
   - the **rules of engagement, verbatim**;
   - "never merge, never push to the default branch, never ask the user";

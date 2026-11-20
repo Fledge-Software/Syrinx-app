@@ -13,9 +13,9 @@ use syrinx_ui::tree_focus::{FolderRequest, RowKind, TreeKey, TreeRow, tab_stop, 
 
 use super::{
     BrowserView,
+    row_menu::TabAction,
     sidebar_rows::{SavedRow, visible_saved_rows},
 };
-use crate::session::SessionCommand;
 
 /// A sidebar row's stable identity for focus: its folder, saved page or open tab.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -181,6 +181,14 @@ impl RowClose {
         match self {
             RowClose::Tab(_) => "Control+W Delete",
             RowClose::Unload(_) => "Control+W",
+        }
+    }
+
+    /// The row action the control and Ctrl W run.
+    pub(super) fn action(self) -> TabAction {
+        match self {
+            RowClose::Tab(tab) => TabAction::Close(tab),
+            RowClose::Unload(tab) => TabAction::Unload(tab),
         }
     }
 
@@ -417,6 +425,19 @@ impl SidebarTrees {
         let bounds = self.peek.scroll.bounds_for_item(index)?;
         Some(bounds.center() + self.peek.scroll.offset())
     }
+
+    /// The bottom-left corner of `id`'s row as the docked sidebar last laid it out, where a
+    /// row menu opened by a key hangs (#95).
+    pub(super) fn main_row_bottom_left(&self, id: TreeId) -> Option<Point<Pixels>> {
+        let index = self.main.rows.iter().position(|row| row.id == id)?;
+        let bounds = self.main.scroll.bounds_for_item(index)?;
+        Some(bounds.bottom_left() + self.main.scroll.offset())
+    }
+
+    /// Focuses a row of the docked sidebar; false when it is not drawn there.
+    pub(super) fn focus_main_row(&self, id: TreeId, window: &mut Window, cx: &mut App) -> bool {
+        self.main.focus(id, window, cx)
+    }
 }
 
 impl BrowserView {
@@ -457,12 +478,16 @@ impl BrowserView {
     /// Ctrl W on a focused row closes the row's live page, if it has one (DW-63). An unloaded
     /// saved row stays drawn and keeps focus; a closed tab's row vanishes, and the next frame's
     /// `plan_frame` moves focus to the new Tab stop, as after Delete.
-    pub(super) fn close_row_page(&mut self, row: TreeId, cx: &mut Context<Self>) {
-        let Some(tab) = row_close_target(&self.model, row) else {
+    pub(super) fn close_row_page(
+        &mut self,
+        row: TreeId,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(close) = row_close(&self.model, row) else {
             return;
         };
-        self.command(SessionCommand::CloseTab(tab));
-        cx.notify();
+        self.run_tab_action(close.action(), None, window, cx);
     }
 
     /// F6 into the docked sidebar lands on the active row (else the first); false when the
