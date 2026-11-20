@@ -2,8 +2,11 @@
 
 #[path = "controls/find_observation.rs"]
 mod find_observation;
+#[path = "controls/overlap_observation.rs"]
+mod overlap_observation;
 
 use find_observation::FindObservation;
+use overlap_observation::{OVERLAP, OverlapObservation};
 
 use super::{
     fixture::{Fixture, LIMIT, reserve_profile},
@@ -50,7 +53,7 @@ document.addEventListener('selectionchange',()=>{
 const OVERLAP_PAGE: &str = r#"<!doctype html><title>overlap-ready</title><link rel=icon href=data:,>
 <p><span data-occurrence=1>overlapneedle</span>
 <span data-occurrence=2>overlapneedle</span>
-<span data-occurrence=3>OVERLAPNEEDLE</span></p><script>
+<span data-occurrence=3>OVERLAPNEEDLE</span></p><p>oo ova</p><script>
 document.addEventListener('selectionchange',()=>{
   const selection=getSelection();
   if(!selection||selection.toString().toLowerCase()!=='overlapneedle')return;
@@ -238,26 +241,29 @@ fn overlapping_find(fixture: &mut Fixture, server: &Server) -> Result<(), String
         text: text.into(),
         case_sensitive,
     };
-    burst(
-        fixture,
-        [find(50, "OVERLAPNEEDLE", true)],
-        50,
-        &[(1, 1)],
-        Some(3),
-    )?;
-    // A Next sent before the new search answers steps through the new query's three matches.
+    let only = [find(50, "OVERLAPNEEDLE", true)];
+    burst(fixture, only, (50, &[(1, 1)]), Some(&[3]), &[])?;
+    // A step sent before the new search answers steps through the new query's three matches.
     unselect(fixture)?;
     let early_next = [find(51, "overlapneedle", false), PageAction::FindNext];
-    burst(fixture, early_next, 51, &[(3, 1), (3, 2)], Some(2))?;
-    // Typing faster than WebKit answers reports only the last query. WebKit starts each
-    // search from the current selection and GTK drops its index, so no occurrence is asserted.
+    burst(
+        fixture,
+        early_next,
+        (51, &[(3, 1), (3, 2)]),
+        Some(&[1, 2]),
+        &[],
+    )?;
+    // Typing faster than WebKit answers, through a query with no match, ends on the last query.
+    // WebKit starts each search from the current selection and GTK drops its index, so no
+    // occurrence is asserted; each query's count differs, so a misplaced reply shows.
     let typing = [
         find(52, "o", false),
         find(53, "ov", false),
-        find(54, "overlap", false),
-        find(55, "overlapneedle", false),
+        find(54, "overlapx", false),
+        find(55, "overlap", false),
     ];
-    burst(fixture, typing, 55, &[(3, 1)], None)?;
+    let earlier = [(52, 6), (53, 4), (54, 0)];
+    burst(fixture, typing, (55, &[(3, 1)]), None, &earlier)?;
     unselect(fixture)?;
     let stepping = [
         find(56, "overlapneedle", false),
@@ -265,23 +271,20 @@ fn overlapping_find(fixture: &mut Fixture, server: &Server) -> Result<(), String
         PageAction::FindNext,
         PageAction::FindPrevious,
     ];
-    burst(
-        fixture,
-        stepping,
-        56,
-        &[(3, 1), (3, 2), (3, 3), (3, 2)],
-        Some(2),
-    )?;
-    fixture.send(BrowserCommand::PageAction {
-        id: OVERLAP,
-        action: PageAction::StopFind,
-    })?;
+    let reports = [(3, 1), (3, 2), (3, 3), (3, 2)];
+    burst(fixture, stepping, (56, &reports), Some(&[1, 2, 3, 2]), &[])?;
+    // StopFind retires replies still in flight, so they cannot reach the next search.
+    let stopped = [
+        find(57, "oo", false),
+        PageAction::FindNext,
+        PageAction::StopFind,
+        find(58, "OVERLAPNEEDLE", true),
+    ];
+    burst(fixture, stopped, (58, &[(1, 1)]), None, &[(57, 1)])?;
+    action_on(fixture, OVERLAP, PageAction::StopFind)?;
     fixture.send(BrowserCommand::Close { id: OVERLAP })?;
     fixture.barrier()
 }
-
-/// The overlap tab, kept apart from the armed observer on tab 3000.
-const OVERLAP: u64 = 3001;
 
 /// Reload the overlap page so the next search starts with no selection, at the first match.
 fn unselect(fixture: &mut Fixture) -> Result<(), String> {
@@ -289,23 +292,21 @@ fn unselect(fixture: &mut Fixture) -> Result<(), String> {
     fixture.loaded(OVERLAP)
 }
 
+/// Send `actions` back to back, then require the final request's reports and selections.
 fn burst(
     fixture: &mut Fixture,
     actions: impl IntoIterator<Item = PageAction>,
-    request: u64,
-    expected: &[(i32, i32)],
-    selected: Option<u32>,
+    (request, reports): (u64, &[(i32, i32)]),
+    selections: Option<&[u32]>,
+    earlier: &[(u64, i32)],
 ) -> Result<(), String> {
     for action in actions {
-        fixture.send(BrowserCommand::PageAction {
-            id: OVERLAP,
-            action,
-        })?;
+        action_on(fixture, OVERLAP, action)?;
     }
-    let mut overlap = OverlapObservation::new(request, expected);
+    let mut overlap = OverlapObservation::new(request, reports, selections, earlier);
     fixture.wait_checked("overlapping Find results", |event, _| {
         overlap.observe(event)?;
-        Ok(overlap.complete(selected))
+        Ok(overlap.complete())
     })?;
     fixture.barrier_checked(|event| overlap.observe(event))?;
     fixture.watch_for(
@@ -314,70 +315,9 @@ fn burst(
         |event| overlap.observe(event),
     )?;
     require(
-        overlap.complete(selected),
-        &format!(
-            "Overlapping Find settled on occurrence {:?}, expected {selected:?}",
-            overlap.selected
-        ),
+        overlap.complete(),
+        &format!("Overlapping Find did not settle: {}", overlap.describe()),
     )
-}
-
-/// Requires the burst's reports in order, for its own request only, and the page's selection.
-struct OverlapObservation<'a> {
-    request: u64,
-    expected: &'a [(i32, i32)],
-    seen: usize,
-    selected: Option<u32>,
-}
-
-impl<'a> OverlapObservation<'a> {
-    fn new(request: u64, expected: &'a [(i32, i32)]) -> Self {
-        Self {
-            request,
-            expected,
-            seen: 0,
-            selected: None,
-        }
-    }
-
-    fn observe(&mut self, event: &BrowserEvent) -> Result<(), String> {
-        match event {
-            BrowserEvent::FindResult {
-                id: OVERLAP,
-                request,
-                count,
-                active,
-            } => {
-                require(
-                    *request == self.request,
-                    &format!("Retired Find request {request} reported {active} of {count}"),
-                )?;
-                let expected = self.expected.get(self.seen).copied();
-                require(
-                    expected == Some((*count, *active)),
-                    &format!(
-                        "Find report {} for request {request}: expected {expected:?}, received ({count}, {active})",
-                        self.seen + 1
-                    ),
-                )?;
-                self.seen += 1;
-            }
-            BrowserEvent::Title { id: OVERLAP, title } => {
-                if let Some(occurrence) = title.strip_prefix("overlap-selected:") {
-                    let occurrence = occurrence
-                        .parse()
-                        .map_err(|_| "Malformed overlap selection report")?;
-                    self.selected = Some(occurrence);
-                }
-            }
-            _ => {}
-        }
-        Ok(())
-    }
-
-    fn complete(&self, selected: Option<u32>) -> bool {
-        self.seen == self.expected.len() && (selected.is_none() || self.selected == selected)
-    }
 }
 
 fn mute_states(fixture: &mut Fixture) -> Result<(), String> {
@@ -427,7 +367,11 @@ fn cancel_print(fixture: &mut Fixture) -> Result<(), String> {
 }
 
 fn action(fixture: &mut Fixture, action: PageAction) -> Result<(), String> {
-    fixture.send(BrowserCommand::PageAction { id: 3000, action })
+    action_on(fixture, 3000, action)
+}
+
+fn action_on(fixture: &mut Fixture, id: u64, action: PageAction) -> Result<(), String> {
+    fixture.send(BrowserCommand::PageAction { id, action })
 }
 
 fn require_stopped_find(event: &BrowserEvent) -> Result<(), String> {

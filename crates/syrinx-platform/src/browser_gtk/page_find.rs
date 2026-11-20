@@ -7,6 +7,9 @@ use std::{
 
 use super::{BrowserEvent, Shared};
 
+/// The most operations left unanswered before Next and Previous wait for WebKit to reply.
+const MAX_IN_FLIGHT: usize = 64;
+
 /// One native Find operation sent to WebKit and not yet answered.
 #[derive(Clone, Copy)]
 enum Sent {
@@ -24,17 +27,32 @@ impl Sent {
 
 /// The current request, its match count once WebKit has answered, and the operations in flight.
 ///
-/// WebKit answers one page's operations in the order they were sent, exactly once each, so the
-/// oldest entry in `sent` is the one the next `found-text` or `failed-to-find-text` answers (#245).
-#[derive(Default)]
+/// `found-text` and `failed-to-find-text` carry no request identity, so each answers the oldest
+/// entry in `sent`. This rests on WebKit answering one page's operations exactly once each, in
+/// send order: observed under Xvfb, including a web-process crash, whose pending operations
+/// come back as failures before Syrinx sees the crash. Nothing clears `sent`, since a reply
+/// still owed would then pair with a later operation; a cross-site process swap with replies
+/// in flight is assumed, not yet observed, to keep that order (#245).
 pub(super) struct FindState {
     request: Cell<Option<u64>>,
     count: Cell<Option<u32>>,
     active: Cell<u32>,
     sent: RefCell<VecDeque<Sent>>,
+    steps_count_matches: bool,
 }
 
 impl FindState {
+    /// `steps_count_matches` says whether WebKit's step replies carry the real total.
+    pub(super) fn new(steps_count_matches: bool) -> Self {
+        Self {
+            request: Cell::new(None),
+            count: Cell::new(None),
+            active: Cell::new(0),
+            sent: RefCell::default(),
+            steps_count_matches,
+        }
+    }
+
     /// Make `request` current; an empty query completes at once and sends nothing.
     pub(super) fn begin(&self, request: u64, text: &str, id: u64, shared: &Shared) -> bool {
         self.request.set(Some(request));
@@ -48,19 +66,19 @@ impl FindState {
         true
     }
 
-    /// Record the current request's search; call this before WebKit can answer it.
-    pub(super) fn searching(&self) {
+    /// Record the current request's search; call this just before sending it to WebKit.
+    pub(super) fn sending_search(&self) {
         if let Some(request) = self.request.get() {
             self.sent.borrow_mut().push_back(Sent::Search { request });
         }
     }
 
-    /// Record a Next or Previous for the current request, unless it is known to have no match.
-    pub(super) fn stepping(&self, forward: bool) -> bool {
+    /// Record a Next or Previous to send, unless none can match or too many are unanswered.
+    pub(super) fn sending_step(&self, forward: bool) -> bool {
         let Some(request) = self.request.get() else {
             return false;
         };
-        if self.count.get() == Some(0) {
+        if self.count.get() == Some(0) || self.sent.borrow().len() >= MAX_IN_FLIGHT {
             return false;
         }
         self.sent
@@ -105,18 +123,15 @@ impl FindState {
         );
     }
 
-    /// Move to the next or previous match; a step's own count is ignored unless it found none.
-    ///
-    /// WebKitGTK before 2.54 answers every Next and Previous with a count of one, so the total
-    /// comes from the search's reply (`FindController.cpp`, `DetermineMatchIndex`).
+    /// Move to the next or previous match, taking the step's own count where it is real.
     fn step(&self, forward: bool, count: u32) {
-        if count == 0 {
-            self.count.set(Some(0));
-            return;
+        if count == 0 || self.steps_count_matches {
+            self.count.set(Some(count));
         }
         let Some(total) = self.count.get().filter(|&total| total > 0) else {
             return;
         };
+        // A recount on a changed page can leave fewer matches than the last position.
         let active = self.active.get() % total;
         self.active.set(if forward {
             (active + 1) % total
@@ -124,6 +139,21 @@ impl FindState {
             (active + total - 1) % total
         });
     }
+}
+
+/// Whether this WebKitGTK answers Next and Previous with the real match count.
+///
+/// Before 2.54, `webKitFindControllerPerform` (`WebKitFindController.cpp`) asks only a search
+/// to count, so `FindController.cpp` answers every step with a count of one.
+pub(super) fn steps_count_matches() -> bool {
+    // SAFETY: both functions only return constants compiled into the loaded library.
+    let (major, minor) = unsafe {
+        (
+            webkit2gtk::ffi::webkit_get_major_version(),
+            webkit2gtk::ffi::webkit_get_minor_version(),
+        )
+    };
+    (major, minor) >= (2, 54)
 }
 
 /// Emit one one-based Find report; no match reports position -1.

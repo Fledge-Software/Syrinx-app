@@ -107,7 +107,7 @@ impl Page {
             shared,
             life,
             prompts: Rc::default(),
-            find: Rc::default(),
+            find: Rc::new(FindState::new(page_find::steps_count_matches())),
             load: Rc::default(),
             text,
         };
@@ -279,7 +279,7 @@ impl Page {
             options |= FindOptions::CASE_INSENSITIVE;
         }
         // Recorded before the call, in case WebKit answers synchronously.
-        self.find.searching();
+        self.find.sending_search();
         controller.search(text, options.bits(), u32::MAX);
     }
 
@@ -287,7 +287,7 @@ impl Page {
         let Some(controller) = self.view.find_controller() else {
             return;
         };
-        if !self.find.stepping(forward) {
+        if !self.find.sending_step(forward) {
             return;
         }
         if forward {

@@ -671,34 +671,38 @@ i5-4460 / HD 4600; no budget changed.
   `examples/linux/controls/find_observation.rs` and their RED/GREEN regressions
   (source-confirmed, 2026-11-05; native baseline, reversed-direction mutation
   and real Find-label inspection passed in the `a01b28d` receipt).
-- **A Find reply carries only a count, so it must be paired with its request
-  by order.** WebKitGTK answers `search`, `search_next` and
+- **The Find label can name the wrong match when the owner types or steps
+  faster than WebKit answers.** WebKitGTK answers `search`, `search_next` and
   `search_previous` later, through `found-text` or `failed-to-find-text`, and
   drops the string and match index at that signal (`WebKitFindController.cpp`,
-  line 129). Reading the current request when a reply arrives credited an
-  older query's count to the newer request, and a Next sent before a new
-  search answered stepped modulo the old count (old count 1, new count 3: the
-  label settled on "1 of 1" while the selection was on the second match).
-  `browser_gtk/page_find.rs` records each operation it sends and lets each
-  reply retire the oldest one; keep that order, and record before calling
-  WebKit, in case it answers synchronously. It rests on
-  WebKit answering one page's operations once each, in send order: under
-  Xvfb on WebKitGTK 2.52.6, three runs of 1,032 overlapping searches and
-  steps were all answered in send order with no reply missing or extra (549
-  searches with distinct counts each matched their own query), and source
-  reading of 2.54.1 agrees (`WebPage::FindString` replies synchronously on
-  GTK). That a reply cancelled by a web-process crash still arrives, as a
-  failure, is expected from IPC's completion handlers but not traced. Also, WebKitGTK before
-  2.54 answers every Next and Previous with a count of one, because only 2.54
-  adds `DetermineMatchIndex` to every operation, so the total comes from the
-  search's reply. A new search starts from the current selection, and GTK
-  never says which match it chose, so "1 of n" after a search is right only
-  with no prior selection; that limit is unchanged. Source:
-  `examples/linux/controls.rs`'s `overlapping_find` (failed on the old
-  state, passed 5/5 with the fix under Xvfb, 2026-11-20) and WebKitGTK
-  2.52.6 and 2.54.1's `FindController.cpp` and `WebPageProxy.cpp`
-  (observed and source-confirmed; not yet run on the owner's Hyprland
-  machine).
+  line 129). Reading the current request when a reply arrived reported an
+  older query's count under the newer request, and a Next sent before a new
+  search answered stepped modulo the old count (old count 1, new count 3:
+  "1 of 3" on 2.54.1, "1 of 1" on 2.52.6, while the selection was on the
+  second match). `browser_gtk/page_find.rs` records each operation before
+  sending it and lets each reply retire the oldest; keep that order, and
+  never clear the record, since a reply still owed would then pair with a
+  later operation. It rests on WebKit answering one page's operations once
+  each, in send order. Under Xvfb on 2.52.6 that held for three runs of
+  1,032 overlapping operations (549 searches with distinct counts each
+  matched their own query), and through a killed web process, whose pending
+  searches came back as failures before the crash signal (3/3). A cross-site
+  process swap with replies in flight could not be staged in the sandbox
+  and is assumed, not observed. Source: `examples/linux/controls.rs`'s
+  `overlapping_find`, run on its own under Xvfb because the full controls
+  suite needs a window manager (the old state failed with request 55
+  reporting "o"'s six matches; the fix passed 5/5), and WebKitGTK 2.52.6
+  and 2.54.1's `FindController.cpp` and `WebPageProxy.cpp` (observed
+  2026-11-20; the owner's Hyprland run is pending).
+- **Before WebKitGTK 2.54, every Find step reports one match.** A Next or
+  Previous's `found-text` count is 1 whatever the page holds, so taking it as
+  the total made the label read "2 of 1". Only 2.54's
+  `webKitFindControllerPerform` (`WebKitFindController.cpp`) adds
+  `DetermineMatchIndex` to steps; without it `FindController.cpp` sets the
+  count to 1. `page_find::steps_count_matches` reads the runtime version and,
+  before 2.54, keeps the search's total, taking a step's count only when it
+  finds nothing. Source: the same probe's 362 step replies, every one a
+  count of 1 (observed on 2.52.6, 2026-11-20), and both versions' source.
 - **Native X11 focus alone does not establish window-manager activation.**
   At `cb44257`, three permissions runs failed the native-focus guard before
   Enter, and one earlier X11 probe failed popup-to-chrome transfer. Fixtures
