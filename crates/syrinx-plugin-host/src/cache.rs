@@ -58,8 +58,8 @@ pub enum Refusal {
     Deserialize(String),
     /// The deserialised component failed the identity or contract checks a compile passes.
     Checks(String),
-    /// The entry was compiled from other bytes than the plugin's install record names, as
-    /// once after an update recorded before a restart.
+    /// The entry was compiled from other bytes than the plugin's install record names; for
+    /// example, once after an update recorded before the next start.
     OtherBytes,
 }
 
