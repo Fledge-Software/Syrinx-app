@@ -30,4 +30,5 @@ size=$(awk -v bytes="$(stat -c %s "target/package/$tarball")" 'BEGIN { printf "%
 echo "tarball=$tarball" >> "$GITHUB_OUTPUT"
 echo "size=$size" >> "$GITHUB_OUTPUT"
 echo "sha256=$sha256" >> "$GITHUB_OUTPUT"
+echo "size=$size" >> "$GITHUB_OUTPUT"
 echo "Added $tarball (SHA-256 $sha256) to $tag"

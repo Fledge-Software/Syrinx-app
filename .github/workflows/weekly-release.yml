@@ -169,7 +169,8 @@ jobs:
     name: Publish the release on syrinxapp.dev
     needs: [plan, release, linux]
     # Visitors cannot download from a private repository, so the site waits until it is public.
-    if: needs.plan.outputs.public == 'true'
+    # A failed Linux job still publishes Windows; the site then hides the Linux download that week.
+    if: always() && needs.release.result == 'success' && needs.plan.outputs.public == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -198,8 +199,17 @@ jobs:
           VERSION: ${{ needs.plan.outputs.version }}
           ASSET: ${{ needs.release.outputs.asset }}
           RELEASES: https://github.com/${{ github.repository }}/releases
+          LINUX_OK: ${{ needs.linux.result == 'success' }}
+          LINUX_TARBALL: ${{ needs.linux.outputs.tarball }}
+          LINUX_SHA256: ${{ needs.linux.outputs.sha256 }}
+          LINUX_SIZE: ${{ needs.linux.outputs.size }}
         run: |
           pnpm install --frozen-lockfile
+          linux=()
+          if [ "$LINUX_OK" = true ]; then
+            linux=(--linux-download "$RELEASES/download/v$VERSION/$LINUX_TARBALL"
+              --linux-sha256 "$LINUX_SHA256" --linux-size "$LINUX_SIZE")
+          fi
           node scripts/publish-release.mjs \
             --version "$VERSION" \
             --date "$(TZ=America/New_York date +%F)" \
@@ -209,9 +219,7 @@ jobs:
             --size "${{ needs.release.outputs.size }}" \
             --notes "$INPUTS/release-notes.md" \
             --screenshots "$INPUTS/screenshots" \
-            --linux-download "$RELEASES/download/v$VERSION/${{ needs.linux.outputs.tarball }}" \
-            --linux-sha256 "${{ needs.linux.outputs.sha256 }}" \
-            --linux-size "${{ needs.linux.outputs.size }}"
+            "${linux[@]}"
           pnpm build
 
       - name: Push to the site's main branch (Vercel deploys it)
