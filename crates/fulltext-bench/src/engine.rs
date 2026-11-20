@@ -1,12 +1,15 @@
-//! Gives both disposable engines the same mutation and query measurement contract.
+//! Gives the disposable engines and the production adapter one measurement contract.
 
-use crate::{Result, corpus::Document, store, tantivy_store::TantivyStore};
+use crate::{
+    Result, adapter_store::AdapterStore, corpus::Document, store, tantivy_store::TantivyStore,
+};
 use rusqlite::Connection;
 use std::path::Path;
 
 pub enum Engine {
     Fts5(Connection),
     Tantivy(Box<TantivyStore>),
+    Adapter(Box<AdapterStore>),
 }
 
 impl Engine {
@@ -22,7 +25,8 @@ impl Engine {
                 Ok(Self::Fts5(connection))
             }
             "tantivy" => Ok(Self::Tantivy(Box::new(TantivyStore::open(directory)?))),
-            _ => Err("engine must be fts5 or tantivy".into()),
+            "adapter" => Ok(Self::Adapter(Box::new(AdapterStore::open(directory)?))),
+            _ => Err("engine must be fts5, tantivy or adapter".into()),
         }
     }
 
@@ -48,6 +52,8 @@ impl Engine {
                 store::checkpoint(connection)
             }
             Self::Tantivy(store) => store.batch(documents, removed, tombstones),
+            // The adapter always leaves a tombstone for a deletion.
+            Self::Adapter(store) => store.batch(documents, removed),
         }
     }
 
@@ -56,6 +62,9 @@ impl Engine {
         match self {
             Self::Fts5(connection) => store::optimize(connection),
             Self::Tantivy(store) => store.optimize(),
+            // Production has no separate pass: each commit merges only segments holding
+            // deletions, or all but the largest once there are more than eight.
+            Self::Adapter(_) => Ok(()),
         }
     }
 
@@ -67,6 +76,15 @@ impl Engine {
                 Ok(expired)
             }
             Self::Tantivy(store) => store.expire(),
+            Self::Adapter(store) => store.expire(),
+        }
+    }
+
+    /// Whether this engine has the query's syntax; the adapter has no phrases or `OR`.
+    pub fn supports(&self, query: &str) -> bool {
+        match self {
+            Self::Adapter(_) => crate::adapter_store::request(query, 1).is_some(),
+            Self::Fts5(_) | Self::Tantivy(_) => true,
         }
     }
 
@@ -87,6 +105,7 @@ impl Engine {
                 Ok(ids)
             }
             Self::Tantivy(store) => store.query(query),
+            Self::Adapter(store) => store.query(query),
         }
     }
 
@@ -98,6 +117,26 @@ impl Engine {
                 |row| row.get::<_, i64>(0),
             )? as usize),
             Self::Tantivy(store) => store.hits(query),
+            Self::Adapter(store) => store.hits(query),
+        }
+    }
+
+    /// The hit count for the query report; the adapter's reads `1000+` once capped.
+    pub fn reported_hits(&self, query: &str) -> Result<String> {
+        let Self::Adapter(store) = self else {
+            return Ok(self.hits(query)?.to_string());
+        };
+        Ok(match store.reported_hits(query)? {
+            (hits, false) => hits.to_string(),
+            (hits, true) => format!("{hits}+"),
+        })
+    }
+
+    /// How many segments the adapter's queries run over; the others are optimized to one.
+    pub fn adapter_segments(&self) -> Result<Option<usize>> {
+        match self {
+            Self::Adapter(store) => Ok(Some(store.segments()?)),
+            Self::Fts5(_) | Self::Tantivy(_) => Ok(None),
         }
     }
 
@@ -105,6 +144,7 @@ impl Engine {
         match self {
             Self::Fts5(connection) => store::verify(connection, expected),
             Self::Tantivy(store) => store.verify(expected),
+            Self::Adapter(store) => store.verify(expected),
         }
     }
 
@@ -121,6 +161,7 @@ impl Engine {
                 store::checkpoint(connection)
             }
             Self::Tantivy(store) => store.replay(documents),
+            Self::Adapter(store) => store.replay(documents),
         }
     }
 
@@ -128,6 +169,8 @@ impl Engine {
         match self {
             Self::Fts5(connection) => connection.close().map_err(|(_, error)| error.into()),
             Self::Tantivy(store) => store.close(),
+            // `FullText` has no close: its commits are durable and its merges synchronous.
+            Self::Adapter(_) => Ok(()),
         }
     }
 }
@@ -221,18 +264,74 @@ mod tests {
         );
     }
 
+    /// Queries both corpora express without phrases or `OR`, so both engines can run them.
+    const SHARED_QUERIES: [&str; 6] = [
+        "lantern",
+        "orb*",
+        "lantern AND violet",
+        "sigil999",
+        "lexeme0001",
+        "lexeme000*",
+    ];
+
+    #[test]
+    fn the_adapter_matches_what_the_tantivy_engine_matches() -> Result<()> {
+        for corpus in [Corpus::Overlap, Corpus::Broad] {
+            let (tantivy_path, adapter_path) = (Scratch::new("tantivy")?, Scratch::new("adapter")?);
+            let mut tantivy = Engine::open("tantivy", &tantivy_path.0)?;
+            let mut adapter = Engine::open("adapter", &adapter_path.0)?;
+            // One page short of the adapter's 1,000-hit cap, so every count stays exact.
+            let documents: Vec<_> = (0..999).map(|id| corpus.document(id)).collect();
+            tantivy.batch(&documents, &[], false)?;
+            adapter.batch(&documents, &[], false)?;
+            for query in SHARED_QUERIES {
+                let hits = tantivy.hits(query)?;
+                assert_eq!(hits, adapter.hits(query)?, "{corpus:?} {query}");
+                assert_eq!(
+                    tantivy.query(query)?.len(),
+                    adapter.query(query)?.len(),
+                    "{corpus:?} {query}"
+                );
+            }
+            tantivy.close()?;
+            adapter.close()?;
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn the_adapter_reports_phrases_and_or_as_unsupported() -> Result<()> {
+        let scratch = Scratch::new("adapter-syntax")?;
+        let adapter = Engine::open("adapter", &scratch.0)?;
+        let unsupported: Vec<_> = corpus::QUERIES
+            .into_iter()
+            .filter(|query| !adapter.supports(query))
+            .collect();
+        assert_eq!(unsupported, ["\"copper meadow\"", "copper OR orchard"]);
+        adapter.close()
+    }
+
+    #[test]
+    fn the_adapter_expunges_bodies_and_rejects_stale_replay_after_reopen() -> Result<()> {
+        assert_retention_and_replay("adapter")
+    }
+
     #[test]
     fn tantivy_expunges_bodies_and_rejects_stale_replay_after_reopen() -> Result<()> {
+        assert_retention_and_replay("tantivy")
+    }
+
+    fn assert_retention_and_replay(name: &str) -> Result<()> {
         let scratch = Scratch::new("retention")?;
         let path = scratch.0.as_path();
-        let mut engine = Engine::open("tantivy", path)?;
+        let mut engine = Engine::open(name, path)?;
         let documents: Vec<_> = [3, 5, 1005].into_iter().map(corpus::document).collect();
         engine.batch(&documents, &[], false)?;
         engine.batch(&[], &[1005], true)?;
         assert_eq!(engine.expire()?, 1);
         engine.verify(1)?;
         engine.close()?;
-        let mut reopened = Engine::open("tantivy", path)?;
+        let mut reopened = Engine::open(name, path)?;
         reopened.replay(&[corpus::document(3), corpus::document(1005)])?;
         reopened.verify(1)?;
         reopened.close()
