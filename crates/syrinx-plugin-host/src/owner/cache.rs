@@ -109,13 +109,14 @@ impl StoreCache {
         for record in records {
             let installed_bytes = installed.get(&record.plugin_id);
             let same_bytes = installed_bytes == Some(&record.module_sha256);
-            if self.is_current_key(&record) && same_bytes {
+            let current_key = self.is_current_key(&record);
+            if current_key && same_bytes {
                 current.insert(entry_name(&record.plugin_id));
                 continue;
             }
             // A new key is an expected miss; bytes the install record disagrees with are not.
-            if self.is_current_key(&record) && installed_bytes.is_some() {
-                let refused = CacheError::Refused(Refusal::NotInstalled);
+            if current_key && installed_bytes.is_some() {
+                let refused = CacheError::Refused(Refusal::OtherBytes);
                 self.report(Some(&record.plugin_id), refused);
             }
             if let Err(error) = self.discard(&record.plugin_id) {
@@ -279,7 +280,7 @@ impl CompiledCache for StoreCache {
         self.forget(plugin_id);
     }
 
-    /// Record the artefact's key and SHA-256, then write its file.
+    /// `save`, reporting a failure as `PluginEvent::Cache`.
     fn keep(&self, plugin_id: &str, wasm: &[u8], component: &Component) {
         if let Err(error) = self.save(plugin_id, wasm, component) {
             self.report(Some(plugin_id), error);

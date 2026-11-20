@@ -58,8 +58,9 @@ pub enum Refusal {
     Deserialize(String),
     /// The deserialised component failed the identity or contract checks a compile passes.
     Checks(String),
-    /// The entry was compiled from other bytes than the plugin's install record names.
-    NotInstalled,
+    /// The entry was compiled from other bytes than the plugin's install record names, as
+    /// once after an update recorded before a restart.
+    OtherBytes,
 }
 
 /// How many components the runtime compiled from `plugin.wasm` and loaded from the cache; a
@@ -92,7 +93,7 @@ impl fmt::Display for Refusal {
             Self::Hash => write!(formatter, "its file does not match its SHA-256"),
             Self::Deserialize(error) => write!(formatter, "wasmtime refused it: {error}"),
             Self::Checks(error) => write!(formatter, "it failed the plugin's checks: {error}"),
-            Self::NotInstalled => write!(
+            Self::OtherBytes => write!(
                 formatter,
                 "it was compiled from other bytes than those installed"
             ),

@@ -528,17 +528,17 @@ fn an_entry_for_other_bytes_than_the_install_records_is_cleared_at_start() {
     assert!(cached.files().is_empty());
     assert_eq!(
         cache_problems(&runtime),
-        [CacheError::Refused(Refusal::NotInstalled)],
+        [CacheError::Refused(Refusal::OtherBytes)],
         "a disagreement with the install record is reported, not silent"
     );
     close(runtime, store);
 }
 
 #[test]
-fn an_entry_that_cannot_be_read_is_a_miss_that_keeps_its_record_and_the_sweep_goes_on() {
+fn an_entry_that_cannot_be_read_is_a_miss_that_is_never_discarded() {
     let cached = Cached::new();
     warm(&cached);
-    // A folder where the entry belongs cannot be read, written or swept as a file.
+    // A folder where the entry belongs cannot be read or written as a file.
     fs::remove_file(cached.entry()).expect("remove the entry");
     fs::create_dir(cached.entry()).expect("a folder at the entry's name");
     for orphan in ["gone.cwasm", "stray.txt"] {
@@ -563,17 +563,15 @@ fn an_entry_that_cannot_be_read_is_a_miss_that_keeps_its_record_and_the_sweep_go
     load(&mut runtime);
     activate(&mut runtime);
     assert_eq!(runtime.compile_counts(), COMPILED_ONCE);
+    // Exactly the read and the rename over the folder fail; discarding the entry would add a
+    // third failure, removing the folder as a file.
     let problems = cache_problems(&runtime);
     assert!(
-        !problems.is_empty()
-            && problems
-                .iter()
-                .all(|problem| matches!(problem, CacheError::File(_))),
-        "the read and the write fail as files, never as a refusal: {problems:?}"
-    );
-    assert!(
-        record(&store).is_some(),
-        "a failed read never discards the record"
+        matches!(
+            problems.as_slice(),
+            [CacheError::File(_), CacheError::File(_)]
+        ),
+        "{problems:?}"
     );
     assert!(cached.entry().is_dir(), "the folder is left alone");
     close(runtime, store);
