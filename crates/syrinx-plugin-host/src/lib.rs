@@ -22,9 +22,9 @@ pub mod views;
 mod wasi;
 pub mod worker;
 
-pub use cache::{CacheError, CompileCounts, Refusal};
+pub use cache::{CacheError, Refusal};
 pub use checks::{CONTRACT_TRACK, CONTRACT_VERSION};
-pub use engine::Runtime;
+pub use engine::{CompileCounts, Runtime};
 pub use error::{Failure, HostError};
 pub use identity::{IdentityMismatch, SignedIdentity, SignedManifest, check_signed};
 pub use instance::{LoadedPlugin, PluginHost, PreparedPlugin, StoreData};

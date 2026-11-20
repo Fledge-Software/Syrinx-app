@@ -229,25 +229,22 @@ fn the_table_checks_the_same_bounds_the_store_refuses_before_writing() {
         connection.execute_batch(&format!("INSERT INTO plugin_compiled VALUES ({values});"))
     };
     let largest = MAX_PLUGIN_COMPILED_BYTES;
-    assert!(
-        insert(&format!(
-            "'cache-test', zeroblob(32), zeroblob(32), 'v', zeroblob(32), {})",
-            largest + 1
-        ))
-        .is_err()
-    );
-    assert!(insert("'cache-test', zeroblob(32), zeroblob(32), 'v', zeroblob(32), 0").is_err());
-    assert!(insert("'cache-test', zeroblob(31), zeroblob(32), 'v', zeroblob(32), 1").is_err());
-    assert!(insert("'cache-test', zeroblob(32), zeroblob(33), 'v', zeroblob(32), 1").is_err());
-    assert!(insert("'cache-test', zeroblob(32), zeroblob(32), '', zeroblob(32), 1").is_err());
-    assert!(insert("'cache-test', zeroblob(32), zeroblob(32), 'v', zeroblob(31), 1").is_err());
     let long_version = "9".repeat(65);
-    assert!(
-        insert(&format!(
-            "'cache-test', zeroblob(32), zeroblob(32), '{long_version}', zeroblob(32), 1"
-        ))
-        .is_err()
-    );
+    let refused_rows = [
+        format!(
+            "'cache-test', zeroblob(32), zeroblob(32), 'v', zeroblob(32), {}",
+            largest + 1
+        ),
+        "'cache-test', zeroblob(32), zeroblob(32), 'v', zeroblob(32), 0".to_owned(),
+        "'cache-test', zeroblob(31), zeroblob(32), 'v', zeroblob(32), 1".to_owned(),
+        "'cache-test', zeroblob(32), zeroblob(33), 'v', zeroblob(32), 1".to_owned(),
+        "'cache-test', zeroblob(32), zeroblob(32), '', zeroblob(32), 1".to_owned(),
+        "'cache-test', zeroblob(32), zeroblob(32), 'v', zeroblob(31), 1".to_owned(),
+        format!("'cache-test', zeroblob(32), zeroblob(32), '{long_version}', zeroblob(32), 1"),
+    ];
+    for row in &refused_rows {
+        refused_by_check(insert(row), row);
+    }
     assert!(
         insert(&format!(
             "'cache-test', zeroblob(32), zeroblob(32), 'v', zeroblob(32), {largest}"
@@ -256,4 +253,14 @@ fn the_table_checks_the_same_bounds_the_store_refuses_before_writing() {
     );
     close(connection);
     directory.cleanup();
+}
+
+/// Assert that SQLite refused `row` for a CHECK constraint, not for any other reason.
+fn refused_by_check(result: rusqlite::Result<()>, row: &str) {
+    let check_failed = matches!(
+        &result,
+        Err(rusqlite::Error::SqliteFailure(error, _))
+            if error.extended_code == rusqlite::ffi::SQLITE_CONSTRAINT_CHECK
+    );
+    assert!(check_failed, "{row}: {result:?}");
 }

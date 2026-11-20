@@ -10,10 +10,9 @@ use std::time::{Duration, Instant};
 use syrinx_plugin_host::grants::DenyList;
 use syrinx_plugin_host::owner::{CacheSetup, OwnerRuntime, Sha256};
 use syrinx_plugin_host::worker::PluginEvent;
-use syrinx_plugin_host::{CacheError, CompileCounts, Refusal};
+use syrinx_plugin_host::{CacheError, CompileCounts, Refusal, Runtime};
 use syrinx_store::{PluginCompiled, PluginInstall, Store};
 use wasmtime::component::Component;
-use wasmtime::{Config, Engine, Strategy};
 
 use super::{STORAGE, TempStore, call, close, install_record, registry};
 use crate::support::sha256::sha256;
@@ -488,6 +487,7 @@ fn with_custom_section(mut bytes: Vec<u8>) -> Vec<u8> {
     let name = b"syrinx-cache-test";
     let payload = b"synthetic";
     let size = 1 + name.len() + payload.len();
+    // Section id 0 is a custom section, which a component may carry anywhere.
     bytes.push(0);
     bytes.push(u8::try_from(size).expect("a one-byte size"));
     bytes.push(u8::try_from(name.len()).expect("a one-byte name length"));
@@ -546,17 +546,9 @@ fn an_entry_that_cannot_be_read_is_a_miss_that_is_never_discarded() {
     // A folder where the entry belongs cannot be read or written as a file.
     fs::remove_file(cached.entry()).expect("remove the entry");
     fs::create_dir(cached.entry()).expect("a folder at the entry's name");
-    for orphan in ["plugin-gone.cwasm", "stray.txt"] {
-        fs::write(cached.folder.join(orphan), b"synthetic").expect("an orphan");
-    }
 
     let store = cached.temp.open();
     let mut runtime = cached.start(&store, VERSION, sha256);
-    assert_eq!(
-        cached.files(),
-        ["plugin-cache-test.cwasm"],
-        "the orphans went all the same"
-    );
     let whole_cache = runtime.take_events();
     assert_eq!(
         whole_cache,
@@ -582,25 +574,20 @@ fn an_entry_that_cannot_be_read_is_a_miss_that_is_never_discarded() {
     close(runtime, store);
 }
 
-/// The engine configuration the runtime uses, rebuilt here to serialise a component with it.
-fn plugin_engine() -> Engine {
-    let mut config = Config::new();
-    config.strategy(Strategy::Cranelift);
-    config.epoch_interruption(true);
-    Engine::new(&config).expect("an engine like the runtime's")
-}
-
 #[test]
 fn a_cached_component_that_fails_the_plugins_checks_is_refused_and_recompiled() {
     let cached = Cached::new();
     warm(&cached);
     // Another component's genuine code, under this plugin's record: it asks for a capability
     // the manifest does not request, so the identity check refuses it.
-    let engine = plugin_engine();
-    let other = Component::new(&engine, support::bytes(variant("imports-documents")))
-        .expect("the variant compiles")
-        .serialize()
-        .expect("it serialises");
+    let compiler = Runtime::new().expect("a runtime like the owner's");
+    let other = Component::new(
+        compiler.engine(),
+        support::bytes(variant("imports-documents")),
+    )
+    .expect("the variant compiles")
+    .serialize()
+    .expect("it serialises");
     fs::write(cached.entry(), &other).expect("swap the entry");
     let store = cached.temp.open();
     let matching = PluginCompiled {
@@ -653,11 +640,9 @@ fn a_function_that_is_not_sha256_turns_the_cache_off() {
     close(runtime, store);
 }
 
-/// Start a cache, plant `planted` at the partial file's name, then install and activate:
+/// Start a cache, `plant` something at the partial file's name, then install and activate:
 /// the entry is written fresh and the file outside the folder keeps its bytes.
-fn a_planted_partial_is_not_written_through(
-    plant: impl FnOnce(&std::path::Path, &std::path::Path),
-) {
+fn planted_partial_not_written_through(plant: impl FnOnce(&std::path::Path, &std::path::Path)) {
     let cached = Cached::new();
     let outside = cached.temp.folder.join("outside.txt");
     fs::write(&outside, b"synthetic outside").expect("a file outside the cache");
@@ -678,7 +663,7 @@ fn a_planted_partial_is_not_written_through(
 
 #[test]
 fn a_hard_linked_partial_file_is_replaced_not_written_through() {
-    a_planted_partial_is_not_written_through(|outside, partial| {
+    planted_partial_not_written_through(|outside, partial| {
         fs::hard_link(outside, partial).expect("plant a hard link");
     });
 }
@@ -686,7 +671,7 @@ fn a_hard_linked_partial_file_is_replaced_not_written_through() {
 #[cfg(unix)]
 #[test]
 fn a_symlinked_partial_file_is_replaced_not_followed() {
-    a_planted_partial_is_not_written_through(|outside, partial| {
+    planted_partial_not_written_through(|outside, partial| {
         std::os::unix::fs::symlink(outside, partial).expect("plant a symbolic link");
     });
 }

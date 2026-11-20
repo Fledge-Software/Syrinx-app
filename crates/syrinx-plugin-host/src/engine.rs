@@ -7,7 +7,7 @@ use wasmtime::component::Component;
 use wasmtime::{Config, Engine, Strategy};
 
 use crate::HostError;
-use crate::cache::{CompileCounts, CompiledCache, Refusal};
+use crate::cache::{CompiledCache, Refusal};
 use crate::checks;
 use crate::identity;
 use crate::manifest::PluginManifest;
@@ -24,6 +24,14 @@ pub struct Runtime {
     ticker: Arc<EpochTicker>,
     cache: Option<Arc<dyn CompiledCache>>,
     counts: Arc<Counts>,
+}
+
+/// How many components the runtime compiled from `plugin.wasm` and loaded from the cache; a
+/// diagnostic, not part of the application's contract.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct CompileCounts {
+    pub compiled: u64,
+    pub loaded: u64,
 }
 
 /// What `compile_counts` reports, shared by every clone of the runtime.

@@ -346,7 +346,7 @@ impl OwnerRuntime {
         self.grants.forget(plugin);
         let stored = self.store.remove_plugin(plugin.to_owned());
         if let Some(cache) = self.cache.as_ref() {
-            cache.forget(plugin);
+            cache.delete_entry_or_report(plugin);
         }
         both_steps(workers, stored)
     }

@@ -76,7 +76,58 @@ impl StoreCache {
             events,
         })
     }
+}
 
+impl CompiledCache for StoreCache {
+    fn fetch(&self, engine: &Engine, plugin_id: &str, wasm: &[u8]) -> Option<Component> {
+        let error = match self.load(engine, plugin_id, wasm) {
+            Ok(found) => return found,
+            Err(error) => error,
+        };
+        // Only a refused entry goes; a busy store or a held file is a miss that keeps it.
+        if let CacheError::Refused(refusal) = error {
+            self.refuse(plugin_id, refusal);
+        } else {
+            self.report(Some(plugin_id), error);
+        }
+        None
+    }
+
+    fn refuse(&self, plugin_id: &str, refusal: Refusal) {
+        self.report(Some(plugin_id), CacheError::Refused(refusal));
+        self.delete_entry_or_report(plugin_id);
+    }
+
+    /// `save`, reporting a failure as `PluginEvent::Cache`.
+    fn keep(&self, plugin_id: &str, wasm: &[u8], component: &Component) {
+        if let Err(error) = self.save(plugin_id, wasm, component) {
+            self.report(Some(plugin_id), error);
+        }
+    }
+
+    fn is_current(&self, plugin_id: &str, wasm: &[u8]) -> bool {
+        match self.current_record(plugin_id, wasm) {
+            Ok(record) => record.is_some(),
+            Err(error) => {
+                // Unknown counts as not current: compiling costs only what a hit would save.
+                self.report(Some(plugin_id), error);
+                false
+            }
+        }
+    }
+}
+
+/// What start-up clean-up does with one record.
+enum Kept {
+    /// Current: compiled under this key from the bytes the install record names.
+    Keep,
+    /// Under this key but from other bytes than the install record names: reported, deleted.
+    OtherBytes,
+    /// Under another key or for a plugin no longer installed: an expected miss, deleted.
+    Stale,
+}
+
+impl StoreCache {
     /// Delete every record that is not current, with its file: one made under another engine
     /// key or Syrinx version, or for other bytes than the plugin's install records. Then
     /// delete every file in the folder no current record names, partly written ones included.
@@ -86,19 +137,21 @@ impl StoreCache {
             Ok(current) => current,
             Err(error) => return self.report(None, error),
         };
-        if let Err(error) = self.remove_unnamed_files(&current) {
+        if let Err(error) = self.remove_unrecorded_files(&current) {
             self.report(None, error);
         }
     }
 
-    /// Delete the plugin's record and file, reporting a failure; for an uninstall.
-    pub(crate) fn forget(&self, plugin_id: &str) {
-        if let Err(error) = self.discard(plugin_id) {
+    /// Delete the plugin's record and file, reporting a failure; for an uninstall too.
+    pub(crate) fn delete_entry_or_report(&self, plugin_id: &str) {
+        if let Err(error) = self.delete_entry(plugin_id) {
             self.report(Some(plugin_id), error);
         }
     }
 
-    /// Discard the records that are not current; the file names of those that are.
+    // Clean-up.
+
+    /// Delete the records that are not current; the file names of those that are.
     fn clean_records(&self) -> Result<BTreeSet<String>, CacheError> {
         let records = self.store.plugin_compiled_entries().map_err(store_error)?;
         let installed: BTreeMap<String, [u8; 32]> = self
@@ -110,28 +163,39 @@ impl StoreCache {
             .collect();
         let mut current = BTreeSet::new();
         for record in records {
-            let installed_bytes = installed.get(&record.plugin_id);
-            let same_bytes = installed_bytes == Some(&record.module_sha256);
-            let current_key = self.is_current_key(&record);
-            if current_key && same_bytes {
-                current.insert(entry_name(&record.plugin_id));
-                continue;
-            }
-            // A new key is an expected miss; bytes the install record disagrees with are not.
-            if current_key && installed_bytes.is_some() {
-                let refused = CacheError::Refused(Refusal::OtherBytes);
-                self.report(Some(&record.plugin_id), refused);
-            }
-            if let Err(error) = self.discard(&record.plugin_id) {
-                self.report(Some(&record.plugin_id), error);
+            let plugin_id = record.plugin_id.as_str();
+            match self.kept(&record, installed.get(plugin_id)) {
+                Kept::Keep => {
+                    current.insert(entry_name(plugin_id));
+                }
+                Kept::OtherBytes => {
+                    let refused = CacheError::Refused(Refusal::OtherBytes);
+                    self.report(Some(plugin_id), refused);
+                    self.delete_entry_or_report(plugin_id);
+                }
+                Kept::Stale => self.delete_entry_or_report(plugin_id),
             }
         }
         Ok(current)
     }
 
+    /// Whether clean-up keeps `record`, given the module hash its install record names.
+    fn kept(&self, record: &PluginCompiled, installed: Option<&[u8; 32]>) -> Kept {
+        let Some(installed) = installed else {
+            return Kept::Stale;
+        };
+        if !self.is_current_key(record) {
+            return Kept::Stale;
+        }
+        if *installed != record.module_sha256 {
+            return Kept::OtherBytes;
+        }
+        Kept::Keep
+    }
+
     /// Remove each plain file whose name is not in `current`; each failure is reported and
     /// the sweep goes on.
-    fn remove_unnamed_files(&self, current: &BTreeSet<String>) -> Result<(), CacheError> {
+    fn remove_unrecorded_files(&self, current: &BTreeSet<String>) -> Result<(), CacheError> {
         for entry in fs::read_dir(&self.folder)? {
             let removed = entry.map_err(CacheError::from).and_then(|entry| {
                 let kind = entry.file_type()?;
@@ -154,27 +218,7 @@ impl StoreCache {
         Ok(())
     }
 
-    /// Delete the plugin's record and file. Both are tried; the first failure is returned.
-    fn discard(&self, plugin_id: &str) -> Result<(), CacheError> {
-        let record = self
-            .store
-            .forget_plugin_compiled(plugin_id.to_owned())
-            .map(drop)
-            .map_err(store_error);
-        let file = self
-            .entry_path(plugin_id)
-            .and_then(|path| remove_if_present(&path));
-        record.and(file)
-    }
-
-    fn report(&self, plugin_id: Option<&str>, error: CacheError) {
-        let plugin = plugin_id.map(str::to_owned);
-        send_event(&self.events, PluginEvent::Cache { plugin, error });
-    }
-
-    fn is_current_key(&self, record: &PluginCompiled) -> bool {
-        record.engine_key == self.engine_key && record.syrinx_version == self.syrinx_version
-    }
+    // Loading.
 
     /// The record for these exact bytes under the current key, if there is one.
     fn current_record(
@@ -213,7 +257,8 @@ impl StoreCache {
 
     /// The entry's bytes, read with the record's length as the bound, once they match it.
     fn read_checked(&self, path: &Path, record: &PluginCompiled) -> Result<Vec<u8>, CacheError> {
-        let expected = record.artifact_bytes.min(MAX_PLUGIN_COMPILED_BYTES);
+        // The store already bounds the length; the `min` is a second guard on the read.
+        let bound = record.artifact_bytes.min(MAX_PLUGIN_COMPILED_BYTES);
         let file = match File::open(path) {
             Ok(file) => file,
             Err(error) if error.kind() == ErrorKind::NotFound => {
@@ -223,7 +268,7 @@ impl StoreCache {
         };
         // One byte past the record shows a file that is too long.
         let mut bytes = Vec::new();
-        file.take(expected + 1).read_to_end(&mut bytes)?;
+        file.take(bound + 1).read_to_end(&mut bytes)?;
         if bytes.len() as u64 != record.artifact_bytes {
             return Err(CacheError::Refused(Refusal::Length));
         }
@@ -233,6 +278,8 @@ impl StoreCache {
         }
         Ok(bytes)
     }
+
+    // Saving.
 
     /// Record the artefact's key and SHA-256, then write its file.
     fn save(&self, plugin_id: &str, wasm: &[u8], component: &Component) -> Result<(), CacheError> {
@@ -254,51 +301,36 @@ impl StoreCache {
         write_replacing(&path, &bytes)
     }
 
+    // Shared.
+
+    /// Delete the plugin's record and file. Both are tried; the first failure is returned.
+    fn delete_entry(&self, plugin_id: &str) -> Result<(), CacheError> {
+        let record = self
+            .store
+            .forget_plugin_compiled(plugin_id.to_owned())
+            .map(drop)
+            .map_err(store_error);
+        let file = self
+            .entry_path(plugin_id)
+            .and_then(|path| remove_if_present(&path));
+        record.and(file)
+    }
+
+    fn report(&self, plugin_id: Option<&str>, error: CacheError) {
+        let plugin = plugin_id.map(str::to_owned);
+        send_event(&self.events, PluginEvent::Cache { plugin, error });
+    }
+
+    fn is_current_key(&self, record: &PluginCompiled) -> bool {
+        record.engine_key == self.engine_key && record.syrinx_version == self.syrinx_version
+    }
+
     /// The entry's file, named from a plugin id that is one plain segment.
     fn entry_path(&self, plugin_id: &str) -> Result<PathBuf, CacheError> {
         if !is_plain_id(plugin_id) {
             return Err(CacheError::Unnamed);
         }
         Ok(self.folder.join(entry_name(plugin_id)))
-    }
-}
-
-impl CompiledCache for StoreCache {
-    fn fetch(&self, engine: &Engine, plugin_id: &str, wasm: &[u8]) -> Option<Component> {
-        let error = match self.load(engine, plugin_id, wasm) {
-            Ok(found) => return found,
-            Err(error) => error,
-        };
-        // Only a refused entry goes; a busy store or a held file is a miss that keeps it.
-        if let CacheError::Refused(refusal) = error {
-            self.refuse(plugin_id, refusal);
-        } else {
-            self.report(Some(plugin_id), error);
-        }
-        None
-    }
-
-    fn refuse(&self, plugin_id: &str, refusal: Refusal) {
-        self.report(Some(plugin_id), CacheError::Refused(refusal));
-        self.forget(plugin_id);
-    }
-
-    /// `save`, reporting a failure as `PluginEvent::Cache`.
-    fn keep(&self, plugin_id: &str, wasm: &[u8], component: &Component) {
-        if let Err(error) = self.save(plugin_id, wasm, component) {
-            self.report(Some(plugin_id), error);
-        }
-    }
-
-    fn is_current(&self, plugin_id: &str, wasm: &[u8]) -> bool {
-        match self.current_record(plugin_id, wasm) {
-            Ok(record) => record.is_some(),
-            Err(error) => {
-                // Unknown counts as not current: compiling costs only what a hit would save.
-                self.report(Some(plugin_id), error);
-                false
-            }
-        }
     }
 }
 

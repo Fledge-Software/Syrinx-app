@@ -98,7 +98,7 @@ impl Fixture {
             remove_if_present(&self.0.join(name), false);
         }
         remove_if_present(&self.0.join("backups"), true);
-        // The index's and the plugin cache's files are their own names, so each whole folder goes.
+        // Tantivy and the plugin cache name their own files, so each whole folder goes.
         for folder in [page_text::INDEX_FOLDER, plugins::CACHE_FOLDER] {
             match fs::remove_dir_all(self.0.join(folder)) {
                 Ok(()) => {}

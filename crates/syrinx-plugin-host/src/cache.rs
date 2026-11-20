@@ -64,14 +64,6 @@ pub enum Refusal {
     OtherBytes,
 }
 
-/// How many components the runtime compiled from `plugin.wasm` and loaded from the cache; a
-/// diagnostic, not part of the application's contract.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct CompileCounts {
-    pub compiled: u64,
-    pub loaded: u64,
-}
-
 impl fmt::Display for CacheError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
