@@ -37,4 +37,5 @@ pub use plugins::{
 };
 pub use preferences::{MAX_SETTING_KEY_BYTES, MAX_SETTING_VALUE_BYTES, StoredPreferences};
 pub use replay::{AppliedDeletions, replay_deletions};
+pub use schema::SCHEMA_VERSION;
 pub use site_zoom::{MAX_SITE_ZOOM, MIN_SITE_ZOOM, is_default_zoom};
