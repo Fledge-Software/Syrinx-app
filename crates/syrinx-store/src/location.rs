@@ -72,6 +72,10 @@ pub enum LocationOperation {
     WriteDeletionJournal,
     FlushDeletionJournal,
     EmptyCacheFolder,
+    OpenExcludedSites,
+    ReadExcludedSites,
+    WriteExcludedSites,
+    FlushExcludedSites,
 }
 
 /// Reports structural failures; native error messages may contain private data.

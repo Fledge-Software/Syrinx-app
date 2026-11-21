@@ -3,7 +3,7 @@
 use std::{
     cell::{Cell, RefCell},
     collections::HashMap,
-    path::PathBuf,
+    path::{Path, PathBuf},
     rc::Rc,
     time::{Duration, Instant},
 };
@@ -135,28 +135,57 @@ impl Downloads {
         let id = self.register(download);
         let registry = self.clone();
         download.connect_decide_destination(move |download, suggested| {
-            let Some(path) = destination(suggested) else {
-                download.cancel();
-                return true;
-            };
-            registry.announce(id, download, &path);
-            // A path GLib cannot write as a URI is refused and shown as a file error, rather
-            // than handing WebKit an empty destination.
-            let Ok(uri) = glib::filename_to_uri(&path, None) else {
-                let refused = DownloadState::Interrupted(DownloadInterruption::File);
-                registry.report(changed(id, download, refused));
-                download.cancel();
-                return true;
-            };
-            download.set_allow_overwrite(false);
-            download.set_destination(&uri);
-            registry.report_progress(id, download);
+            registry.decide(id, download, suggested, downloads_folder());
             true
         });
     }
 
+    /// Chooses where the download goes: a fresh path in `folder`, made first if it is missing.
+    /// A download Syrinx cannot place is refused and shown as a file error, with the cause logged.
+    fn decide(&self, id: u64, download: &Download, suggested: &str, folder: Option<PathBuf>) {
+        let Some(folder) = folder else {
+            self.abandon(id, download);
+            return;
+        };
+        if let Err(error) = ensure_folder(&folder) {
+            // The folder's path names the owner's account, so only the cause is logged.
+            eprintln!("Syrinx could not create the Downloads folder: {error}");
+            self.announce(id, download, &folder.join(safe_name(suggested)));
+            self.refuse(id, download);
+            return;
+        }
+        let Some(path) = fresh_path(&folder, suggested) else {
+            self.abandon(id, download);
+            return;
+        };
+        self.announce(id, download, &path);
+        // A path GLib cannot write as a URI is refused, rather than handing WebKit an empty
+        // destination.
+        let Ok(uri) = glib::filename_to_uri(&path, None) else {
+            self.refuse(id, download);
+            return;
+        };
+        download.set_allow_overwrite(false);
+        download.set_destination(&uri);
+        self.report_progress(id, download);
+    }
+
+    /// Reports a file error for a download Syrinx will not save, and cancels it.
+    fn refuse(&self, id: u64, download: &Download) {
+        let refused = DownloadState::Interrupted(DownloadInterruption::File);
+        self.report(changed(id, download, refused));
+        self.abandon(id, download);
+    }
+
+    /// Cancels a download that never got a destination and drops it from the registry, since
+    /// its `finished` handler, which would otherwise do that, is never connected.
+    fn abandon(&self, id: u64, download: &Download) {
+        self.0.borrow_mut().running.remove(&id);
+        download.cancel();
+    }
+
     /// Reports the download's start, now or once its popup has a tab.
-    fn announce(&self, id: u64, download: &Download, path: &std::path::Path) {
+    fn announce(&self, id: u64, download: &Download, path: &Path) {
         let owner = self.owner_of(download);
         let tab = match owner {
             Owner::Tab(tab) => tab,
@@ -328,10 +357,27 @@ fn interruption(error: &glib::Error) -> DownloadInterruption {
     }
 }
 
-/// A fresh path in the Downloads folder for the server's suggested name, never replacing a file.
-fn destination(suggested: &str) -> Option<PathBuf> {
-    let folder = glib::user_special_dir(glib::UserDirectory::Downloads)
-        .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join("Downloads")))?;
+/// The owner's Downloads folder, which may not exist yet.
+fn downloads_folder() -> Option<PathBuf> {
+    glib::user_special_dir(glib::UserDirectory::Downloads)
+        .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join("Downloads")))
+}
+
+/// Makes the Downloads folder, private to the owner, when it is missing. Only the last folder is
+/// made: a missing parent such as `$HOME` is a broken account, not something to repair. An
+/// existing folder, or a link to one, is used as it is.
+fn ensure_folder(folder: &Path) -> std::io::Result<()> {
+    use std::os::unix::fs::DirBuilderExt;
+    match std::fs::DirBuilder::new().mode(0o700).create(folder) {
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists && folder.is_dir() => {
+            Ok(())
+        }
+        result => result,
+    }
+}
+
+/// A fresh path in `folder` for the server's suggested name, never replacing a file.
+fn fresh_path(folder: &Path, suggested: &str) -> Option<PathBuf> {
     let name = safe_name(suggested);
     let (stem, extension) = match name.rsplit_once('.') {
         Some((stem, extension)) if !stem.is_empty() => (stem.to_owned(), format!(".{extension}")),
@@ -360,7 +406,8 @@ fn safe_name(suggested: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{BrowserEvent, retarget, safe_name};
+    use super::{BrowserEvent, ensure_folder, retarget, safe_name};
+    use std::os::unix::fs::PermissionsExt;
 
     #[test]
     fn a_suggested_name_cannot_leave_the_downloads_folder_or_hide() {
@@ -390,5 +437,77 @@ mod tests {
         };
         assert_eq!((download, tab, total), (4, 7, Some(10)));
         assert_eq!(file_name, "synthetic.zip");
+    }
+
+    /// A fresh scratch folder under the temp folder, removed when dropped.
+    struct Scratch(std::path::PathBuf);
+
+    impl Scratch {
+        fn new(name: &str) -> Self {
+            let folder = std::env::temp_dir().join(format!("syrinx-{name}-{}", std::process::id()));
+            std::fs::create_dir(&folder).expect("fresh scratch folder");
+            Self(folder)
+        }
+    }
+
+    impl Drop for Scratch {
+        fn drop(&mut self) {
+            if let Err(error) = std::fs::remove_dir_all(&self.0) {
+                eprintln!("Could not remove the scratch folder: {error}");
+            }
+        }
+    }
+
+    fn mode_of(path: &std::path::Path) -> u32 {
+        std::fs::metadata(path)
+            .expect("exists")
+            .permissions()
+            .mode()
+            & 0o777
+    }
+
+    #[test]
+    fn a_missing_downloads_folder_is_made_private() {
+        let scratch = Scratch::new("ensure-missing");
+        let folder = scratch.0.join("Downloads");
+        ensure_folder(&folder).expect("made");
+        assert_eq!(mode_of(&folder), 0o700);
+    }
+
+    #[test]
+    fn a_missing_parent_is_not_made() {
+        let scratch = Scratch::new("ensure-parent");
+        let folder = scratch.0.join("home").join("Downloads");
+        assert!(ensure_folder(&folder).is_err());
+        assert!(!scratch.0.join("home").exists());
+    }
+
+    #[test]
+    fn an_existing_folder_keeps_its_permissions() {
+        let scratch = Scratch::new("ensure-existing");
+        let folder = scratch.0.join("Downloads");
+        std::fs::create_dir(&folder).expect("folder");
+        std::fs::set_permissions(&folder, std::fs::Permissions::from_mode(0o755)).expect("mode");
+        ensure_folder(&folder).expect("used as it is");
+        assert_eq!(mode_of(&folder), 0o755);
+    }
+
+    #[test]
+    fn a_link_to_a_folder_is_used_as_it_is() {
+        let scratch = Scratch::new("ensure-link");
+        let target = scratch.0.join("elsewhere");
+        std::fs::create_dir(&target).expect("target");
+        let link = scratch.0.join("Downloads");
+        std::os::unix::fs::symlink(&target, &link).expect("link");
+        ensure_folder(&link).expect("used as it is");
+    }
+
+    #[test]
+    fn a_file_in_the_folders_place_is_refused() {
+        let scratch = Scratch::new("ensure-file");
+        let folder = scratch.0.join("Downloads");
+        std::fs::write(&folder, b"not a folder").expect("file");
+        assert!(ensure_folder(&folder).is_err());
+        assert!(folder.is_file());
     }
 }

@@ -501,6 +501,21 @@ record layout is unchanged. A build that does not know a category refuses
 the journal, as it always has; this build names such a record as written by
 a newer Syrinx.
 
+Since #199 the owner's page-text excluded sites (D35) are also kept in
+`syrinx.excluded-sites` beside the database, which backups never copy, so a
+restore cannot shorten the list. `ExcludedSitesFile` in
+`syrinx-platform/src/storage/excluded_sites.rs` saves it whole (written
+aside, flushed and renamed into place) before the database on every change.
+At start-up `PageTextSetting::restored_with` excludes every site either
+list names and saves the merged list back to both. A copy that still cannot
+be read after three tries keeps capture off and is left alone until the
+owner saves the setting again; a damaged byte spoils only its own entry. A
+copy that cannot be saved is reported and retried while idle, like a busy
+database, and never stops the session. The file holds only host names, never
+page text or captured addresses (D40). The capture switch itself is still
+kept only in the database, so restoring a backup taken while capture was on
+can switch it back on.
+
 `Store::backup_if_due(utc_seconds, idle)` is a blocking host-worker call on
 the existing writer queue. It takes a daily `VACUUM INTO` snapshot only when
 idle and due. Complete read-only validation precedes publication; the exact

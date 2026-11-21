@@ -85,6 +85,8 @@ impl Fixture {
             "syrinx.db-journal",
             "syrinx.lifecycle",
             "syrinx.deletions",
+            "syrinx.excluded-sites",
+            "syrinx.excluded-sites.new",
             "usage.json",
             "usage.json.new",
             "usage.json.damaged",

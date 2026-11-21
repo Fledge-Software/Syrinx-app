@@ -12,8 +12,10 @@ mod tests;
 use std::{collections::HashMap, ops::Bound, path::Path};
 
 use tantivy::{
-    Index, IndexReader, IndexWriter, ReloadPolicy, Searcher, TantivyDocument,
+    Directory, Index, IndexReader, IndexWriter, ReloadPolicy, Searcher, SegmentMeta,
+    TantivyDocument,
     collector::{Count, DocSetCollector, TopDocs},
+    index::SegmentComponent,
     indexer::NoMergePolicy,
     query::{BooleanQuery, Occur, Query, RangeQuery, TermQuery},
     schema::IndexRecordOption,
@@ -62,6 +64,7 @@ impl FullText {
         if index.schema() != schema {
             return Err(FullTextError::IncompatibleIndex);
         }
+        require_segment_files(&index)?;
         schema::register_tokenizer(&index);
         let writer = index.writer_with_num_threads(1, WRITER_MEMORY_BYTES)?;
         keep_merges_explicit(&writer);
@@ -420,6 +423,42 @@ fn well_formed(scope: ClearScope) -> bool {
         ClearScope::Pages { start, end } => start < end,
         ClearScope::Elsewhere => true,
     }
+}
+
+/// Reports `Damaged` when a file a searchable segment needs is gone, as a failed empty can
+/// leave it (#240). Tantivy reads a missing `.pos` as empty, so without this the loss would
+/// show only when a phrase search fails.
+fn require_segment_files(index: &Index) -> Result<(), FullTextError> {
+    // Held segment metas keep their files through garbage collection; these drop on return.
+    for segment in index.searchable_segment_metas()? {
+        for component in required_components(&segment) {
+            let path = segment.relative_path(component);
+            let present = index
+                .directory()
+                .exists(&path)
+                .map_err(tantivy::TantivyError::from)?;
+            if !present {
+                return Err(FullTextError::Damaged);
+            }
+        }
+    }
+    Ok(())
+}
+
+/// The files a committed segment cannot be read without; its alive set only once it has deletes.
+fn required_components(segment: &SegmentMeta) -> Vec<SegmentComponent> {
+    let mut components = vec![
+        SegmentComponent::Postings,
+        SegmentComponent::Positions,
+        SegmentComponent::FastFields,
+        SegmentComponent::FieldNorms,
+        SegmentComponent::Terms,
+        SegmentComponent::Store,
+    ];
+    if segment.has_deletes() {
+        components.push(SegmentComponent::Delete);
+    }
+    components
 }
 
 /// Merges run only when this adapter asks, so deleted text leaves on its schedule and no

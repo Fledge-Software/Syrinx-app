@@ -2384,6 +2384,7 @@ name = "fulltext-bench"
 version = "0.1.0"
 dependencies = [
  "rusqlite",
+ "syrinx-search",
  "tantivy",
 ]
 

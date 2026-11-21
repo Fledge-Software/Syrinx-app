@@ -383,6 +383,9 @@ pub struct ClearedHistory {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum SessionError {
     Location(LocationError),
+    /// The copy of the excluded sites beside the database could not be saved; the setting
+    /// stays unsaved and is tried again (#199).
+    ExcludedSites(LocationError),
     Store(StoreError),
     Model(TabError),
     Snapshot(SnapshotError),
@@ -450,6 +453,9 @@ impl fmt::Display for SessionError {
         // Every nested error carries only structural fields, never browsing values.
         match self {
             Self::Location(error) => write!(formatter, "Cannot open local storage: {error}"),
+            Self::ExcludedSites(error) => {
+                write!(formatter, "Cannot save the list of excluded sites: {error}")
+            }
             Self::Store(error) => write!(formatter, "Cannot save or read the session: {error}"),
             Self::Model(error) => write!(formatter, "Cannot change this tab: {error}"),
             Self::Snapshot(error) => write!(formatter, "Cannot restore the session: {error}"),
@@ -948,7 +954,10 @@ impl Worker {
             retention::EXPIRY_BATCH,
         )?;
         page_text.expire_if_due(now);
-        let restored = PageTextSetting::restored(&stored_preferences.settings);
+        let kept = page_text.kept_excluded_sites();
+        let restored = PageTextSetting::restored_with(&stored_preferences.settings, &kept);
+        // The window reads the merged list, not the database's alone (#199).
+        restored.show_in(&mut stored_preferences.settings);
         erase_what_the_setting_forbids(&mut page_text, &restored, now);
         let stored = store.load().map_err(SessionError::Store)?;
         let model = TabModel::from_snapshot(stored.snapshot).map_err(SessionError::Snapshot)?;
@@ -975,7 +984,10 @@ impl Worker {
             deletions,
             retention: schedule,
             page_text,
-            page_text_setting: page_text_setting::AppliedSetting::restored(restored.setting),
+            page_text_setting: page_text_setting::AppliedSetting::restored(
+                restored.setting,
+                restored.resave,
+            ),
             revision: stored.revision,
             previous_shutdown: store.previous_shutdown(),
             destinations: stored_preferences.destinations,
@@ -1118,7 +1130,7 @@ impl Worker {
         self.page_text.retry_cleanup();
         self.report_page_text(events)?;
         self.survival.operation = SAVING_PAGE_TEXT_SETTING_AGAIN;
-        let resaved = self.page_text_setting.retry(store);
+        let resaved = self.page_text_setting.retry(store, &self.page_text);
         self.survival.result(resaved, events)?;
         // The store retains its daily due state; retries remain idle and bounded.
         self.survival.operation = "taking the daily backup";
@@ -1140,7 +1152,7 @@ impl Worker {
         }
         // The last chance to keep a page-text switch-off the database refused.
         self.survival.operation = SAVING_PAGE_TEXT_SETTING_AGAIN;
-        let resaved = self.page_text_setting.retry(store);
+        let resaved = self.page_text_setting.retry(store, &self.page_text);
         self.survival.result(resaved, events)?;
         // A title still held at exit most likely names the tab's current page.
         self.survival.operation = "saving page titles at shutdown";

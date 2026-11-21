@@ -410,16 +410,12 @@ fn a_repair_whose_index_opens_but_cannot_restart_empties_its_folder_and_starts_a
 
 // Holding a file so it cannot be read or deleted is a Windows behaviour.
 
-/// The index's segment files in name order, which is NTFS's listing order: not a `.tantivy-*`
-/// lock and not `*.json`. Linux lists in hash order, so an unsorted first file could be a
-/// `.pos`, whose loss Tantivy reports only at search time.
+/// The index's segment files: not a `.tantivy-*` lock and not `*.json`.
 fn segment_files(fixture: &Fixture) -> Vec<PathBuf> {
-    let mut files: Vec<PathBuf> = checked_io(fs::read_dir(index_folder(fixture)))
+    checked_io(fs::read_dir(index_folder(fixture)))
         .map(|entry| checked_io(entry).path())
         .filter(|path| is_segment_file(path))
-        .collect();
-    files.sort();
-    files
+        .collect()
 }
 
 fn is_segment_file(path: &Path) -> bool {
@@ -429,32 +425,45 @@ fn is_segment_file(path: &Path) -> bool {
     })
 }
 
+/// Every file kind a committed segment holds, one per component.
+const SEGMENT_FILE_KINDS: [&str; 6] = ["pos", "term", "store", "idx", "fast", "fieldnorm"];
+
 #[test]
 fn an_ordinary_start_empties_an_index_a_failed_empty_left_without_some_segment_files() {
-    let fixture = Fixture::new();
-    let now = utc_seconds().expect("synthetic clock");
-    seed_index(&fixture, &[page("leftover", now - 600), note("lost")]);
-    // A failed empty deletes in listing order and stops at the held file, leaving the
-    // metadata and the rest of the segment behind.
-    let segment = segment_files(&fixture);
-    let (deleted, kept) = segment
-        .split_first()
-        .expect("the synthetic index has a segment");
-    checked_io(fs::remove_file(deleted));
+    // A failed empty deletes in listing order and stops part-way, leaving the metadata and
+    // any of the segment's files behind: by name on Windows, in hash order on Linux (#240).
+    for kind in SEGMENT_FILE_KINDS {
+        let fixture = Fixture::new();
+        let now = utc_seconds().expect("synthetic clock");
+        seed_index(&fixture, &[page("leftover", now - 600), note("lost")]);
+        let segment = segment_files(&fixture);
+        let (deleted, kept): (Vec<_>, Vec<_>) = segment
+            .into_iter()
+            .partition(|file| file.extension().is_some_and(|found| found == kind));
+        assert_eq!(
+            deleted.len(),
+            1,
+            "the synthetic segment has one .{kind} file"
+        );
+        checked_io(fs::remove_file(&deleted[0]));
 
-    let lease = WindowsDirectoryLease::prepare(&fixture.0).expect("guard synthetic data");
-    let mut page_text = page_text::PageText::open(&lease);
-    let index = page_text.index().expect("a fresh index is open");
-    assert!(ids_in(index, Namespace::page()).is_empty());
-    assert!(ids_in(index, notes()).is_empty());
-    assert!(
-        kept.iter().all(|file| !file.exists()),
-        "the leftover segment was removed"
-    );
-    assert_eq!(page_text.take_problem(), Ok(()));
-    drop(page_text);
-    drop(lease);
-    fixture.cleanup();
+        let lease = WindowsDirectoryLease::prepare(&fixture.0).expect("guard synthetic data");
+        let mut page_text = page_text::PageText::open(&lease);
+        let index = page_text.index().expect("a fresh index is open");
+        assert!(
+            ids_in(index, Namespace::page()).is_empty(),
+            "without .{kind}"
+        );
+        assert!(ids_in(index, notes()).is_empty(), "without .{kind}");
+        assert!(
+            kept.iter().all(|file| !file.exists()),
+            "the leftover segment was removed without .{kind}"
+        );
+        assert_eq!(page_text.take_problem(), Ok(()), "without .{kind}");
+        drop(page_text);
+        drop(lease);
+        fixture.cleanup();
+    }
 }
 
 // Holding a file so it cannot be read or deleted is a Windows behaviour.
@@ -1147,5 +1156,181 @@ mod windows {
         checked_io(fs::remove_dir(index_folder(&fixture)));
         checked_io(fs::remove_dir(&target));
         fixture.cleanup();
+    }
+}
+
+/// The page-text setting the window is sent at start-up, before the first state.
+fn window_setting(
+    events: &mut UnboundedReceiver<SessionEvent>,
+) -> page_text_setting::RestoredSetting {
+    loop {
+        match next_any_event(events) {
+            SessionEvent::Preferences { settings, .. } => {
+                return PageTextSetting::restored(&settings);
+            }
+            SessionEvent::Usage { .. } => continue,
+            event => panic!("expected synthetic preferences, got {event:?}"),
+        }
+    }
+}
+
+/// Opens the fixture's database directly, outside a session.
+fn with_store<T>(fixture: &Fixture, action: impl FnOnce(&Store) -> T) -> T {
+    let lease =
+        Arc::new(WindowsDirectoryLease::prepare(&fixture.0).expect("guard synthetic store"));
+    let store = Store::open(lease).expect("open guarded synthetic store");
+    let result = action(&store);
+    store.shutdown().expect("close synthetic store");
+    result
+}
+
+/// Puts back the setting an older backup holds, as restoring it does: the database is
+/// replaced, and the kept copy beside it is not (#199).
+fn restore_older_setting(fixture: &Fixture, setting: &PageTextSetting) {
+    with_store(fixture, |store| {
+        store
+            .save_settings(setting.entries())
+            .expect("write the synthetic backup's setting");
+    });
+}
+
+/// The page-text setting the database holds.
+fn stored_setting(fixture: &Fixture) -> PageTextSetting {
+    let settings = with_store(fixture, |store| {
+        preferences::restore(store)
+            .expect("read synthetic preferences")
+            .settings
+    });
+    PageTextSetting::restored(&settings).setting
+}
+
+fn kept_copy(fixture: &Fixture) -> PathBuf {
+    fixture.0.join("syrinx.excluded-sites")
+}
+
+#[test]
+fn a_restored_backup_with_an_older_exclusion_list_keeps_the_newer_exclusion() {
+    let fixture = Fixture::new();
+    let now = utc_seconds().expect("synthetic clock");
+    let (handle, mut events) = fixture.start();
+    state(&mut events);
+    send(&handle, excluding(true, &["owner.test"]));
+    stop(handle, &mut events);
+    // The backup was taken while capture was on and before the site was excluded.
+    restore_older_setting(
+        &fixture,
+        &PageTextSetting {
+            on: true,
+            excluded: Vec::new(),
+        },
+    );
+    seed_index(
+        &fixture,
+        &[
+            page("https://www.owner.test/", now - 60),
+            page("https://other.test/", now - 60),
+        ],
+    );
+
+    let (handle, mut events) = fixture.start();
+    let shown = window_setting(&mut events);
+    state(&mut events);
+    stop(handle, &mut events);
+    // The window, which decides what is captured, still excludes the site.
+    assert!(shown.setting.on);
+    assert!(!shown.unreadable);
+    assert_eq!(shown.setting.excluded, ["owner.test"]);
+    assert_eq!(
+        stored_ids(&fixture, Namespace::page()).0,
+        ["https://other.test/"]
+    );
+    // The database takes the merged list back.
+    assert_eq!(stored_setting(&fixture).excluded, ["owner.test"]);
+    fixture.cleanup();
+}
+
+#[test]
+fn a_database_list_is_copied_beside_it_when_no_copy_is_kept_yet() {
+    let fixture = Fixture::new();
+    // As before the first start of a build that keeps a copy.
+    restore_older_setting(
+        &fixture,
+        &PageTextSetting {
+            on: true,
+            excluded: vec!["owner.test".to_owned()],
+        },
+    );
+    let (handle, mut events) = fixture.start();
+    assert_eq!(window_setting(&mut events).setting.excluded, ["owner.test"]);
+    state(&mut events);
+    stop(handle, &mut events);
+    assert_eq!(checked_io(fs::read(kept_copy(&fixture))), b"owner.test");
+    fixture.cleanup();
+}
+
+#[test]
+fn an_unreadable_kept_copy_keeps_capture_off_and_is_left_alone() {
+    let fixture = Fixture::new();
+    let now = utc_seconds().expect("synthetic clock");
+    let (handle, mut events) = fixture.start();
+    state(&mut events);
+    send(&handle, excluding(true, &["owner.test"]));
+    stop(handle, &mut events);
+    checked_io(fs::write(kept_copy(&fixture), b"owner.test not/a/site"));
+    seed_index(&fixture, &[page("https://other.test/", now - 60)]);
+
+    let (handle, mut events) = fixture.start();
+    let shown = window_setting(&mut events);
+    state(&mut events);
+    stop(handle, &mut events);
+    assert!(shown.unreadable);
+    assert!(!shown.setting.on);
+    // Capture was on and is off now, so what it kept is erased.
+    assert!(stored_ids(&fixture, Namespace::page()).0.is_empty());
+    assert_eq!(
+        checked_io(fs::read(kept_copy(&fixture))),
+        b"owner.test not/a/site"
+    );
+    fixture.cleanup();
+}
+
+#[test]
+fn a_kept_copy_that_cannot_be_saved_is_reported_and_the_session_goes_on() {
+    let fixture = Fixture::new();
+    let (handle, mut events) = fixture.start();
+    state(&mut events);
+    // A folder where the replacement is written makes every save of the copy fail.
+    let blocker = fixture.0.join("syrinx.excluded-sites.new");
+    checked_io(fs::create_dir(&blocker));
+    send(&handle, excluding(true, &["owner.test"]));
+    // Refused when applied and again at shutdown; neither stops the worker.
+    send(&handle, SessionCommand::Shutdown);
+    let mut refusals = 0;
+    loop {
+        match next_event(&mut events) {
+            SessionEvent::Failure {
+                error,
+                fatal: false,
+            } if refused_kept_copy(&error) => refusals += 1,
+            SessionEvent::Stopped => break,
+            event => panic!("expected the refused copy to be reported, got {event:?}"),
+        }
+    }
+    handle
+        .join()
+        .expect("join clean synthetic session shutdown");
+    assert_eq!(refusals, 2);
+    // The database still took the list.
+    checked_io(fs::remove_dir(&blocker));
+    assert_eq!(stored_setting(&fixture).excluded, ["owner.test"]);
+    fixture.cleanup();
+}
+
+/// Whether `error` is, or wraps, a refused save of the excluded sites' kept copy.
+fn refused_kept_copy(error: &SessionError) -> bool {
+    match error {
+        SessionError::ExcludedSites(_) => true,
+        SessionError::During { error, .. } => refused_kept_copy(error),
+        _ => false,
     }
 }

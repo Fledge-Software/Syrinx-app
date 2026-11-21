@@ -3,18 +3,22 @@
 use std::{fmt, fs};
 
 use syrinx_core::address_within_site;
-use syrinx_platform::{CacheFolder, WindowsDirectoryLease};
+use syrinx_platform::{CacheFolder, ExcludedSitesFile, WindowsDirectoryLease};
 use syrinx_search::fulltext::{
     Change, ClearRequest, ClearScope, FullText, FullTextDocument, FullTextError, Namespace,
 };
 use syrinx_store::deletion::{DeletionCategory, DeletionLog, DeletionRequest};
 use syrinx_store::{DirectoryLease, LocationError};
 
+use super::page_text_setting::KeptSites;
 use super::{SessionError, deletions, retention, stop};
 
 /// The index's folder beside the database. Backups copy only the database, so the index stays
 /// outside D13's snapshots as D40 requires.
 pub(super) const INDEX_FOLDER: &str = "fulltext";
+/// How often start-up tries to read the kept copy of the excluded sites, and the pause between.
+const KEPT_READ_ATTEMPTS: u32 = 3;
+const KEPT_READ_PAUSE: std::time::Duration = std::time::Duration::from_millis(100);
 
 /// The session's full-text index and when its page text next expires.
 ///
@@ -38,6 +42,9 @@ pub(super) struct PageText {
     fences: Vec<Fence>,
     /// The revision the last stored capture took, so a later one always replaces it.
     last_revision: u64,
+    /// The copy of the owner's excluded sites kept beside the database, outside its backups
+    /// (#199); the failure that refused it, when it could not be opened.
+    excluded_sites: Result<ExcludedSitesFile, LocationError>,
 }
 
 impl PageText {
@@ -58,7 +65,39 @@ impl PageText {
             problem,
             fences: Vec::new(),
             last_revision: 0,
+            excluded_sites: lease.excluded_sites_file(),
         }
+    }
+
+    /// The kept copy of the excluded sites, as start-up merges it with the database's list.
+    pub(super) fn kept_excluded_sites(&self) -> KeptSites {
+        let Ok(file) = &self.excluded_sites else {
+            return KeptSites::Unreadable;
+        };
+        // A scanner holding the file for a moment must not switch capture off and erase.
+        let mut read = file.read();
+        for _ in 1..KEPT_READ_ATTEMPTS {
+            if read.is_ok() {
+                break;
+            }
+            std::thread::sleep(KEPT_READ_PAUSE);
+            read = file.read();
+        }
+        match read {
+            Ok(None) => KeptSites::Absent,
+            Ok(Some(bytes)) => KeptSites::Read(bytes),
+            Err(_) => KeptSites::Unreadable,
+        }
+    }
+
+    /// Replaces the kept copy of the excluded sites with `sites`.
+    pub(super) fn save_excluded_sites(&self, sites: &[String]) -> Result<(), SessionError> {
+        let file = self
+            .excluded_sites
+            .as_ref()
+            .map_err(|error| SessionError::ExcludedSites(*error))?;
+        file.save(sites.join(" ").as_bytes())
+            .map_err(SessionError::ExcludedSites)
     }
 
     /// Removes all page text and restarts the index's count before a confirmed repair rebuilds

@@ -1,10 +1,23 @@
 # Wait for other builds before each fresh-process synthetic measurement.
 param(
     [string]$Label = 'p1-23-comparison',
-    [int]$QuietWaitMinutes = 10
+    [int]$QuietWaitMinutes = 10,
+    # Add 'adapter' to measure the production index (#53) against the same workload.
+    [string[]]$Engines = @('fts5', 'tantivy')
 )
 
 $ErrorActionPreference = 'Stop'
+# Accept a comma-joined list too, as `powershell -File` passes one string, and refuse an
+# unknown engine before any quiet-window wait.
+$engineList = @($Engines | ForEach-Object { $_ -split ',' } | ForEach-Object { $_.Trim() } |
+    Where-Object { $_ })
+if ($engineList.Count -eq 0) { throw 'Name at least one engine.' }
+foreach ($engineName in $engineList) {
+    if ($engineName -notin @('fts5', 'tantivy', 'adapter')) { throw "Unknown engine '$engineName'." }
+}
+if (@($engineList | Select-Object -Unique).Count -ne $engineList.Count) {
+    throw 'Name each engine once.'
+}
 $workspace = (Resolve-Path (Join-Path $PSScriptRoot '../..')).Path
 $executable = Join-Path $workspace 'target/local/fulltext-bench.exe'
 $loadLog = Join-Path $workspace "target/$Label-load.csv"
@@ -59,8 +72,9 @@ function Write-Load($eventName, $load) {
 # Alternate engine order by repetition; both corpora use the same seed and count.
 foreach ($corpus in @('overlap', 'broad')) {
     foreach ($run in 1..3) {
-        $engines = if ($run -eq 2) { @('tantivy', 'fts5') } else { @('fts5', 'tantivy') }
-        foreach ($engine in $engines) {
+        # Index into a new array: reversing in place would also reverse later runs' order.
+        $order = if ($run -eq 2) { $engineList[($engineList.Count - 1)..0] } else { $engineList }
+        foreach ($engine in $order) {
             $name = "$Label-$corpus-$engine-$run"
             $deadline = [DateTime]::UtcNow.AddMinutes($QuietWaitMinutes)
             do {

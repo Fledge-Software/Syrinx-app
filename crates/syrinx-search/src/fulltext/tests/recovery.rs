@@ -101,6 +101,11 @@ fn opening_finishes_a_cleanup_a_crash_interrupted() {
 
 #[test]
 fn an_index_whose_metadata_names_a_missing_segment_file_is_damaged() {
+    assert_eq!(
+        sorted(segment_extensions()),
+        ["fast", "fieldnorm", "idx", "pos", "store", "term"],
+        "every segment component is checked"
+    );
     // A failed empty can leave `meta.json` naming segment files it already deleted (#195);
     // calling that damage, not an I/O fault, lets the caller empty the folder again.
     for extension in segment_extensions() {
@@ -114,13 +119,44 @@ fn an_index_whose_metadata_names_a_missing_segment_file_is_damaged() {
             })
             .expect("the synthetic segment has this file");
         fs::remove_file(&missing).expect("delete one synthetic segment file");
-        let opened = FullText::open(&fixture.path).err();
-        // Tantivy reads a missing positions file as empty, so the index opens and still
-        // tracks the segment. A failed empty never leaves only it missing: it stops at the
-        // first failure, and the segment's `.fast` file lists before it.
-        let expected = (extension != "pos").then_some(FullTextError::Damaged);
-        assert_eq!(opened, expected, "a missing .{extension} file");
+        // Tantivy alone reads a missing positions file as empty; open checks for it (#240).
+        assert_eq!(
+            FullText::open(&fixture.path).err(),
+            Some(FullTextError::Damaged),
+            "a missing .{extension} file"
+        );
     }
+}
+
+#[test]
+fn an_index_missing_a_segment_s_deletions_file_is_damaged() {
+    let fixture = Fixture::new();
+    let mut index = fixture.open();
+    index
+        .stage(
+            &[
+                upsert(page_document("gone", 1, NOW, "gonesigil")),
+                upsert(page_document("kept", 1, NOW, "keptsigil")),
+            ],
+            NOW,
+        )
+        .expect("stage pages");
+    index.commit().expect("commit pages");
+    let key_field = index.fields.key;
+    drop(index);
+    // Only a segment with committed deletions has an alive set to lose.
+    let key = schema::key(&Namespace::page(), "gone");
+    commit_deletion_without_cleanup(&fixture, key_field, &key);
+    let deletions = segment_files(&fixture)
+        .into_iter()
+        .find(|file| file.extension().is_some_and(|found| found == "del"))
+        .expect("the synthetic segment has a deletions file");
+    fs::remove_file(&deletions).expect("delete the synthetic deletions file");
+
+    assert_eq!(
+        FullText::open(&fixture.path).err(),
+        Some(FullTextError::Damaged)
+    );
 }
 
 /// Commits one synthetic page, so the index holds exactly one segment.
@@ -130,6 +166,11 @@ fn commit_one_page(fixture: &Fixture) {
         .stage(&[upsert(page_document("kept", 1, NOW, "keptsigil"))], NOW)
         .expect("stage a page");
     index.commit().expect("commit a page");
+}
+
+fn sorted(mut extensions: Vec<String>) -> Vec<String> {
+    extensions.sort();
+    extensions
 }
 
 /// The extensions of one committed segment's files.
