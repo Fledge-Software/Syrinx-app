@@ -41,6 +41,26 @@ const FORBIDDEN: &[(&str, &str)] = &[
     ),
     ("ExecuteScript", "Syrinx never runs script in a page"),
     (
+        "addScriptToEvaluateOnNewDocument",
+        "a DevTools document-created script runs inside the page",
+    ),
+    (
+        "Runtime.evaluate",
+        "a DevTools evaluation runs script in the page",
+    ),
+    (
+        "Runtime.callFunctionOn",
+        "a DevTools call runs script in the page",
+    ),
+    (
+        "Fetch.enable",
+        "DevTools request interception is the middleman Google blocks",
+    ),
+    (
+        "--remote-debugging",
+        "a remote debugging port or pipe hands the page to another program",
+    ),
+    (
         "AddWebResourceRequestedFilter",
         "a request filter is the middleman Google blocks",
     ),
@@ -132,6 +152,20 @@ fn a_planted_call_is_reported() {
         found[0].starts_with("planted.rs: with_ipc_handler"),
         "{found:?}"
     );
+}
+
+#[test]
+fn a_devtools_script_filter_or_debugging_port_is_reported() {
+    let planted = [
+        r#"core.CallDevToolsProtocolMethod(w!("Page.addScriptToEvaluateOnNewDocument"), ..)"#,
+        r#"core.CallDevToolsProtocolMethod(w!("Runtime.evaluate"), ..)"#,
+        r#"core.CallDevToolsProtocolMethod(w!("Fetch.enable"), ..)"#,
+        r#"arguments.push("--remote-debugging-port=9222")"#,
+    ];
+    for text in planted {
+        let found = forbidden_calls(&[(PathBuf::from("planted.rs"), text.to_string())]);
+        assert_eq!(found.len(), 1, "{text}: {found:?}");
+    }
 }
 
 #[test]
