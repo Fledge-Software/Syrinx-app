@@ -9,7 +9,8 @@ use crate::ShutdownState;
 use crate::error::{StoreError, StoreOperation, database_error, with_cleanup};
 
 pub(crate) const APPLICATION_ID: i64 = 0x5359_5258;
-pub(crate) const SCHEMA_VERSION: i64 = 8;
+/// The schema version this build writes; a database with a higher `user_version` is refused.
+pub const SCHEMA_VERSION: i64 = 8;
 
 /// The record layout of a recognized Syrinx database, by `user_version`.
 /// Declared in version order, so later generations compare greater.

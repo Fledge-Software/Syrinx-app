@@ -1,7 +1,7 @@
 //! Exercises confirmed recovery and each interrupted move with disposable synthetic stores.
 
 use syrinx_core::{Activation, TabKind, TabMetadata, TabModel};
-use syrinx_store::{BackupOutcome, Store, deletion::DeletionCategory};
+use syrinx_store::{BackupOutcome, SCHEMA_VERSION, Store, deletion::DeletionCategory};
 
 use super::*;
 use crate::storage::{WindowsDirectoryLease, tests::Fixture};
@@ -139,22 +139,45 @@ fn corrupt_newest_candidate_falls_back_but_foreign_primary_never_does() {
     );
 }
 
-/// Marks a synthetic backup as written by a newer Syrinx (schema version 9, one past current).
+/// The tables of the version 1 schema (P1-03), the one fixed fact the flat-schema test needs.
+const FLAT_SCHEMA_TABLES: [&str; 3] = ["live_tabs", "saved_pages", "session_state"];
+
+/// Marks a synthetic backup as written by a newer Syrinx, one schema version past this build's.
 fn mark_newer_schema(path: &Path) {
+    let newer = u32::try_from(SCHEMA_VERSION + 1).expect("schema version fits SQLite's header");
     let mut bytes = fs::read(path).expect("read synthetic backup");
-    bytes[60..64].copy_from_slice(&9u32.to_be_bytes());
+    bytes[60..64].copy_from_slice(&newer.to_be_bytes());
     fs::write(path, &bytes).expect("mark synthetic backup as newer");
 }
 
 /// Rewrites a synthetic backup into the version 1 schema that predates saved folders.
 fn downgrade_to_flat_schema(path: &Path) {
     let connection = rusqlite::Connection::open(path).expect("open synthetic backup");
+    let mut downgrade = String::new();
+    for table in later_tables(&connection) {
+        downgrade.push_str(&format!("DROP TABLE \"{table}\"; "));
+    }
+    downgrade.push_str("PRAGMA user_version = 1;");
     connection
-        .execute_batch(
-            "DROP TABLE plugin_folder; DROP TABLE plugin_setting; DROP TABLE plugin_grant; DROP TABLE plugin_install; DROP TABLE site_zoom; DROP TABLE site_permissions; DROP TABLE history_deletion_state; DROP TABLE history_visits; DROP TABLE history_urls; DROP TABLE settings; DROP TABLE quick_destinations; DROP TABLE saved_layout; DROP TABLE saved_folder_state; DROP TABLE saved_folders; PRAGMA user_version = 1;",
-        )
+        .execute_batch(&downgrade)
         .expect("downgrade synthetic backup");
     assert!(connection.close().is_ok(), "close synthetic backup");
+}
+
+/// Lists every table the backup holds beyond the version 1 schema, as SQLite records them.
+fn later_tables(connection: &rusqlite::Connection) -> Vec<String> {
+    let mut query = connection
+        .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'")
+        .expect("prepare synthetic table list");
+    let tables = query
+        .query_map([], |row| row.get::<_, String>(0))
+        .expect("list synthetic tables")
+        .collect::<Result<Vec<_>, _>>()
+        .expect("read synthetic table names");
+    tables
+        .into_iter()
+        .filter(|table| !FLAT_SCHEMA_TABLES.contains(&table.as_str()))
+        .collect()
 }
 
 #[test]
@@ -201,7 +224,7 @@ fn flat_schema_backup_restores_and_the_next_open_migrates_it() {
     let version: i64 = connection
         .query_row("PRAGMA user_version", [], |row| row.get(0))
         .expect("read restored schema version");
-    assert_eq!(version, 8);
+    assert_eq!(version, SCHEMA_VERSION);
     assert!(
         connection.close().is_ok(),
         "close restored synthetic database"
