@@ -239,7 +239,7 @@ fn every_event_is_described_without_text_from_the_plugin_or_the_system() {
         stopped(StopReason::Uninstalled),
         stopped(StopReason::CapabilityRevoked(CapabilityKind::Storage)),
     ];
-    let lines = plugins::describe_all(events);
+    let lines = plugins::describe_all(&events);
     assert_eq!(
         lines,
         [
@@ -270,7 +270,7 @@ fn shutdown_hands_back_what_stopping_the_plugins_raised() {
         "the fixture is active"
     );
     assert_eq!(
-        plugins::describe_all(runtime.shutdown()),
+        plugins::describe_all(&runtime.shutdown()),
         vec!["Plugin test was deactivated: Syrinx is closing".to_owned()]
     );
     let store = Arc::try_unwrap(store).unwrap_or_else(|_| panic!("nothing else holds the store"));

@@ -38,7 +38,7 @@ pub(super) fn start(store: &Arc<Store>, state_dir: &Path) -> Result<OwnerRuntime
 /// the store, which nothing else holds any more, for the session to close.
 pub(super) fn close(plugins: Option<OwnerRuntime>, store: Arc<Store>) -> Result<(), StoreError> {
     if let Some(plugins) = plugins {
-        log_lines(describe_all(plugins.shutdown()));
+        log_lines(describe_all(&plugins.shutdown()));
     }
     match Arc::try_unwrap(store) {
         Ok(store) => store.shutdown(),
@@ -56,11 +56,11 @@ pub(super) fn report_events(plugins: Option<&OwnerRuntime>) {
 
 /// One diagnostic line for each event queued since the last look.
 pub(super) fn drain(plugins: &OwnerRuntime) -> Vec<String> {
-    describe_all(plugins.take_events())
+    describe_all(&plugins.take_events())
 }
 
 /// One diagnostic line for each of `events`, in the order they were queued.
-pub(super) fn describe_all(events: Vec<PluginEvent>) -> Vec<String> {
+pub(super) fn describe_all(events: &[PluginEvent]) -> Vec<String> {
     events.iter().map(describe).collect()
 }
 

@@ -167,7 +167,12 @@ fn shutdown_hands_back_every_event_still_queued() {
             .run_command("test.panic"))
         .is_err()
     );
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
     while !matches!(runtime.status("test"), Some(PluginStatus::Failed(_))) {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the trap is never shown"
+        );
         std::thread::sleep(std::time::Duration::from_millis(10));
     }
     assert_eq!(echo(&mut runtime, "test"), Ok(Ok(())));
