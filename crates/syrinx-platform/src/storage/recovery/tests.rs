@@ -139,35 +139,36 @@ fn corrupt_newest_candidate_falls_back_but_foreign_primary_never_does() {
     );
 }
 
-/// The tables of the version 1 schema (P1-03), the one fixed fact the flat-schema test needs.
+/// The tables of the version 1 schema (P1-03). Version 1 never changes and the store keeps its
+/// own copy private, so this is the one list written down; every later table is read from the file.
 const FLAT_SCHEMA_TABLES: [&str; 3] = ["live_tabs", "saved_pages", "session_state"];
 
 /// Marks a synthetic backup as written by a newer Syrinx, one schema version past this build's.
 fn mark_newer_schema(path: &Path) {
-    let newer = u32::try_from(SCHEMA_VERSION + 1).expect("schema version fits SQLite's header");
+    let newer = i32::try_from(SCHEMA_VERSION + 1).expect("schema version fits user_version");
     let mut bytes = fs::read(path).expect("read synthetic backup");
     bytes[60..64].copy_from_slice(&newer.to_be_bytes());
     fs::write(path, &bytes).expect("mark synthetic backup as newer");
 }
 
-/// Rewrites a synthetic backup into the version 1 schema that predates saved folders.
+/// Rewrites a synthetic backup into the version 1 schema by dropping every table added since.
 fn downgrade_to_flat_schema(path: &Path) {
     let connection = rusqlite::Connection::open(path).expect("open synthetic backup");
-    let mut downgrade = String::new();
-    for table in later_tables(&connection) {
-        downgrade.push_str(&format!("DROP TABLE \"{table}\"; "));
-    }
-    downgrade.push_str("PRAGMA user_version = 1;");
+    // The vendored SQLite enforces foreign keys by default; switch them off so drop order is free.
+    let downgrade = format!(
+        "PRAGMA foreign_keys = OFF; {} PRAGMA user_version = 1;",
+        later_table_drops(&connection)
+    );
     connection
         .execute_batch(&downgrade)
         .expect("downgrade synthetic backup");
     assert!(connection.close().is_ok(), "close synthetic backup");
 }
 
-/// Lists every table the backup holds beyond the version 1 schema, as SQLite records them.
-fn later_tables(connection: &rusqlite::Connection) -> Vec<String> {
+/// Builds one `DROP TABLE` per table the backup holds beyond the version 1 schema.
+fn later_table_drops(connection: &rusqlite::Connection) -> String {
     let mut query = connection
-        .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'")
+        .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT GLOB 'sqlite_*'")
         .expect("prepare synthetic table list");
     let tables = query
         .query_map([], |row| row.get::<_, String>(0))
@@ -175,8 +176,9 @@ fn later_tables(connection: &rusqlite::Connection) -> Vec<String> {
         .collect::<Result<Vec<_>, _>>()
         .expect("read synthetic table names");
     tables
-        .into_iter()
+        .iter()
         .filter(|table| !FLAT_SCHEMA_TABLES.contains(&table.as_str()))
+        .map(|table| format!("DROP TABLE \"{table}\";"))
         .collect()
 }
 
