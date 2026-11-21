@@ -93,10 +93,10 @@ them again requires the owner's approval.
   the search and then recommendations, past searches etc", in "a neutral
   color that matches the theme the user makes/uses". The rest is the
   building agent's reading, recorded in `docs/decisions.md` for the owner to
-  correct: it replaces the canvas's 880 by 560 panel with a preview pane and
-  a footer; the bar is 640 wide, with a "⌕" search mark at its left end; the
-  popup is as tall as what it lists; and the scope chips are hidden until
-  Tab is pressed; whether they stay is the owner's to decide (#265,
+  correct: it replaces the canvas's 880 by 560 panel, which had a preview
+  pane and a footer; the bar is 640 wide, with a "⌕" search mark at its left
+  end; the popup is as tall as what it lists; and the scope chips are hidden
+  until Tab is pressed; whether they stay is the owner's to decide (#265,
   question 1).
 - **Each installed plugin's feeds get their own palette scope chip** (owner,
   2026-10-21, research note 10's decision 8), for example "Notes", shown only

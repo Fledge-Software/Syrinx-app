@@ -33,6 +33,9 @@ use crate::{acceptance::PresentProbe, session::SessionError, text_field, theme, 
 
 actions!(palette, [Dismiss, NextResult, PreviousResult, SearchWeb]);
 
+/// The status line once the browser has stopped listening to the entry's channel.
+const BROWSER_GONE: &str = "The browser window is no longer available.";
+
 pub enum PaletteEvent {
     Query {
         request_id: u64,
@@ -206,7 +209,8 @@ impl PaletteView {
     }
 
     /// Redraws after a change to what is drawn, asking the browser to refit the popup first
-    /// when its height changed. Every such change goes through here (#265).
+    /// when its height changed. Every such change goes through here (#265), except `query`,
+    /// `refresh` and `choose_chip`: they only notify, because their reply refits the popup.
     fn redraw(&mut self, cx: &mut Context<Self>) {
         self.announce_height();
         cx.notify();
@@ -214,8 +218,8 @@ impl PaletteView {
 
     /// Asks the browser to refit the popup when what is drawn changed its height.
     fn announce_height(&mut self) {
-        if self.fitted.changed_to(self.wanted_height()) {
-            self.emit(PaletteEvent::Resized);
+        if self.fitted.changed_to(self.wanted_height()) && !self.emit(PaletteEvent::Resized) {
+            self.choices.status = BROWSER_GONE.to_owned();
         }
     }
 
@@ -254,7 +258,7 @@ impl PaletteView {
     /// Reports how an open entry ended, then hides the popup.
     fn end_entry(&mut self, event: PaletteEvent, window: &mut Window, cx: &mut Context<Self>) {
         if self.is_open() {
-            self.emit(event);
+            self.send(event, cx);
         }
         self.close(window, cx);
     }
@@ -303,7 +307,7 @@ impl PaletteView {
             .choices
             .query_scoped(&input, self.view.accepts_address());
         self.probe_query(request_id);
-        self.send_query(request_id, parsed.text, parsed.prefix.is_some());
+        self.send_query(request_id, parsed.text, parsed.prefix.is_some(), cx);
         cx.notify();
     }
 
@@ -317,12 +321,12 @@ impl PaletteView {
         let parsed = ParsedQuery::parse(&input);
         let request_id = self.choices.refresh();
         self.probe_query(request_id);
-        self.send_query(request_id, parsed.text, parsed.prefix.is_some());
+        self.send_query(request_id, parsed.text, parsed.prefix.is_some(), cx);
         cx.notify();
     }
 
     /// Stages this request's commands, then asks the worker for its page rows and counts.
-    fn send_query(&mut self, request_id: u64, text: &str, prefixed: bool) {
+    fn send_query(&mut self, request_id: u64, text: &str, prefixed: bool, cx: &mut Context<Self>) {
         let matches = match self.commands.matches(text, self.view, self.context) {
             Ok(matches) => matches,
             Err(error) => {
@@ -333,11 +337,12 @@ impl PaletteView {
         };
         self.choices
             .stage_commands(matches, !text.is_empty(), prefixed);
-        self.emit(PaletteEvent::Query {
+        let query = PaletteEvent::Query {
             request_id,
             text: text.to_owned(),
             scope: self.view.search_scope(),
-        });
+        };
+        self.send(query, cx);
     }
 
     /// Shows the current request's rows, then applies an Enter that was waiting for them.
@@ -399,16 +404,21 @@ impl PaletteView {
         self.choices.answered()
     }
 
-    fn emit(&mut self, event: PaletteEvent) {
+    /// Sends `event` on the open entry's channel; false only when the browser stopped listening.
+    fn emit(&self, event: PaletteEvent) -> bool {
         let Some(events) = &self.events else {
-            return;
+            return true;
         };
-        if events.unbounded_send(event).is_err() {
-            self.choices.status = "The browser window is no longer available.".to_owned();
-            // No context here; each caller redraws. A failed Resized ends after one retry,
-            // since the status line is then already counted.
-            self.announce_height();
+        events.unbounded_send(event).is_ok()
+    }
+
+    /// Sends `event`, and says so under the rows when the browser stopped listening.
+    fn send(&mut self, event: PaletteEvent, cx: &mut Context<Self>) {
+        if self.emit(event) {
+            return;
         }
+        self.choices.status = BROWSER_GONE.to_owned();
+        self.redraw(cx);
     }
 
     fn submit(&mut self, force_search: bool, window: &mut Window, cx: &mut Context<Self>) {
@@ -437,7 +447,7 @@ impl PaletteView {
             }
             event => event,
         };
-        self.emit(event);
+        self.send(event, cx);
         self.close(window, cx);
     }
 
@@ -576,41 +586,41 @@ impl Render for PaletteView {
             )
             .on_action(cx.listener(|this, _: &SearchWeb, window, cx| this.submit(true, window, cx)))
             // The popup queues browser actions without replacing its focused input or results.
-            .on_action(cx.listener(|this, _: &ui::NewTab, _, _| {
-                this.emit(PaletteEvent::Shortcut(BrowserShortcut::NewTab));
+            .on_action(cx.listener(|this, _: &ui::NewTab, _, cx| {
+                this.send(PaletteEvent::Shortcut(BrowserShortcut::NewTab), cx);
             }))
-            .on_action(cx.listener(|this, _: &ui::CloseTab, _, _| {
-                this.emit(PaletteEvent::Shortcut(BrowserShortcut::CloseTab));
+            .on_action(cx.listener(|this, _: &ui::CloseTab, _, cx| {
+                this.send(PaletteEvent::Shortcut(BrowserShortcut::CloseTab), cx);
             }))
-            .on_action(cx.listener(|this, _: &ui::Address, _, _| {
-                this.emit(PaletteEvent::Shortcut(BrowserShortcut::Address));
+            .on_action(cx.listener(|this, _: &ui::Address, _, cx| {
+                this.send(PaletteEvent::Shortcut(BrowserShortcut::Address), cx);
             }))
-            .on_action(cx.listener(|this, _: &ui::Palette, _, _| {
-                this.emit(PaletteEvent::Shortcut(BrowserShortcut::Palette));
+            .on_action(cx.listener(|this, _: &ui::Palette, _, cx| {
+                this.send(PaletteEvent::Shortcut(BrowserShortcut::Palette), cx);
             }))
-            .on_action(cx.listener(|this, _: &ui::NextTab, _, _| {
-                this.emit(PaletteEvent::Shortcut(BrowserShortcut::NextTab));
+            .on_action(cx.listener(|this, _: &ui::NextTab, _, cx| {
+                this.send(PaletteEvent::Shortcut(BrowserShortcut::NextTab), cx);
             }))
-            .on_action(cx.listener(|this, _: &ui::PreviousTab, _, _| {
-                this.emit(PaletteEvent::Shortcut(BrowserShortcut::PreviousTab));
+            .on_action(cx.listener(|this, _: &ui::PreviousTab, _, cx| {
+                this.send(PaletteEvent::Shortcut(BrowserShortcut::PreviousTab), cx);
             }))
-            .on_action(cx.listener(|this, _: &ui::ReopenTab, _, _| {
-                this.emit(PaletteEvent::Shortcut(BrowserShortcut::ReopenTab));
+            .on_action(cx.listener(|this, _: &ui::ReopenTab, _, cx| {
+                this.send(PaletteEvent::Shortcut(BrowserShortcut::ReopenTab), cx);
             }))
-            .on_action(cx.listener(|this, _: &ui::SavePage, _, _| {
-                this.emit(PaletteEvent::Shortcut(BrowserShortcut::SavePage));
+            .on_action(cx.listener(|this, _: &ui::SavePage, _, cx| {
+                this.send(PaletteEvent::Shortcut(BrowserShortcut::SavePage), cx);
             }))
-            .on_action(cx.listener(|this, _: &ui::Back, _, _| {
-                this.emit(PaletteEvent::Shortcut(BrowserShortcut::Back));
+            .on_action(cx.listener(|this, _: &ui::Back, _, cx| {
+                this.send(PaletteEvent::Shortcut(BrowserShortcut::Back), cx);
             }))
-            .on_action(cx.listener(|this, _: &ui::Forward, _, _| {
-                this.emit(PaletteEvent::Shortcut(BrowserShortcut::Forward));
+            .on_action(cx.listener(|this, _: &ui::Forward, _, cx| {
+                this.send(PaletteEvent::Shortcut(BrowserShortcut::Forward), cx);
             }))
-            .on_action(cx.listener(|this, _: &ui::ToggleSidebar, _, _| {
-                this.emit(PaletteEvent::Shortcut(BrowserShortcut::ToggleSidebar));
+            .on_action(cx.listener(|this, _: &ui::ToggleSidebar, _, cx| {
+                this.send(PaletteEvent::Shortcut(BrowserShortcut::ToggleSidebar), cx);
             }))
-            .on_action(cx.listener(|this, _: &ui::Reload, _, _| {
-                this.emit(PaletteEvent::Shortcut(BrowserShortcut::Reload));
+            .on_action(cx.listener(|this, _: &ui::Reload, _, cx| {
+                this.send(PaletteEvent::Shortcut(BrowserShortcut::Reload), cx);
             }))
             // The first Tab shows the scope chips; the next one moves to them.
             .on_action(cx.listener(|this, _: &ui::FocusNextControl, window, cx| {
