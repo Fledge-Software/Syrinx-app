@@ -151,6 +151,13 @@ struct Running {
     events: Receiver<PluginEvent>,
 }
 
+impl Running {
+    /// Every event the workers queued since the last look.
+    fn take_events(&self) -> Vec<PluginEvent> {
+        self.events.try_iter().collect()
+    }
+}
+
 /// Every installed plugin and the owner's grants, as one Syrinx session holds them.
 pub struct OwnerRuntime {
     store: Arc<Store>,
@@ -345,7 +352,7 @@ impl OwnerRuntime {
     pub fn take_events(&self) -> Vec<PluginEvent> {
         self.running
             .as_ref()
-            .map(|running| running.events.try_iter().collect())
+            .map(Running::take_events)
             .unwrap_or_default()
     }
 
@@ -355,8 +362,9 @@ impl OwnerRuntime {
         let Some(running) = self.running.take() else {
             return Vec::new();
         };
-        running.plugins.shutdown();
-        running.events.try_iter().collect()
+        let Running { plugins, events } = running;
+        plugins.shutdown();
+        events.try_iter().collect()
     }
 
     /// The plugin as loaded this session; otherwise whether the store knows it at all.

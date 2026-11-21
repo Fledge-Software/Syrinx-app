@@ -1,16 +1,20 @@
 //! Proves the session starts the plugin runtime from its own store at start-up (#136), that a
 //! grant it cannot read never stops browsing, and that the test plugin runs through the
 //! session's own route: activation, a command, a view opened and closed, and shutdown; and that
-//! the workers' events are reported once, on the idle tick and at close (#268).
+//! the workers' events are reported once, without plugin text, as the loop wakes and at close
+//! (#268).
 
 use syrinx_core::CommandRegistry;
+use syrinx_plugin_host::bindings::syrinx::plugin::types::Outcome;
 use syrinx_plugin_host::bindings::syrinx::plugin::types::PluginError;
+use syrinx_plugin_host::deadline::Export;
 use syrinx_plugin_host::manifest::{
     CapabilityKind, DiscoveryOptions, MANIFEST_FILE, PluginManifest,
 };
 use syrinx_plugin_host::owner::{OwnerError, OwnerRuntime};
 use syrinx_plugin_host::session::CallResult;
-use syrinx_plugin_host::worker::PluginStatus;
+use syrinx_plugin_host::worker::{PluginEvent, PluginStatus, StopReason};
+use syrinx_plugin_host::{Failure, HostError};
 use syrinx_plugin_host::{PluginRegistry, SignedIdentity, check_signed};
 use syrinx_store::{PluginInstall, PluginState};
 
@@ -63,18 +67,8 @@ fn install_record() -> PluginInstall {
 #[test]
 fn the_test_plugin_runs_through_the_sessions_own_route() {
     let fixture = Fixture::new();
-    create_database(&fixture);
-    let lease = WindowsDirectoryLease::prepare(&fixture.0).expect("the synthetic folder");
-    let store = Arc::new(Store::open(Arc::new(lease)).expect("the synthetic store"));
-    let mut runtime = plugins::start(&store, &fixture.0).expect("the runtime starts");
-    let mut registry = PluginRegistry::new();
-    let registered = registered_fixture(&mut registry);
-    runtime
-        .install(registered, Arc::from(full_component()), install_record())
-        .expect("installed");
-    runtime
-        .grant("test", CapabilityKind::Storage, 20)
-        .expect("granted");
+    let (lease, store) = synthetic_store(&fixture);
+    let mut runtime = installed_runtime(&store, &fixture);
 
     let wait = Duration::from_secs(60);
     let ran = runtime
@@ -99,6 +93,7 @@ fn the_test_plugin_runs_through_the_sessions_own_route() {
         Ok(Some(b"hello".to_vec()))
     );
     assert_eq!(plugins::close(Some(runtime), store), Ok(()));
+    drop(lease);
     fixture.cleanup();
 }
 
@@ -134,8 +129,9 @@ fn run(runtime: &mut OwnerRuntime, command: &'static str) -> CallResult<Result<(
         .expect("answered")
 }
 
-/// Make the fixture trap, wait until the host shows it failed, then use it again: the new
-/// worker joins the trapped one before it activates, so the trap's event is queued by then.
+/// Make the fixture trap, wait until the host shows it failed, then use it again. The new
+/// worker joins the trapped one before it activates (the host's `wait_for_predecessor`), so
+/// once this returns the trap's event is queued and nothing has taken it.
 fn trap_and_restart(runtime: &mut OwnerRuntime) {
     assert!(run(runtime, "test.panic").is_err(), "the panic traps");
     let deadline = Instant::now() + Duration::from_secs(60);
@@ -169,28 +165,99 @@ fn a_trap_is_reported_once_and_the_next_drain_is_empty() {
 }
 
 #[test]
-fn the_idle_tick_empties_the_plugin_queue() {
+fn the_session_loop_empties_the_plugin_queue_as_it_wakes() {
     let fixture = Fixture::new();
     let (lease, store) = synthetic_store(&fixture);
     let mut runtime = installed_runtime(&store, &fixture);
     trap_and_restart(&mut runtime);
+    assert_eq!(
+        runtime.status("test"),
+        Some(PluginStatus::Active),
+        "restarted"
+    );
     let journal = DeletionJournal::open(&lease).expect("open synthetic journal");
     let page_text = page_text::PageText::open(&lease);
     let mut worker = Worker::restore(&store, journal, page_text).expect("restore synthetic worker");
     worker.plugins = Some(runtime);
+    // One ordinary command, then the window goes away: the real loop wakes for each.
+    let (commands, receiver) = mpsc::channel();
+    commands
+        .send(SessionCommand::NewTab {
+            address: "about:blank".to_owned(),
+        })
+        .expect("queue a synthetic command");
+    drop(commands);
     let (sender, _events) = unbounded();
-    // The same branch the idle timer runs, without waiting for it.
-    worker.idle(&store, &sender).expect("the idle tick");
+    let (mut usage, _) =
+        UsageCollector::load(Arc::default(), &fixture.0, local_today(), Instant::now());
+    assert_eq!(worker.serve(&store, receiver, &sender, &mut usage), Ok(()));
     let runtime = worker.plugins.take().expect("the worker keeps the runtime");
-    // The same steps reported one trap above; the tick has already taken it.
     assert!(
         plugins::drain(&runtime).is_empty(),
-        "the tick drained the queue"
+        "the loop took the queued trap"
     );
     drop(worker);
     assert_eq!(plugins::close(Some(runtime), store), Ok(()));
     drop(lease);
     fixture.cleanup();
+}
+
+/// Text only a plugin, a service or the system could have written, which no line may carry.
+const SENTINEL: &str = "/home/owner.invalid/secret-7f3a";
+
+#[test]
+fn every_event_is_described_without_text_from_the_plugin_or_the_system() {
+    let plugin = || "test".to_owned();
+    let refused = || PluginError::Internal(SENTINEL.to_owned());
+    let failed = |failure| PluginEvent::Failed {
+        plugin: plugin(),
+        failure,
+    };
+    let settled = |outcome| PluginEvent::Outcome {
+        plugin: plugin(),
+        request: 7,
+        outcome,
+    };
+    let stopped = |reason| PluginEvent::Deactivated {
+        plugin: plugin(),
+        reason,
+    };
+    let events = vec![
+        settled(Outcome::Done(Some(SENTINEL.to_owned()))),
+        settled(Outcome::Failed(refused())),
+        settled(Outcome::Uncertain(SENTINEL.to_owned())),
+        failed(Failure::DeadlineExpired(Export::Run)),
+        failed(Failure::Trapped {
+            export: Export::Activate,
+            code: None,
+        }),
+        failed(Failure::Flooded),
+        failed(Failure::OverBudget),
+        failed(Failure::Load(HostError::Unavailable(SENTINEL.to_owned()))),
+        failed(Failure::ActivationRefused(refused())),
+        stopped(StopReason::Shutdown),
+        stopped(StopReason::Uninstalled),
+        stopped(StopReason::CapabilityRevoked(CapabilityKind::Storage)),
+    ];
+    let lines = plugins::describe_all(events);
+    assert_eq!(
+        lines,
+        [
+            "Plugin test: write 7 was settled by the host as done",
+            "Plugin test: write 7 was settled by the host as failed",
+            "Plugin test: write 7 was settled by the host as uncertain",
+            "Plugin test stopped: commands.run ran past its deadline",
+            "Plugin test stopped: lifecycle.activate trapped",
+            "Plugin test stopped: it kept queueing deferred calls",
+            "Plugin test stopped: one call and its deferred calls took too long",
+            "Plugin test stopped: it could not be compiled, linked or started",
+            "Plugin test stopped: it refused to activate",
+            "Plugin test was deactivated: Syrinx is closing",
+            "Plugin test was deactivated: the plugin was uninstalled",
+            "Plugin test was deactivated: the required storage capability was revoked",
+        ]
+    );
+    assert!(lines.iter().all(|line| !line.contains("secret-7f3a")));
 }
 
 #[test]

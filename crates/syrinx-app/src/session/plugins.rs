@@ -10,7 +10,7 @@ use syrinx_plugin_host::Failure;
 use syrinx_plugin_host::bindings::syrinx::plugin::types::Outcome;
 use syrinx_plugin_host::grants::{DenyList, Protected};
 use syrinx_plugin_host::owner::{OwnerError, OwnerRuntime};
-use syrinx_plugin_host::worker::{PluginEvent, StopReason};
+use syrinx_plugin_host::worker::PluginEvent;
 use syrinx_store::{Store, StoreError};
 
 /// Environment variables naming system folders no plugin may be granted, by kind. A
@@ -59,6 +59,7 @@ pub(super) fn drain(plugins: &OwnerRuntime) -> Vec<String> {
     describe_all(plugins.take_events())
 }
 
+/// One diagnostic line for each of `events`, in the order they were queued.
 pub(super) fn describe_all(events: Vec<PluginEvent>) -> Vec<String> {
     events.iter().map(describe).collect()
 }
@@ -87,11 +88,13 @@ fn describe(event: &PluginEvent) -> String {
             format!("Plugin {plugin} stopped: {}", failure_kind(failure))
         }
         PluginEvent::Deactivated { plugin, reason } => {
-            format!("Plugin {plugin} was deactivated: {}", stop_kind(reason))
+            // Every reason's text is the host's own.
+            format!("Plugin {plugin} was deactivated: {reason}")
         }
     }
 }
 
+/// How the host settled a write, without the plugin's or service's text.
 fn outcome_kind(outcome: &Outcome) -> &'static str {
     match outcome {
         Outcome::Done(_) => "done",
@@ -100,6 +103,7 @@ fn outcome_kind(outcome: &Outcome) -> &'static str {
     }
 }
 
+/// Why a plugin stopped, without the plugin's or the system's text.
 fn failure_kind(failure: &Failure) -> String {
     match failure {
         Failure::DeadlineExpired(export) => format!("{} ran past its deadline", export.name()),
@@ -108,16 +112,6 @@ fn failure_kind(failure: &Failure) -> String {
         Failure::OverBudget => "one call and its deferred calls took too long".to_owned(),
         Failure::Load(_) => "it could not be compiled, linked or started".to_owned(),
         Failure::ActivationRefused(_) => "it refused to activate".to_owned(),
-    }
-}
-
-fn stop_kind(reason: &StopReason) -> String {
-    match reason {
-        StopReason::Shutdown => "Syrinx is closing".to_owned(),
-        StopReason::Uninstalled => "it was uninstalled".to_owned(),
-        StopReason::CapabilityRevoked(kind) => {
-            format!("the owner revoked its required {} capability", kind.name())
-        }
     }
 }
 
