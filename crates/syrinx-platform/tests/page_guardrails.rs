@@ -159,6 +159,7 @@ fn a_devtools_script_filter_or_debugging_port_is_reported() {
     let planted = [
         r#"core.CallDevToolsProtocolMethod(w!("Page.addScriptToEvaluateOnNewDocument"), ..)"#,
         r#"core.CallDevToolsProtocolMethod(w!("Runtime.evaluate"), ..)"#,
+        r#"core.CallDevToolsProtocolMethod(w!("Runtime.callFunctionOn"), ..)"#,
         r#"core.CallDevToolsProtocolMethod(w!("Fetch.enable"), ..)"#,
         r#"arguments.push("--remote-debugging-port=9222")"#,
     ];
