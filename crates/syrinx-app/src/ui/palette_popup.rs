@@ -20,8 +20,8 @@ use crate::palette::{PaletteEntry, PaletteNative};
 
 /// The palette is a bar 640 wide, 72 below the window's top edge, as tall as what it lists (#265).
 const PALETTE_WIDTH: f32 = 640.;
-/// The hidden popup's first size: about the bar alone. Each showing sets the real height.
-const PALETTE_RESTING_HEIGHT: f32 = 54.;
+/// The hidden popup's first size: the bar alone. Each showing sets the real height.
+const PALETTE_RESTING_HEIGHT: f32 = crate::palette::BAR_ONLY_HEIGHT;
 const PALETTE_TOP: f32 = 72.;
 /// Narrower windows shrink the palette to this, keeping a 24-pixel margin each side.
 const PALETTE_MIN_WIDTH: f32 = 320.;
@@ -147,7 +147,7 @@ impl BrowserView {
                 view.fit_palette(window, cx);
             });
             if fitted.is_err() {
-                eprintln!("The palette was shown after its browser was removed.");
+                eprintln!("The shown palette could not be fitted: its browser was removed.");
             }
         })
         .detach();

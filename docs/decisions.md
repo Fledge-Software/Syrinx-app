@@ -21,15 +21,16 @@ entry names it.
 
 - **The palette is a slim bar with suggestions under it, in the theme's own
   colour (owner's own request, 2026-11-20; #265).** The owner opened the
-  palette on Linux with two tabs open and wrote: "I dont want the search to
-  look this bulky. Its sloppy and distracts. I want the bar to show up in a
+  palette on Linux (#265 records two open tabs) and wrote: "I dont want
+  the search to look this bulky. Its sloppy and distracts. I want the bar to show up in a
   neutral color that matches the theme the user makes/uses. Just a bar for
   the search and then recommendations, past searches etc". Only the quoted
   words are the owner's; the rest is recorded by the agent that built it,
   and the owner may correct it.
   - **What changes, as recorded.** The palette opens as one query bar, 640
     wide, and the popup is only as tall as the bar and the rows under it,
-    up to a maximum past which the rows scroll. The bordered field, the Esc
+    up to a maximum past which the rows scroll; a "⌕" search mark sits at the
+    bar's left end. The bordered field, the Esc
     hint, the preview pane and the footer are gone. A problem or a wait
     (a refused address, a failed search, "Waiting for local results…")
     shows in one line under the rows; "Searching locally…" and the tab and

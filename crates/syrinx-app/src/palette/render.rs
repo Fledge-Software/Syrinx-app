@@ -21,8 +21,12 @@ use crate::controls::control;
 use crate::text_field;
 use crate::theme::{self, rgba};
 
+/// The panel's `border_1`, top and bottom.
+pub(super) const PANEL_BORDERS: f32 = 2.;
 /// The query bar, which is all an empty palette shows.
-const BAR_HEIGHT: f32 = 52.;
+pub(super) const BAR_HEIGHT: f32 = 52.;
+/// The list's `border_t_1` under the bar.
+const LIST_DIVIDER: f32 = 1.;
 const ROW_HEIGHT: f32 = 36.;
 const ROW_GAP: f32 = 2.;
 const HEADER_HEIGHT: f32 = 28.;
@@ -31,25 +35,26 @@ const HEADER_MARGIN: f32 = 4.;
 const LIST_PADDING: f32 = 6.;
 /// The rows scroll past this, so a long list cannot grow the popup without limit.
 const LIST_MAX_HEIGHT: f32 = 372.;
-/// Room for the two-line "No plugins yet" message.
-const EMPTY_STATE_HEIGHT: f32 = 96.;
+/// The fixed height of the two-line "No plugins yet" message.
+const EMPTY_STATE_HEIGHT: f32 = 84.;
 const CHIP_HEIGHT: f32 = 26.;
-/// The chip row's `pb_3`.
+/// The padding under the chip row.
 const CHIP_ROW_PADDING: f32 = 12.;
 const NOTICE_HEIGHT: f32 = 30.;
 const TRAILING_WIDTH: f32 = 180.;
 
-/// The popup height that fits what `view` draws, borders and dividers included.
-pub(super) fn height(view: &PaletteView) -> f32 {
-    let mut height = 2. + BAR_HEIGHT;
-    if view.scopes_shown {
+/// The popup height that fits what is drawn for `choices` in `view`, borders and dividers
+/// included; `scopes_shown` adds the chip row.
+pub(super) fn height(scopes_shown: bool, choices: &PaletteChoices, view: View) -> f32 {
+    let mut height = PANEL_BORDERS + BAR_HEIGHT;
+    if scopes_shown {
         height += CHIP_HEIGHT + CHIP_ROW_PADDING;
     }
-    let list = list_height(&view.choices, empty_message(view.view).is_some());
+    let list = list_height(choices, empty_message(view).is_some());
     if list > 0. {
-        height += 1. + list.min(LIST_MAX_HEIGHT);
+        height += LIST_DIVIDER + list.min(LIST_MAX_HEIGHT);
     }
-    if !view.choices.status.is_empty() {
+    if !choices.status.is_empty() {
         height += NOTICE_HEIGHT;
     }
     height
@@ -60,14 +65,12 @@ fn list_height(choices: &PaletteChoices, explains_empty: bool) -> f32 {
     let rows = choices.row_count();
     if rows == 0 {
         return if explains_empty {
-            EMPTY_STATE_HEIGHT
+            2. * LIST_PADDING + EMPTY_STATE_HEIGHT
         } else {
             0.
         };
     }
-    let headers = (0..choices.results.len())
-        .filter(|&index| starts_section(&choices.results, index))
-        .count();
+    let headers = section_headers(&choices.results, choices.results.len());
     let gaps = (rows + headers - 1) as f32 * ROW_GAP;
     2. * LIST_PADDING
         + rows as f32 * ROW_HEIGHT
@@ -107,10 +110,15 @@ pub(super) fn child_index(choices: &PaletteChoices, row: usize) -> usize {
     let Some(hit_index) = row.checked_sub(lead_rows) else {
         return row;
     };
-    let headers = (0..=hit_index.min(choices.results.len().saturating_sub(1)))
-        .filter(|&index| starts_section(&choices.results, index))
-        .count();
+    let headers = section_headers(&choices.results, (hit_index + 1).min(choices.results.len()));
     lead_rows + hit_index + headers
+}
+
+/// How many section headers are drawn among the first `count` hits.
+fn section_headers(hits: &[SearchHit], count: usize) -> usize {
+    (0..count)
+        .filter(|&index| starts_section(hits, index))
+        .count()
 }
 
 fn starts_section(hits: &[SearchHit], index: usize) -> bool {
@@ -123,7 +131,12 @@ fn starts_section(hits: &[SearchHit], index: usize) -> bool {
 pub(super) fn chips(view: &PaletteView, cx: &mut Context<PaletteView>) -> Div {
     let tokens = theme::current();
     let selected_chip = view.view.chip();
-    let mut row = div().px_4().pb_3().flex().items_center().gap_2();
+    let mut row = div()
+        .px_4()
+        .pb(px(CHIP_ROW_PADDING))
+        .flex()
+        .items_center()
+        .gap_2();
     for (index, chip) in Chip::ALL.into_iter().enumerate() {
         let selected = selected_chip == Some(chip);
         let count = view.choices.counts.get(chip);
@@ -447,10 +460,12 @@ fn empty_state(view: View) -> Option<Div> {
     let tokens = theme::current();
     Some(
         div()
+            .h(px(EMPTY_STATE_HEIGHT))
+            .flex_shrink_0()
             .px(px(10.))
-            .py_4()
             .flex()
             .flex_col()
+            .justify_center()
             .gap_1()
             .child(div().text_color(rgba(tokens.text_strong)).child(title))
             .child(
@@ -521,6 +536,29 @@ mod tests {
     }
 
     #[test]
+    fn the_popup_is_the_bar_plus_its_chips_list_and_status_line() {
+        let mut choices = PaletteChoices::default();
+        let bar = PANEL_BORDERS + BAR_HEIGHT;
+        assert_eq!(height(false, &choices, View::Everything), bar);
+        assert_eq!(
+            height(true, &choices, View::Everything),
+            bar + CHIP_HEIGHT + CHIP_ROW_PADDING,
+            "Tab's chip row"
+        );
+        assert_eq!(
+            height(false, &choices, View::PluginActions),
+            bar + LIST_DIVIDER + 2. * LIST_PADDING + EMPTY_STATE_HEIGHT,
+            "an empty view that explains itself"
+        );
+        choices.status = "Synthetic problem".to_owned();
+        assert_eq!(
+            height(false, &choices, View::Everything),
+            bar + NOTICE_HEIGHT,
+            "a status line"
+        );
+    }
+
+    #[test]
     fn the_list_is_as_tall_as_its_rows_headers_and_gaps() {
         let first = Target::Tab(TabId::new(1).expect("tab"));
         let second = Target::Tab(TabId::new(2).expect("tab"));
@@ -531,7 +569,10 @@ mod tests {
             0.,
             "an empty palette is the bar alone"
         );
-        assert_eq!(list_height(&choices, true), EMPTY_STATE_HEIGHT);
+        assert_eq!(
+            list_height(&choices, true),
+            2. * LIST_PADDING + EMPTY_STATE_HEIGHT
+        );
         let request = choices.query_scoped("synthetic", false);
         assert!(choices.receive(
             request,

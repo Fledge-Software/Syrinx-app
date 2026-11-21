@@ -910,7 +910,9 @@ impl Run {
                 .as_ref()
                 .ok_or_else(|| "The palette closed before its inside click.".to_owned())?;
             let popup: AnyWindowHandle = palette.window.into();
-            // The search mark at the bar's left end, clear of the field and of any row (#265).
+            // The search mark at the bar's left end, clear of the field and of any row (#265):
+            // x 24 is inside the mark after the 1-pixel border and 16-pixel inset, and y 26 is
+            // about the middle of the 52-pixel bar under the border.
             Ok::<_, String>((popup, point(px(24.), px(26.))))
         })??;
         self.click(popup, inside)?;

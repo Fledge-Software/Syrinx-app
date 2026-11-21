@@ -91,12 +91,13 @@ them again requires the owner's approval.
 - **The palette is a bar with suggestions under it, in the theme's own
   colour.** The owner asked for this on 2026-11-20 (#265): "Just a bar for
   the search and then recommendations, past searches etc", in "a neutral
-  color that matches the theme the user makes/uses". It replaces the
-  canvas's 880 by 560 panel with a preview pane and a footer. The details
-  are the building agent's, recorded in `docs/decisions.md` for the owner to
-  correct: the bar is 640 wide, the popup is as tall as what it lists, and
-  the scope chips are hidden until Tab is pressed, whether they stay being
-  the owner's to decide.
+  color that matches the theme the user makes/uses". The rest is the
+  building agent's reading, recorded in `docs/decisions.md` for the owner to
+  correct: it replaces the canvas's 880 by 560 panel with a preview pane and
+  a footer; the bar is 640 wide, with a "⌕" search mark at its left end; the
+  popup is as tall as what it lists; and the scope chips are hidden until
+  Tab is pressed; whether they stay is the owner's to decide (#265,
+  question 1).
 - **Each installed plugin's feeds get their own palette scope chip** (owner,
   2026-10-21, research note 10's decision 8), for example "Notes", shown only
   while that plugin is installed, in addition to Everything (where its

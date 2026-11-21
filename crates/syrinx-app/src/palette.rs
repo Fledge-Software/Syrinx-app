@@ -22,6 +22,9 @@ use syrinx_search::{Scope, SearchResults, Target};
 
 pub use display::arrange;
 
+/// The popup's height with nothing under the bar: the bar and the panel's borders (#265).
+pub const BAR_ONLY_HEIGHT: f32 = render::PANEL_BORDERS + render::BAR_HEIGHT;
+
 use choices::PaletteChoices;
 use commands::{CommandMatcher, CommandMatches};
 use query::{Chip, ParsedQuery, View};
@@ -96,7 +99,7 @@ pub struct PaletteView {
     /// Tab in the query shows the scope chips for the open entry; they start hidden (#265).
     scopes_shown: bool,
     /// The height the browser was last told to fit, so only a change is reported.
-    announced_height: f32,
+    fitted: FittedHeight,
     view: View,
     scroll: ScrollHandle,
     native: PaletteNative,
@@ -155,7 +158,7 @@ impl PaletteView {
             context: CommandContext::default(),
             chip: Chip::default(),
             scopes_shown: false,
-            announced_height: 0.,
+            fitted: FittedHeight::default(),
             view: View::Everything,
             scroll: ScrollHandle::new(),
             native,
@@ -194,22 +197,26 @@ impl PaletteView {
             self.choices.status = problem.clone();
         }
         // The browser shows the popup at this height, so only later changes are reported.
-        self.announced_height = self.wanted_height();
+        self.fitted.reset(self.wanted_height());
     }
 
     /// The popup height that fits what is drawn now: the bar alone, or the bar and its rows.
     pub fn wanted_height(&self) -> f32 {
-        render::height(self)
+        render::height(self.scopes_shown, &self.choices, self.view)
+    }
+
+    /// Redraws after a change to what is drawn, asking the browser to refit the popup first
+    /// when its height changed. Every such change goes through here (#265).
+    fn redraw(&mut self, cx: &mut Context<Self>) {
+        self.announce_height();
+        cx.notify();
     }
 
     /// Asks the browser to refit the popup when what is drawn changed its height.
     fn announce_height(&mut self) {
-        let wanted = self.wanted_height();
-        if (wanted - self.announced_height).abs() < 0.5 {
-            return;
+        if self.fitted.changed_to(self.wanted_height()) {
+            self.emit(PaletteEvent::Resized);
         }
-        self.announced_height = wanted;
-        self.emit(PaletteEvent::Resized);
     }
 
     /// Shows the scope chips for the open entry; whether this call was the one that did.
@@ -218,8 +225,7 @@ impl PaletteView {
             return false;
         }
         self.scopes_shown = true;
-        self.announce_height();
-        cx.notify();
+        self.redraw(cx);
         true
     }
 
@@ -353,8 +359,7 @@ impl PaletteView {
             return true;
         }
         self.scroll_to_selection();
-        self.announce_height();
-        cx.notify();
+        self.redraw(cx);
         true
     }
 
@@ -400,6 +405,9 @@ impl PaletteView {
         };
         if events.unbounded_send(event).is_err() {
             self.choices.status = "The browser window is no longer available.".to_owned();
+            // No context here; each caller redraws. A failed Resized ends after one retry,
+            // since the status line is then already counted.
+            self.announce_height();
         }
     }
 
@@ -410,8 +418,7 @@ impl PaletteView {
         let text = self.input.read(cx).value().to_string();
         let Some(event) = self.choices.submission(text, force_search) else {
             // A waiting Enter shows its status until the reply applies it.
-            self.announce_height();
-            cx.notify();
+            self.redraw(cx);
             return;
         };
         self.finish(event, window, cx);
@@ -423,8 +430,7 @@ impl PaletteView {
             PaletteEvent::Activate(target @ Target::Command(_)) => {
                 let Some(command) = self.commands.command(target) else {
                     self.choices.status = "This command is no longer available.".to_owned();
-                    self.announce_height();
-                    cx.notify();
+                    self.redraw(cx);
                     return;
                 };
                 PaletteEvent::Run(command.action.clone())
@@ -469,6 +475,26 @@ impl PaletteView {
         };
         let child = render::child_index(&self.choices, row);
         self.scroll.scroll_to_item(child);
+    }
+}
+
+/// The height the browser was last told to fit the popup to.
+#[derive(Default)]
+struct FittedHeight(f32);
+
+impl FittedHeight {
+    /// Records the height the popup is shown at, without reporting it.
+    fn reset(&mut self, shown: f32) {
+        self.0 = shown;
+    }
+
+    /// Whether `wanted` differs from the last reported height; if so it becomes that height.
+    fn changed_to(&mut self, wanted: f32) -> bool {
+        if (wanted - self.0).abs() < 0.5 {
+            return false;
+        }
+        self.0 = wanted;
+        true
     }
 }
 
@@ -624,6 +650,67 @@ mod tests {
     use super::*;
 
     const ADDRESS: &str = "https://palette.example.test/Case?Key=Value";
+
+    fn tab_rows(count: u64) -> SearchResults {
+        SearchResults {
+            generation: 1,
+            counts: syrinx_search::ScopeCounts::default(),
+            hits: (1..=count)
+                .map(|id| syrinx_search::SearchHit {
+                    target: Target::Tab(TabId::new(id).expect("synthetic tab")),
+                    score: 1,
+                    title: "Synthetic tab".to_owned(),
+                    address: "https://fit.example.test/".to_owned(),
+                    title_matches: Vec::new(),
+                    address_matches: Vec::new(),
+                })
+                .collect(),
+        }
+    }
+
+    /// The popup's height for `choices`, as `wanted_height` measures it with the chips hidden.
+    fn drawn(choices: &PaletteChoices) -> f32 {
+        render::height(false, choices, View::Everything)
+    }
+
+    #[test]
+    fn only_a_reply_that_changes_the_drawn_height_asks_for_a_refit() {
+        let mut choices = PaletteChoices::default();
+        let mut fitted = FittedHeight::default();
+        // An entry starts at the bar's height, which the browser shows without a report.
+        let first = choices.query_scoped("", true);
+        fitted.reset(drawn(&choices));
+        assert!(!fitted.changed_to(drawn(&choices)), "nothing changed yet");
+
+        assert!(choices.receive(first, Ok(tab_rows(2))));
+        assert!(
+            fitted.changed_to(drawn(&choices)),
+            "two rows grow the popup"
+        );
+        assert!(!fitted.changed_to(drawn(&choices)), "reported once only");
+
+        let second = choices.refresh();
+        assert!(choices.receive(second, Ok(tab_rows(2))));
+        assert!(!fitted.changed_to(drawn(&choices)), "the same rows again");
+
+        let third = choices.refresh();
+        assert!(choices.receive(third, Ok(tab_rows(1))));
+        assert!(fitted.changed_to(drawn(&choices)), "one row shrinks it");
+
+        // A new entry forgets the old height: the popup is shown afresh at the bar's.
+        choices.reset();
+        choices.query_scoped("", true);
+        fitted.reset(drawn(&choices));
+        assert!(!fitted.changed_to(drawn(&choices)));
+    }
+
+    #[test]
+    fn showing_the_scope_chips_changes_the_drawn_height() {
+        let choices = PaletteChoices::default();
+        let mut fitted = FittedHeight::default();
+        fitted.reset(render::height(false, &choices, View::Everything));
+        assert!(fitted.changed_to(render::height(true, &choices, View::Everything)));
+    }
 
     #[test]
     fn only_an_entry_that_was_active_closes_when_focus_leaves_it() {

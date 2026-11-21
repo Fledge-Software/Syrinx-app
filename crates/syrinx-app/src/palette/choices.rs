@@ -72,10 +72,15 @@ impl PaletteChoices {
             .checked_add(1)
             .expect("palette request IDs exhausted");
         // Routine progress is not shown (#265); the line is kept for problems.
-        self.status = self.refusal.clone().unwrap_or_default();
+        self.show_refusal();
         self.results.clear();
         self.awaiting_reply = true;
         self.request_id
+    }
+
+    /// Leaves only the standing refusal, if any, on the status line.
+    fn show_refusal(&mut self) {
+        self.status = self.refusal.clone().unwrap_or_default();
     }
 
     #[cfg(test)]
@@ -98,7 +103,7 @@ impl PaletteChoices {
             .err()
             .filter(|_| accepts_address && !text.trim().is_empty())
             .map(|error| (*error).to_owned());
-        self.status = self.refusal.clone().unwrap_or_default();
+        self.show_refusal();
         self.address = match recognized {
             Ok(address) if accepts_address => address,
             _ => None,
@@ -185,7 +190,7 @@ impl PaletteChoices {
         match result {
             Ok(results) => {
                 // The reply ends "Waiting for local results…"; a refusal still stands.
-                self.status = self.refusal.clone().unwrap_or_default();
+                self.show_refusal();
                 self.counts = ChipCounts::new(results.counts, self.staged_counts, self.typed);
                 let (strong, weak) = self.staged.split_at(self.staged_strong);
                 self.results = strong
