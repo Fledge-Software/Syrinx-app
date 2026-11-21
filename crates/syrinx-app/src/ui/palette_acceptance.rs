@@ -902,22 +902,18 @@ impl Run {
         Ok(())
     }
 
-    /// Clicks the open palette's status footer, which has no control, and checks it stays open.
+    /// Clicks the open palette's search mark, which is no control, and checks it stays open.
     async fn check_click_inside(&mut self) -> Result<(), String> {
-        let (popup, inside) = self.with(|view, _, cx| {
+        let (popup, inside) = self.with(|view, _, _| {
             let palette = view
                 .palette
                 .as_ref()
                 .ok_or_else(|| "The palette closed before its inside click.".to_owned())?;
             let popup: AnyWindowHandle = palette.window.into();
-            let viewport = popup
-                .update(cx, |_, window, _| window.viewport_size())
-                .map_err(|error| format!("The palette window is gone: {error:#}"))?;
-            // The middle of the 32-pixel status footer.
-            Ok::<_, String>((
-                popup,
-                point(viewport.width * 0.5, viewport.height - px(16.)),
-            ))
+            // The search mark at the bar's left end, clear of the field and of any row (#265):
+            // x 24 is inside the mark after the 1-pixel border and 16-pixel inset, and y 26 is
+            // about the middle of the 52-pixel bar under the border.
+            Ok::<_, String>((popup, point(px(24.), px(26.))))
         })??;
         self.click(popup, inside)?;
         self.sleep(SETTLE).await;
@@ -925,7 +921,7 @@ impl Run {
         self.report.check(
             "click_inside_keeps_palette",
             kept,
-            format!("palette still open after a click on its footer: {kept}"),
+            format!("palette still open after a click on its search mark: {kept}"),
         );
         Ok(())
     }
