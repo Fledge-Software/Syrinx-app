@@ -91,7 +91,8 @@ impl ViewBridge {
 
     /// Check a message and pass a request to `deliver`, the only route to the plugin (the
     /// application passes a closure over `Session::queue_view_message` for this view's id);
-    /// `deliver` returns the host's request id. Nothing is delivered for a refused message or a cancel.
+    /// `deliver` returns the host's request id. Nothing is delivered for a refused message or
+    /// a cancel.
     pub fn relay<E>(
         &mut self,
         inbound: Inbound<'_>,

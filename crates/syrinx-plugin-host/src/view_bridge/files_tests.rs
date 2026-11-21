@@ -8,6 +8,7 @@ use crate::view_bridge::{Nonce, content_security_policy};
 const PAGE: &[u8] = b"<p>hello</p>";
 const SCRIPT: &[u8] = b"console.log(1)";
 const ICON: &[u8] = b"<svg/>";
+const FONT: &[u8] = b"wOF2";
 
 /// An obviously fake digest that is still one-to-one for short files: the length, then the
 /// bytes. The resolver only compares digests.
@@ -46,7 +47,7 @@ fn listed(path: &str, bytes: &[u8]) -> ListedFile {
     }
 }
 
-/// The package as stored: the listed page, script and icon, a script the list does not
+/// The package as stored: the listed page, script, icon and font, a script the list does not
 /// name, `grown.css` whose size differs from the list, `swapped.css` whose digest differs,
 /// and `uix.js` beside the ui folder. Anything else (`gone.css`) cannot be read.
 fn stored(path: &str) -> Result<Vec<u8>, String> {
@@ -54,6 +55,7 @@ fn stored(path: &str) -> Result<Vec<u8>, String> {
         "ui/index.html" => Ok(PAGE.to_vec()),
         "ui/js/app.js" | "ui/extra.js" | "uix.js" => Ok(SCRIPT.to_vec()),
         "ui/icon.svg" => Ok(ICON.to_vec()),
+        "ui/font.woff2" => Ok(FONT.to_vec()),
         "ui/grown.css" => Ok(b"p { color: red; }".to_vec()),
         "ui/swapped.css" => Ok(b"p{color:red}".to_vec()),
         _ => Err(format!("{path} is not in the package")),
@@ -68,6 +70,7 @@ fn package() -> Vec<ListedFile> {
         listed("ui/index.html", PAGE),
         listed("ui/js/app.js", SCRIPT),
         listed("ui/icon.svg", ICON),
+        listed("ui/font.woff2", FONT),
         listed("ui/grown.css", b"p{}"),
         listed("ui/swapped.css", b"p{color:blue"),
         listed("ui/gone.css", b"p{}"),
@@ -83,12 +86,6 @@ fn resolver_with(fill: fn(&mut [u8]) -> Result<(), String>) -> FileResolver<Read
 
 fn resolver() -> FileResolver<Reader> {
     resolver_with(counting_fill)
-}
-
-fn served(path: &str) -> Served {
-    resolver()
-        .resolve(path)
-        .unwrap_or_else(|missing| panic!("expected {path}, got {missing:?}"))
 }
 
 fn header<'a>(served: &'a Served, name: &str) -> Option<&'a str> {
@@ -125,16 +122,23 @@ fn the_root_serves_the_index_with_this_load_s_policy() {
 }
 
 #[test]
-fn every_file_carries_the_policy() {
+fn every_file_carries_this_load_s_policy() {
+    let resolver = resolver_with(fixed_fill);
+    let nonce = Nonce::generate(fixed_fill).expect("the nonce is made");
+    let policy = content_security_policy(&nonce);
     for (path, media_type) in [
         ("/js/app.js", "text/javascript; charset=utf-8"),
         ("/icon.svg", "image/svg+xml"),
+        ("/font.woff2", "font/woff2"),
     ] {
-        let file = served(path);
+        let file = resolver.resolve(path).expect("a listed file is served");
         assert_eq!(header(&file, "Content-Type"), Some(media_type), "{path}");
         assert_eq!(header(&file, "X-Content-Type-Options"), Some("nosniff"));
-        let policy = header(&file, "Content-Security-Policy").expect("a worker gets its policy");
-        assert!(policy.starts_with("default-src 'none'; "), "{policy}");
+        assert_eq!(
+            header(&file, "Content-Security-Policy"),
+            Some(policy.as_str()),
+            "{path}: a worker runs under its own response's policy"
+        );
     }
 }
 
