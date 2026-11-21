@@ -152,6 +152,7 @@ struct Running {
 }
 
 impl Running {
+    /// What the workers reported since the last look, leaving them running.
     fn take_events(&self) -> Vec<PluginEvent> {
         queued(&self.events)
     }
