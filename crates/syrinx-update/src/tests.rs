@@ -717,7 +717,7 @@ fn a_file_cannot_double_as_a_directory() {
 
 /// A fresh, uniquely named synthetic staging area under the temporary directory.
 pub(crate) struct Scratch {
-    root: PathBuf,
+    pub(crate) root: PathBuf,
 }
 
 impl Scratch {
