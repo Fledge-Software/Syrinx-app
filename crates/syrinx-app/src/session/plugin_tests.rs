@@ -1,13 +1,16 @@
 //! Proves the session starts the plugin runtime from its own store at start-up (#136), that a
 //! grant it cannot read never stops browsing, and that the test plugin runs through the
-//! session's own route: activation, a command, a view opened and closed, and shutdown.
+//! session's own route: activation, a command, a view opened and closed, and shutdown; and that
+//! the workers' events are reported once, on the idle tick and at close (#268).
 
 use syrinx_core::CommandRegistry;
 use syrinx_plugin_host::bindings::syrinx::plugin::types::PluginError;
 use syrinx_plugin_host::manifest::{
     CapabilityKind, DiscoveryOptions, MANIFEST_FILE, PluginManifest,
 };
-use syrinx_plugin_host::owner::OwnerError;
+use syrinx_plugin_host::owner::{OwnerError, OwnerRuntime};
+use syrinx_plugin_host::session::CallResult;
+use syrinx_plugin_host::worker::PluginStatus;
 use syrinx_plugin_host::{PluginRegistry, SignedIdentity, check_signed};
 use syrinx_store::{PluginInstall, PluginState};
 
@@ -96,6 +99,116 @@ fn the_test_plugin_runs_through_the_sessions_own_route() {
         Ok(Some(b"hello".to_vec()))
     );
     assert_eq!(plugins::close(Some(runtime), store), Ok(()));
+    fixture.cleanup();
+}
+
+/// A runtime over `store` with the full fixture installed and granted storage.
+fn installed_runtime(store: &Arc<Store>, fixture: &Fixture) -> OwnerRuntime {
+    let mut runtime = plugins::start(store, &fixture.0).expect("the runtime starts");
+    let mut registry = PluginRegistry::new();
+    let registered = registered_fixture(&mut registry);
+    runtime
+        .install(registered, Arc::from(full_component()), install_record())
+        .expect("installed");
+    // `test.echo` keeps a synthetic setting, so it needs storage.
+    runtime
+        .grant("test", CapabilityKind::Storage, 20)
+        .expect("granted");
+    runtime
+}
+
+/// A fresh synthetic store at the current schema, and its lease.
+fn synthetic_store(fixture: &Fixture) -> (Arc<WindowsDirectoryLease>, Arc<Store>) {
+    create_database(fixture);
+    let lease = Arc::new(WindowsDirectoryLease::prepare(&fixture.0).expect("the synthetic folder"));
+    let store = Arc::new(Store::open(lease.clone()).expect("the synthetic store"));
+    (lease, store)
+}
+
+/// Run one of the fixture's commands and wait for its answer.
+fn run(runtime: &mut OwnerRuntime, command: &'static str) -> CallResult<Result<(), PluginError>> {
+    runtime
+        .call("test", move |session| session.run_command(command))
+        .expect("queued")
+        .wait(Duration::from_secs(60))
+        .expect("answered")
+}
+
+/// Make the fixture trap, wait until the host shows it failed, then use it again: the new
+/// worker joins the trapped one before it activates, so the trap's event is queued by then.
+fn trap_and_restart(runtime: &mut OwnerRuntime) {
+    assert!(run(runtime, "test.panic").is_err(), "the panic traps");
+    let deadline = Instant::now() + Duration::from_secs(60);
+    while !matches!(runtime.status("test"), Some(PluginStatus::Failed(_))) {
+        assert!(Instant::now() < deadline, "the trap is never shown");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let again = run(runtime, "test.echo");
+    assert!(
+        matches!(again, Ok(Ok(()))),
+        "used again after the trap: {again:?}"
+    );
+}
+
+const TRAPPED: &str = "Plugin test stopped: commands.run trapped";
+
+#[test]
+fn a_trap_is_reported_once_and_the_next_drain_is_empty() {
+    let fixture = Fixture::new();
+    let (lease, store) = synthetic_store(&fixture);
+    let mut runtime = installed_runtime(&store, &fixture);
+    trap_and_restart(&mut runtime);
+    assert_eq!(plugins::drain(&runtime), vec![TRAPPED.to_owned()]);
+    assert!(
+        plugins::drain(&runtime).is_empty(),
+        "nothing is reported twice"
+    );
+    assert_eq!(plugins::close(Some(runtime), store), Ok(()));
+    drop(lease);
+    fixture.cleanup();
+}
+
+#[test]
+fn the_idle_tick_empties_the_plugin_queue() {
+    let fixture = Fixture::new();
+    let (lease, store) = synthetic_store(&fixture);
+    let mut runtime = installed_runtime(&store, &fixture);
+    trap_and_restart(&mut runtime);
+    let journal = DeletionJournal::open(&lease).expect("open synthetic journal");
+    let page_text = page_text::PageText::open(&lease);
+    let mut worker = Worker::restore(&store, journal, page_text).expect("restore synthetic worker");
+    worker.plugins = Some(runtime);
+    let (sender, _events) = unbounded();
+    // The same branch the idle timer runs, without waiting for it.
+    worker.idle(&store, &sender).expect("the idle tick");
+    let runtime = worker.plugins.take().expect("the worker keeps the runtime");
+    // The same steps reported one trap above; the tick has already taken it.
+    assert!(
+        plugins::drain(&runtime).is_empty(),
+        "the tick drained the queue"
+    );
+    drop(worker);
+    assert_eq!(plugins::close(Some(runtime), store), Ok(()));
+    drop(lease);
+    fixture.cleanup();
+}
+
+#[test]
+fn shutdown_hands_back_what_stopping_the_plugins_raised() {
+    let fixture = Fixture::new();
+    let (lease, store) = synthetic_store(&fixture);
+    let mut runtime = installed_runtime(&store, &fixture);
+    assert!(
+        matches!(run(&mut runtime, "test.echo"), Ok(Ok(()))),
+        "the fixture is active"
+    );
+    assert_eq!(
+        plugins::describe_all(runtime.shutdown()),
+        vec!["Plugin test was deactivated: Syrinx is closing".to_owned()]
+    );
+    let store = Arc::try_unwrap(store).unwrap_or_else(|_| panic!("nothing else holds the store"));
+    assert_eq!(store.shutdown(), Ok(()));
+    drop(lease);
     fixture.cleanup();
 }
 

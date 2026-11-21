@@ -653,6 +653,7 @@ fn serve_accepted(
         Ok(plugins) => (Some(plugins), Ok(())),
         Err(error) => (None, emit_recoverable(events, SessionError::Plugins(error))),
     };
+    worker.plugins = plugins;
     let result = started.and_then(|()| {
         serve_counted(
             &usage,
@@ -665,6 +666,7 @@ fn serve_accepted(
         )
     });
     worker.survival.finish();
+    let plugins = worker.plugins.take();
     if let Err(error) = &result {
         stop::keep_stop(data_dir, error);
     }
@@ -917,6 +919,9 @@ struct Worker {
     unsaved: unsaved::Unsaved,
     /// Whether the window missed the zoom levels a clear applied; an idle tick resends them (#196).
     zoom_levels: zoom_levels::ZoomLevelsReport,
+    /// The plugin runtime while the loop serves; its events are reported after each command
+    /// and on the idle tick (#268).
+    plugins: Option<syrinx_plugin_host::owner::OwnerRuntime>,
 }
 
 /// The tabs a command created, and those of them that put back an earlier tab's page.
@@ -999,6 +1004,7 @@ impl Worker {
             survival: stop::Survival::new(),
             unsaved: unsaved::Unsaved::default(),
             zoom_levels: zoom_levels::ZoomLevelsReport::default(),
+            plugins: None,
         })
     }
 
@@ -1083,6 +1089,7 @@ impl Worker {
                     let handled = self.handle(store, command, events);
                     self.survival.result(handled, events)?;
                     self.report_page_text(events)?;
+                    plugins::report_events(self.plugins.as_ref());
                     delay = IDLE_DELAY;
                 }
                 Err(mpsc::RecvTimeoutError::Timeout) if self.history.has_pending_titles() => {
@@ -1111,6 +1118,8 @@ impl Worker {
         self.survival.operation = "saving the tabs";
         let retried = self.retry_unsaved(store);
         self.survival.result(retried, events)?;
+        // The plugin workers' queue is emptied on this tick and after each command (#268).
+        plugins::report_events(self.plugins.as_ref());
         // A failed report of the zoom levels a clear left is sent again on a later tick (#196).
         self.survival.operation = "resending the zoom levels";
         let resent = self.zoom_levels.retry(store, events);

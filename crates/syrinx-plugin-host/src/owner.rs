@@ -349,11 +349,14 @@ impl OwnerRuntime {
             .unwrap_or_default()
     }
 
-    /// Stop every plugin, so nothing but the caller holds the store any more.
-    pub fn shutdown(mut self) {
-        if let Some(running) = self.running.take() {
-            running.plugins.shutdown();
-        }
+    /// Stop every plugin, so nothing but the caller holds the store any more, and hand back
+    /// what the workers reported, including what stopping them raised.
+    pub fn shutdown(mut self) -> Vec<PluginEvent> {
+        let Some(running) = self.running.take() else {
+            return Vec::new();
+        };
+        running.plugins.shutdown();
+        running.events.try_iter().collect()
     }
 
     /// The plugin as loaded this session; otherwise whether the store knows it at all.
