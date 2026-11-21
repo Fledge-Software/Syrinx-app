@@ -10,9 +10,6 @@ const VERSION: u64 = 1;
 /// The largest integer JavaScript represents exactly, so an interface's ids round-trip.
 const MAX_ID: u64 = (1 << 53) - 1;
 
-const REQUEST_FIELDS: &[&str] = &["v", "kind", "id", "method", "body"];
-const CANCEL_FIELDS: &[&str] = &["v", "kind", "id"];
-
 /// What a view's message asks for, once its envelope is valid.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Envelope {
@@ -52,16 +49,11 @@ pub fn parse(json: &str) -> Result<Envelope, EnvelopeError> {
     let Value::Object(mut fields) = value else {
         return Err(EnvelopeError::NotAnObject);
     };
-    let is_request = request_kind(&fields)?;
-    let allowed = if is_request {
-        REQUEST_FIELDS
-    } else {
-        CANCEL_FIELDS
-    };
-    only_fields(&fields, allowed)?;
+    let kind = Kind::of(&fields)?;
+    only_fields(&fields, kind.fields())?;
     version(&fields)?;
     let id = id(&fields)?;
-    if !is_request {
+    if kind == Kind::Cancel {
         return Ok(Envelope::Cancel { id });
     }
     let method = method(&fields)?;
@@ -75,6 +67,7 @@ pub fn parse(json: &str) -> Result<Envelope, EnvelopeError> {
 
 /// The response to request `id`: the plugin's reply, or the error it returned.
 pub fn response(id: u64, result: Result<String, PluginError>) -> String {
+    // Defensive: the session already checked the reply with `validate::json`.
     let outcome = result.and_then(|reply| {
         serde_json::from_str::<Value>(&reply)
             .map_err(|_| PluginError::Internal("the plugin's reply is not JSON".into()))
@@ -88,12 +81,27 @@ pub fn response(id: u64, result: Result<String, PluginError>) -> String {
     envelope.to_string()
 }
 
-/// `true` for a request, `false` for a cancel.
-fn request_kind(fields: &Map<String, Value>) -> Result<bool, EnvelopeError> {
-    match fields.get("kind").and_then(Value::as_str) {
-        Some("request") => Ok(true),
-        Some("cancel") => Ok(false),
-        _ => Err(EnvelopeError::Kind),
+/// The two kinds a view may send, each with the fields it carries.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Kind {
+    Request,
+    Cancel,
+}
+
+impl Kind {
+    fn of(fields: &Map<String, Value>) -> Result<Self, EnvelopeError> {
+        match fields.get("kind").and_then(Value::as_str) {
+            Some("request") => Ok(Kind::Request),
+            Some("cancel") => Ok(Kind::Cancel),
+            _ => Err(EnvelopeError::Kind),
+        }
+    }
+
+    fn fields(self) -> &'static [&'static str] {
+        match self {
+            Kind::Request => &["v", "kind", "id", "method", "body"],
+            Kind::Cancel => &["v", "kind", "id"],
+        }
     }
 }
 

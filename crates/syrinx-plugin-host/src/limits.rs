@@ -36,6 +36,11 @@ pub const MAX_DEFERRED_QUEUED: usize = 1_024;
 pub const MAX_OPEN_VIEWS: usize = 64;
 pub const MAX_VIEW_EVENTS: usize = 256;
 pub const MAX_VIEW_EVENT_BYTES: usize = 4 * 1024 * 1024;
+/// The largest whole envelope a view's interface may send; proposed, ⚠️ the owner fixes it
+/// from the spike. The request's body is checked again against `MAX_JSON_BYTES` when queued.
+pub const MAX_VIEW_MESSAGE_BYTES: usize = 1024 * 1024;
+/// Requests one view's interface may have waiting for its plugin; proposed, ⚠️ from the spike.
+pub const MAX_PENDING_VIEW_REQUESTS: usize = 32;
 
 /// Text the plugin hands the host.
 pub const MAX_LOG_CHARS: usize = 4 * 1024;

@@ -4,11 +4,9 @@ use std::cell::Cell;
 
 use serde_json::{Value, json};
 
-use super::{
-    EnvelopeError, Inbound, MAX_PENDING_VIEW_REQUESTS, MAX_VIEW_MESSAGE_BYTES, Refusal, RelayError,
-    Relayed, ViewBridge, ViewOrigin,
-};
+use super::{EnvelopeError, Inbound, Refusal, RelayError, Relayed, ViewBridge, ViewOrigin};
 use crate::bindings::syrinx::plugin::types::PluginError;
+use crate::limits::{MAX_PENDING_VIEW_REQUESTS, MAX_VIEW_MESSAGE_BYTES};
 use crate::manifest::TabType;
 
 const SOURCE: &str = "https://syrinx-plugin.hello.invalid/index.html";
@@ -120,6 +118,44 @@ fn a_message_over_the_size_limit_is_refused() {
     let message = json!({ "v": 1, "kind": "request", "id": 1, "method": "greet", "body": padding })
         .to_string();
     assert_eq!(refused(&mut bridge, inbound(&message)), Refusal::TooLarge);
+}
+
+#[test]
+fn size_is_checked_before_the_text_is_parsed() {
+    let mut bridge = bridge();
+    let oversized_garbage = "x".repeat(MAX_VIEW_MESSAGE_BYTES + 1);
+    assert_eq!(
+        refused(&mut bridge, inbound(&oversized_garbage)),
+        Refusal::TooLarge
+    );
+}
+
+#[test]
+fn a_stale_oversized_message_reports_the_generation() {
+    let mut bridge = bridge();
+    let oversized = "x".repeat(MAX_VIEW_MESSAGE_BYTES + 1);
+    let stale = Inbound {
+        generation: GENERATION - 1,
+        ..inbound(&oversized)
+    };
+    assert_eq!(refused(&mut bridge, stale), Refusal::StaleGeneration);
+}
+
+#[test]
+fn a_message_of_exactly_the_limit_is_queued() {
+    let mut bridge = bridge();
+    let envelope = |padding: &str| {
+        json!({ "v": 1, "kind": "request", "id": 1, "method": "greet", "body": padding })
+            .to_string()
+    };
+    let overhead = envelope("").len();
+    let message = envelope(&"x".repeat(MAX_VIEW_MESSAGE_BYTES - overhead));
+    assert_eq!(message.len(), MAX_VIEW_MESSAGE_BYTES);
+    let plugin = Plugin::new();
+    assert!(matches!(
+        bridge.relay(inbound(&message), plugin.deliver()),
+        Ok(Relayed::Queued { .. })
+    ));
 }
 
 #[test]
@@ -252,6 +288,25 @@ fn a_cancel_for_an_unknown_id_is_ignored() {
     let result = bridge.relay(inbound(&cancel(7)), plugin.deliver());
     assert_eq!(result, Ok(Relayed::CancelIgnored));
     assert_eq!(plugin.calls.get(), 0);
+}
+
+#[test]
+fn a_stale_cancel_leaves_its_request_pending() {
+    let mut bridge = bridge();
+    let plugin = Plugin::new();
+    let host_request = queued(&mut bridge, 7, &plugin);
+    let message = cancel(7);
+    let stale = Inbound {
+        generation: GENERATION - 1,
+        ..inbound(&message)
+    };
+    assert_eq!(refused(&mut bridge, stale), Refusal::StaleGeneration);
+    assert!(
+        bridge
+            .reply(GENERATION, host_request, Ok("{}".into()))
+            .is_some(),
+        "the request is still pending"
+    );
 }
 
 #[test]

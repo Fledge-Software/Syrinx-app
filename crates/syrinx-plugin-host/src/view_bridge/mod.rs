@@ -10,18 +10,13 @@ use std::collections::BTreeMap;
 
 pub use csp::{Nonce, RandomFill, content_security_policy};
 pub use envelope::EnvelopeError;
-pub use files::{FileResolver, ListedFile, Missing, Response, Served, Sha256};
+pub use files::{FileResolver, InvalidUiFolder, ListedFile, Missing, Served, Sha256};
 pub use origin::ViewOrigin;
 
 use crate::bindings::syrinx::plugin::types::PluginError;
+use crate::limits::{MAX_PENDING_VIEW_REQUESTS, MAX_VIEW_MESSAGE_BYTES};
 use crate::manifest::TabType;
 use envelope::Envelope;
-
-/// The largest message a view may send. Proposed, ⚠️ the owner fixes it from the spike:
-/// WebView2 documents no limit, and large payloads go as host-served responses instead.
-pub const MAX_VIEW_MESSAGE_BYTES: usize = 1024 * 1024;
-/// Requests one view may have waiting for its plugin at once. Proposed, ⚠️ from the spike.
-pub const MAX_PENDING_VIEW_REQUESTS: usize = 32;
 
 /// A message as the platform hands it over from `WebMessageReceived`.
 #[derive(Debug, Clone, Copy)]
@@ -95,8 +90,8 @@ impl ViewBridge {
     }
 
     /// Check a message and pass a request to `deliver`, the only route to the plugin (the
-    /// application passes `Session::queue_view_message`); `deliver` returns the host's
-    /// request id. Nothing is delivered for a refused message or a cancel.
+    /// application passes a closure over `Session::queue_view_message` for this view's id);
+    /// `deliver` returns the host's request id. Nothing is delivered for a refused message or a cancel.
     pub fn relay<E>(
         &mut self,
         inbound: Inbound<'_>,
@@ -125,6 +120,7 @@ impl ViewBridge {
         host_request: u64,
         result: Result<String, PluginError>,
     ) -> Option<String> {
+        // Defence in depth: `renew` already empties `pending`, and host ids are never reused.
         if generation != self.generation {
             return None;
         }

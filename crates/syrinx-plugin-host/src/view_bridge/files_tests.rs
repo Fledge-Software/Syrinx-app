@@ -2,10 +2,12 @@
 
 use std::sync::atomic::{AtomicU8, Ordering};
 
-use super::{FileResolver, ListedFile, Missing, Response, Served};
+use super::{FileResolver, InvalidUiFolder, ListedFile, Missing, Served};
+use crate::view_bridge::{Nonce, content_security_policy};
 
 const PAGE: &[u8] = b"<p>hello</p>";
 const SCRIPT: &[u8] = b"console.log(1)";
+const ICON: &[u8] = b"<svg/>";
 
 /// An obviously fake digest that is still one-to-one for short files: the length, then the
 /// bytes. The resolver only compares digests.
@@ -26,6 +28,12 @@ fn counting_fill(bytes: &mut [u8]) -> Result<(), String> {
     Ok(())
 }
 
+/// Always the same bytes, so a test knows the nonce a load got.
+fn fixed_fill(bytes: &mut [u8]) -> Result<(), String> {
+    bytes.fill(0x5a);
+    Ok(())
+}
+
 fn broken_fill(_: &mut [u8]) -> Result<(), String> {
     Err("no random source".into())
 }
@@ -38,12 +46,14 @@ fn listed(path: &str, bytes: &[u8]) -> ListedFile {
     }
 }
 
-/// The package as stored: the listed page and script, a script the list does not name, a
-/// file whose stored bytes differ from the list, and a style the reader cannot load.
+/// The package as stored: the listed page, script and icon, a script the list does not
+/// name, `grown.css` whose size differs from the list, `swapped.css` whose digest differs,
+/// and `uix.js` beside the ui folder. Anything else (`gone.css`) cannot be read.
 fn stored(path: &str) -> Result<Vec<u8>, String> {
     match path {
         "ui/index.html" => Ok(PAGE.to_vec()),
-        "ui/js/app.js" | "ui/extra.js" => Ok(SCRIPT.to_vec()),
+        "ui/js/app.js" | "ui/extra.js" | "uix.js" => Ok(SCRIPT.to_vec()),
+        "ui/icon.svg" => Ok(ICON.to_vec()),
         "ui/grown.css" => Ok(b"p { color: red; }".to_vec()),
         "ui/swapped.css" => Ok(b"p{color:red}".to_vec()),
         _ => Err(format!("{path} is not in the package")),
@@ -53,23 +63,32 @@ fn stored(path: &str) -> Result<Vec<u8>, String> {
 /// How the tests' package is read.
 type Reader = fn(&str) -> Result<Vec<u8>, String>;
 
-fn resolver() -> FileResolver<Reader> {
-    let files = vec![
+fn package() -> Vec<ListedFile> {
+    vec![
         listed("ui/index.html", PAGE),
         listed("ui/js/app.js", SCRIPT),
+        listed("ui/icon.svg", ICON),
         listed("ui/grown.css", b"p{}"),
         listed("ui/swapped.css", b"p{color:blue"),
         listed("ui/gone.css", b"p{}"),
         listed("module.wasm", b"\0asm"),
-    ];
-    FileResolver::new(files, "ui/", fake_sha256, counting_fill, stored)
+        listed("uix.js", SCRIPT),
+    ]
 }
 
-fn served(response: Response) -> Served {
-    match response {
-        Response::Found(served) => served,
-        Response::NotFound(missing) => panic!("expected a file, got {missing:?}"),
-    }
+fn resolver_with(fill: fn(&mut [u8]) -> Result<(), String>) -> FileResolver<Reader> {
+    FileResolver::new(package(), "ui/", fake_sha256, fill, stored as Reader)
+        .expect("a plain ui folder")
+}
+
+fn resolver() -> FileResolver<Reader> {
+    resolver_with(counting_fill)
+}
+
+fn served(path: &str) -> Served {
+    resolver()
+        .resolve(path)
+        .unwrap_or_else(|missing| panic!("expected {path}, got {missing:?}"))
 }
 
 fn header<'a>(served: &'a Served, name: &str) -> Option<&'a str> {
@@ -82,43 +101,52 @@ fn header<'a>(served: &'a Served, name: &str) -> Option<&'a str> {
 
 fn missing(path: &str) -> Missing {
     match resolver().resolve(path) {
-        Response::NotFound(missing) => missing,
-        Response::Found(_) => panic!("{path} should not be served"),
+        Err(missing) => missing,
+        Ok(_) => panic!("{path} should not be served"),
     }
 }
 
 #[test]
-fn the_root_serves_the_index_with_the_policy() {
-    let response = resolver().resolve("/");
-    assert_eq!(response.status(), 200);
-    let page = served(response);
+fn the_root_serves_the_index_with_this_load_s_policy() {
+    let page = resolver_with(fixed_fill)
+        .resolve("/")
+        .expect("the index is served");
+    let nonce = Nonce::generate(fixed_fill).expect("the nonce is made");
     assert_eq!(page.body, PAGE);
     assert_eq!(
         header(&page, "Content-Type"),
         Some("text/html; charset=utf-8")
     );
     assert_eq!(header(&page, "X-Content-Type-Options"), Some("nosniff"));
-    let policy = header(&page, "Content-Security-Policy").expect("a document has the policy");
-    assert!(policy.starts_with("default-src 'none'; "), "{policy}");
-}
-
-#[test]
-fn a_nested_script_is_served_without_a_policy() {
-    let script = served(resolver().resolve("/js/app.js"));
-    assert_eq!(script.body, SCRIPT);
     assert_eq!(
-        header(&script, "Content-Type"),
-        Some("text/javascript; charset=utf-8")
+        header(&page, "Content-Security-Policy"),
+        Some(content_security_policy(&nonce).as_str())
     );
-    assert_eq!(header(&script, "X-Content-Type-Options"), Some("nosniff"));
-    assert_eq!(header(&script, "Content-Security-Policy"), None);
 }
 
 #[test]
-fn each_document_load_gets_a_fresh_nonce() {
+fn every_file_carries_the_policy() {
+    for (path, media_type) in [
+        ("/js/app.js", "text/javascript; charset=utf-8"),
+        ("/icon.svg", "image/svg+xml"),
+    ] {
+        let file = served(path);
+        assert_eq!(header(&file, "Content-Type"), Some(media_type), "{path}");
+        assert_eq!(header(&file, "X-Content-Type-Options"), Some("nosniff"));
+        let policy = header(&file, "Content-Security-Policy").expect("a worker gets its policy");
+        assert!(policy.starts_with("default-src 'none'; "), "{policy}");
+    }
+}
+
+#[test]
+fn each_load_gets_a_fresh_nonce() {
     let resolver = resolver();
-    let first = served(resolver.resolve("/index.html"));
-    let second = served(resolver.resolve("/index.html"));
+    let first = resolver
+        .resolve("/index.html")
+        .expect("the index is served");
+    let second = resolver
+        .resolve("/index.html")
+        .expect("the index is served");
     assert_ne!(
         header(&first, "Content-Security-Policy"),
         header(&second, "Content-Security-Policy")
@@ -126,13 +154,33 @@ fn each_document_load_gets_a_fresh_nonce() {
 }
 
 #[test]
-fn a_document_without_a_nonce_is_not_served() {
-    let files = vec![listed("ui/index.html", PAGE)];
-    let resolver = FileResolver::new(files, "ui/", fake_sha256, broken_fill, stored);
+fn a_file_without_a_nonce_is_not_served() {
     assert_eq!(
-        resolver.resolve("/"),
-        Response::NotFound(Missing::NonceFailed("no random source".into()))
+        resolver_with(broken_fill).resolve("/js/app.js"),
+        Err(Missing::NonceFailed("no random source".into()))
     );
+}
+
+#[test]
+fn a_folder_without_its_slash_cannot_reach_a_neighbour() {
+    let joined = FileResolver::new(package(), "ui", fake_sha256, counting_fill, stored);
+    assert_eq!(
+        joined.err(),
+        Some(InvalidUiFolder("ui".into())),
+        "ui + x.js would be uix.js"
+    );
+}
+
+#[test]
+fn a_ui_folder_that_is_not_plain_is_refused() {
+    for folder in ["ui", "", "/", "/ui/", "./ui/", "ui/../", "ui//", "../ui/"] {
+        let resolver = FileResolver::new(package(), folder, fake_sha256, counting_fill, stored);
+        assert_eq!(
+            resolver.err(),
+            Some(InvalidUiFolder(folder.into())),
+            "{folder:?}"
+        );
+    }
 }
 
 #[test]
@@ -158,6 +206,8 @@ fn a_path_that_is_not_plain_is_refused() {
 fn only_listed_files_inside_the_ui_folder_are_served() {
     assert_eq!(missing("/extra.js"), Missing::Unlisted);
     assert_eq!(missing("/module.wasm"), Missing::Unlisted);
+    assert_eq!(missing("/../uix.js"), Missing::BadPath);
+    assert_eq!(missing("x.js"), Missing::BadPath);
 }
 
 #[test]
@@ -179,28 +229,21 @@ fn bytes_that_differ_from_the_list_are_refused() {
 #[test]
 fn a_failed_digest_is_refused() {
     let long = [b'x'; 40];
-    let files = vec![
-        listed("ui/index.html", PAGE),
-        ListedFile {
-            path: "ui/long.txt".into(),
-            size: 40,
-            sha256: [0; 32],
-        },
-    ];
+    let files = vec![ListedFile {
+        path: "ui/long.txt".into(),
+        size: 40,
+        sha256: [0; 32],
+    }];
     let read = |path: &str| match path {
         "ui/long.txt" => Ok(long.to_vec()),
         _ => stored(path),
     };
-    let resolver = FileResolver::new(files, "ui/", fake_sha256, counting_fill, read);
+    let resolver = FileResolver::new(files, "ui/", fake_sha256, counting_fill, read)
+        .expect("a plain ui folder");
     assert!(matches!(
         resolver.resolve("/long.txt"),
-        Response::NotFound(Missing::HashFailed(_))
+        Err(Missing::HashFailed(_))
     ));
-}
-
-#[test]
-fn a_refused_request_is_a_404() {
-    assert_eq!(resolver().resolve("/swapped.css").status(), 404);
 }
 
 #[test]
@@ -218,10 +261,6 @@ fn media_types_follow_the_extension() {
         ("README", "application/octet-stream"),
     ];
     for (path, expected) in cases {
-        assert_eq!(super::media_type(path).0, expected, "{path}");
+        assert_eq!(super::media_type(path), expected, "{path}");
     }
-    assert!(
-        super::media_type("icon.svg").1,
-        "an SVG document can run script"
-    );
 }

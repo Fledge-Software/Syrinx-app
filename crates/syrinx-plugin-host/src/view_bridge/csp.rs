@@ -1,4 +1,4 @@
-//! The Content Security Policy Syrinx sends with every document a plugin view loads (research
+//! The Content Security Policy Syrinx sends with every file a plugin view loads (research
 //! note 10, "Content Security Policy and network"), and the per-load style nonce in it.
 
 /// Fills a buffer from the operating system's random source; the application passes it in,
