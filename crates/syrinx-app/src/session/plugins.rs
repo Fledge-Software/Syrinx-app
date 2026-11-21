@@ -1,12 +1,16 @@
 //! Starts and stops the plugin runtime the session owns (#136): the owner's grants read from
-//! the store, and the deny list built from Syrinx's own folders and the system's.
+//! the store, the deny list built from Syrinx's own folders and the system's, and the
+//! workers' events reported on the local diagnostic path (#268).
 
 use std::ffi::OsString;
 use std::path::Path;
 use std::sync::Arc;
 
+use syrinx_plugin_host::Failure;
+use syrinx_plugin_host::bindings::syrinx::plugin::types::Outcome;
 use syrinx_plugin_host::grants::{DenyList, Protected};
 use syrinx_plugin_host::owner::{OwnerError, OwnerRuntime};
+use syrinx_plugin_host::worker::PluginEvent;
 use syrinx_store::{Store, StoreError};
 
 /// Environment variables naming system folders no plugin may be granted, by kind. A
@@ -30,16 +34,84 @@ pub(super) fn start(store: &Arc<Store>, state_dir: &Path) -> Result<OwnerRuntime
     )
 }
 
-/// Stop every plugin, then hand back the store, which nothing else holds any more, for the
-/// session to close.
+/// Stop every plugin and report what the workers raised, stopping included, then hand back
+/// the store, which nothing else holds any more, for the session to close.
 pub(super) fn close(plugins: Option<OwnerRuntime>, store: Arc<Store>) -> Result<(), StoreError> {
     if let Some(plugins) = plugins {
-        plugins.shutdown();
+        log_lines(describe_all(&plugins.shutdown()));
     }
     match Arc::try_unwrap(store) {
         Ok(store) => store.shutdown(),
         // Dropping the last holder closes it anyway, reporting only to stderr.
         Err(_) => Err(StoreError::WorkerUnavailable),
+    }
+}
+
+/// Report what the workers queued since the last look, so the queue never grows unread.
+pub(super) fn report_events(plugins: Option<&OwnerRuntime>) {
+    if let Some(plugins) = plugins {
+        log_lines(drain(plugins));
+    }
+}
+
+/// One diagnostic line for each event queued since the last look.
+pub(super) fn drain(plugins: &OwnerRuntime) -> Vec<String> {
+    describe_all(&plugins.take_events())
+}
+
+/// One diagnostic line for each of `events`, in the order they were queued.
+pub(super) fn describe_all(events: &[PluginEvent]) -> Vec<String> {
+    events.iter().map(describe).collect()
+}
+
+/// Events go to stderr only; none is counted or shown in the window yet (#268).
+fn log_lines(lines: Vec<String>) {
+    for line in lines {
+        eprintln!("{line}");
+    }
+}
+
+/// The plugin's id and what happened, in the host's own words. Plugin ids are one checked
+/// segment; text a plugin or the system wrote (an activation refusal, a load error, a write's
+/// outcome) is left out, because it may hold the owner's data or a path.
+fn describe(event: &PluginEvent) -> String {
+    match event {
+        PluginEvent::Outcome {
+            plugin,
+            request,
+            outcome,
+        } => format!(
+            "Plugin {plugin}: write {request} was settled by the host as {}",
+            outcome_kind(outcome)
+        ),
+        PluginEvent::Failed { plugin, failure } => {
+            format!("Plugin {plugin} stopped: {}", failure_kind(failure))
+        }
+        PluginEvent::Deactivated { plugin, reason } => {
+            // Every reason's text is the host's own.
+            format!("Plugin {plugin} was deactivated: {reason}")
+        }
+    }
+}
+
+/// How the host settled a write, without the plugin's or service's text.
+fn outcome_kind(outcome: &Outcome) -> &'static str {
+    match outcome {
+        Outcome::Done(_) => "done",
+        Outcome::Failed(_) => "failed",
+        Outcome::Uncertain(_) => "uncertain",
+    }
+}
+
+/// Why a plugin stopped, without the plugin's or the system's text.
+fn failure_kind(failure: &Failure) -> String {
+    match failure {
+        Failure::DeadlineExpired(export) => format!("{} ran past its deadline", export.name()),
+        Failure::Trapped { export, .. } => format!("{} trapped", export.name()),
+        Failure::Flooded => "it kept queueing deferred calls".to_owned(),
+        Failure::OverBudget => "one call and its deferred calls took too long".to_owned(),
+        Failure::Load(_) => "it could not be compiled, linked or started".to_owned(),
+        Failure::ActivationRefused(_) => "it refused to activate".to_owned(),
     }
 }
 

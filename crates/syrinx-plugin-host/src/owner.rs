@@ -151,6 +151,25 @@ struct Running {
     events: Receiver<PluginEvent>,
 }
 
+impl Running {
+    /// What the workers reported since the last look, leaving them running.
+    fn take_events(&self) -> Vec<PluginEvent> {
+        queued(&self.events)
+    }
+
+    /// Stop every worker, then take what they queued, stopping included.
+    fn shutdown(self) -> Vec<PluginEvent> {
+        let Self { plugins, events } = self;
+        plugins.shutdown();
+        queued(&events)
+    }
+}
+
+/// Every event the workers queued since the last look.
+fn queued(events: &Receiver<PluginEvent>) -> Vec<PluginEvent> {
+    events.try_iter().collect()
+}
+
 /// Every installed plugin and the owner's grants, as one Syrinx session holds them.
 pub struct OwnerRuntime {
     store: Arc<Store>,
@@ -345,15 +364,17 @@ impl OwnerRuntime {
     pub fn take_events(&self) -> Vec<PluginEvent> {
         self.running
             .as_ref()
-            .map(|running| running.events.try_iter().collect())
+            .map(Running::take_events)
             .unwrap_or_default()
     }
 
-    /// Stop every plugin, so nothing but the caller holds the store any more.
-    pub fn shutdown(mut self) {
-        if let Some(running) = self.running.take() {
-            running.plugins.shutdown();
-        }
+    /// Stop every plugin, so nothing but the caller holds the store any more, and hand back
+    /// what the workers reported, including what stopping them raised.
+    pub fn shutdown(mut self) -> Vec<PluginEvent> {
+        let Some(running) = self.running.take() else {
+            return Vec::new();
+        };
+        running.shutdown()
     }
 
     /// The plugin as loaded this session; otherwise whether the store knows it at all.
