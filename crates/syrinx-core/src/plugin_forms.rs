@@ -185,9 +185,14 @@ pub enum Notice {
     Invalid(FieldError),
     /// Submitted; an outcome comes only if the host settles the write (see `Submitted`).
     Pending,
-    /// An earlier closed command or submission was forgotten to make room for a newer one, so
-    /// its outcome will not be told; it may have happened.
-    Forgotten,
+    /// A set-aside call was forgotten to make room for a newer one, so its result will not be
+    /// told. A submission's may have happened; a command's result can no longer be shown.
+    Forgotten { may_have_written: bool },
+    /// A notice about a call set aside earlier, named so it is not read as the current one's.
+    SetAside {
+        command: String,
+        notice: Box<Notice>,
+    },
 }
 
 /// Why the palette's request to validate or submit was not sent.
@@ -311,12 +316,17 @@ struct Current {
     stage: Stage,
 }
 
-/// A command run or a submission set aside while it was on its way or pending, because the
-/// palette closed or another command was chosen. Its own outcome is still reported, since it
-/// may have written; there is no form left to update.
+/// A call set aside while it was on its way or pending, because the palette closed or another
+/// command was chosen. A command run or a submission still reports its own result, named,
+/// since it may have written. A form arriving for a set-aside choice, or its failure, is
+/// dropped without a word: it had no effect and nobody can see it (a product choice).
 #[derive(Debug)]
 struct Orphan {
     plugin: String,
+    /// The form's title for a submission; the command id for a choice.
+    name: String,
+    /// Whether it is a submission, which may write; a choice's kind is not known yet.
+    submission: bool,
     awaiting: Awaiting,
 }
 
@@ -328,7 +338,10 @@ enum Awaiting {
     Outcome(u64),
 }
 
-/// The most set-aside calls kept for their outcome; the oldest is forgotten first, and the
+/// What a pending submission is told when its plugin stops before the host settles it.
+const STOPPED_PENDING: &str = "the plugin stopped before its outcome was known";
+
+/// The most set-aside calls kept for their result; the oldest is forgotten first, and the
 /// owner is told (`Notice::Forgotten`).
 const MAX_ORPHANS: usize = 16;
 
@@ -338,8 +351,6 @@ pub struct PluginCommands {
     next_token: u64,
     current: Option<Current>,
     orphans: Vec<Orphan>,
-    /// What the model itself has to tell the owner, outside any answer; see `take_notice`.
-    notice: Option<Notice>,
 }
 
 impl Default for PluginCommands {
@@ -348,17 +359,21 @@ impl Default for PluginCommands {
             next_token: 1,
             current: None,
             orphans: Vec::new(),
-            notice: None,
         }
     }
 }
 
 impl PluginCommands {
     /// The owner chose a plugin command; `in_palette` says whether the palette is still open to
-    /// show a form. Whatever was current is abandoned, as closing the palette abandons it.
-    pub fn choose(&mut self, plugin: &str, command: &str, in_palette: bool) -> PluginCall {
-        self.set_aside_choosing();
-        self.abandon();
+    /// show a form. Whatever was current is set aside or abandoned, as closing the palette does;
+    /// the notice is for a set-aside call forgotten to make room.
+    pub fn choose(
+        &mut self,
+        plugin: &str,
+        command: &str,
+        in_palette: bool,
+    ) -> (PluginCall, Option<Notice>) {
+        let forgotten = self.set_aside_choosing().or_else(|| self.abandon());
         let call = self.call(plugin.to_owned(), command.to_owned(), CallKind::Choose);
         let stage = Stage::Choosing {
             token: call.token,
@@ -369,43 +384,54 @@ impl PluginCommands {
             command: command.to_owned(),
             stage,
         });
-        call
+        (call, forgotten)
     }
 
     /// The palette closed: the open form is dropped, so a late answer cannot update it. A
     /// command already sent to `commands.run` and a submission on its way or pending are still
-    /// reported, since their results go to the status line and a write may have happened.
-    pub fn abandon(&mut self) {
-        let Some(current) = self.current.take() else {
-            return;
-        };
-        match current.stage {
+    /// reported, since their results go to the status line and a write may have happened. The
+    /// notice is for a set-aside call forgotten to make room.
+    pub fn abandon(&mut self) -> Option<Notice> {
+        let current = self.current.take()?;
+        let (form, awaiting) = match current.stage {
             Stage::Choosing { token, .. } => {
                 let closed = true;
                 let stage = Stage::Choosing { token, closed };
                 self.current = Some(Current { stage, ..current });
+                return None;
             }
-            Stage::Submitting { token, .. } => {
-                self.keep_orphan(current.plugin, Awaiting::Answer(token));
-            }
-            Stage::Pending { request, .. } => {
-                self.keep_orphan(current.plugin, Awaiting::Outcome(request));
-            }
-            Stage::Editing { .. } | Stage::Uncertain { .. } => {}
-        }
+            Stage::Submitting { form, token } => (form, Awaiting::Answer(token)),
+            Stage::Pending { form, request } => (form, Awaiting::Outcome(request)),
+            Stage::Editing { .. } | Stage::Uncertain { .. } => return None,
+        };
+        self.keep_orphan(Orphan {
+            plugin: current.plugin,
+            name: form.spec.title,
+            submission: true,
+            awaiting,
+        })
     }
 
     /// A plugin's worker stopped. It settled its writes in flight before saying so, so a
-    /// set-aside submission still waiting for an outcome from it will never get one.
-    pub fn plugin_stopped(&mut self, plugin: &str) {
+    /// submission still waiting for an outcome from it, set aside or current, will never get
+    /// one. A current one is told it may have happened, since its write may have completed.
+    pub fn plugin_stopped(&mut self, plugin: &str) -> Option<Notice> {
         self.orphans.retain(|orphan| {
             orphan.plugin != plugin || !matches!(orphan.awaiting, Awaiting::Outcome(_))
         });
-    }
-
-    /// What the model has to tell the owner by itself, such as a forgotten call, once.
-    pub fn take_notice(&mut self) -> Option<Notice> {
-        self.notice.take()
+        let current = self.current.take()?;
+        match current.stage {
+            Stage::Pending { form, .. } if current.plugin == plugin => {
+                let outcome = Outcome::Uncertain(STOPPED_PENDING.to_owned());
+                let (stage, notice) = settled(form, outcome);
+                self.current = stage.map(|stage| Current { stage, ..current });
+                Some(notice)
+            }
+            stage => {
+                self.current = Some(Current { stage, ..current });
+                None
+            }
+        }
     }
 
     /// The open form, while one is.
@@ -489,8 +515,8 @@ impl PluginCommands {
             .iter()
             .position(|orphan| orphan.plugin == late.plugin && orphan.awaiting == awaited);
         if let Some(index) = orphan {
-            self.orphans.remove(index);
-            return Some(Notice::Outcome(late.outcome));
+            let orphan = self.orphans.remove(index);
+            return Some(set_aside(orphan.name, outcome_notice(late.outcome)));
         }
         let current = self.current.take()?;
         match current.stage {
@@ -532,18 +558,18 @@ impl PluginCommands {
     }
 
     /// A choice still waiting for its answer, set aside so a command it ran is still told.
-    fn set_aside_choosing(&mut self) {
-        let Some(Current {
-            stage: Stage::Choosing { token, .. },
-            ..
-        }) = &self.current
-        else {
-            return;
+    fn set_aside_choosing(&mut self) -> Option<Notice> {
+        let current = self.current.take()?;
+        let Stage::Choosing { token, .. } = current.stage else {
+            self.current = Some(current);
+            return None;
         };
-        let awaiting = Awaiting::Answer(*token);
-        if let Some(current) = self.current.take() {
-            self.keep_orphan(current.plugin, awaiting);
-        }
+        self.keep_orphan(Orphan {
+            plugin: current.plugin,
+            name: current.command,
+            submission: false,
+            awaiting: Awaiting::Answer(token),
+        })
     }
 
     /// The editable form, taken out to be changed; anything else is put back and refused.
@@ -582,12 +608,17 @@ impl PluginCommands {
         });
     }
 
-    fn keep_orphan(&mut self, plugin: String, awaiting: Awaiting) {
-        if self.orphans.len() == MAX_ORPHANS {
-            self.orphans.remove(0);
-            self.notice = Some(Notice::Forgotten);
-        }
-        self.orphans.push(Orphan { plugin, awaiting });
+    /// Keep `orphan`; past the limit the oldest is forgotten, and the owner is told.
+    fn keep_orphan(&mut self, orphan: Orphan) -> Option<Notice> {
+        let forgotten = (self.orphans.len() == MAX_ORPHANS).then(|| {
+            let oldest = self.orphans.remove(0);
+            let notice = Notice::Forgotten {
+                may_have_written: oldest.submission,
+            };
+            set_aside(oldest.name, notice)
+        });
+        self.orphans.push(orphan);
+        forgotten
     }
 
     /// A set-aside call still waiting for the answer to `token`.
@@ -598,25 +629,25 @@ impl PluginCommands {
             .position(|orphan| orphan.awaiting == awaited)
     }
 
-    /// A set-aside call's answer: a command run or a submission's outcome is reported, a
-    /// pending submission waits on, and a form nobody can see is dropped.
+    /// A set-aside call's answer: a command run or a submission's result is reported, named,
+    /// a pending submission waits on, and a form (or its failure) nobody can see is dropped.
     fn orphan_answered(&mut self, index: usize, reply: PluginReply) -> Option<Notice> {
         if let PluginReply::Submitted(Submitted::Pending { request }) = reply {
             self.orphans[index].awaiting = Awaiting::Outcome(request);
             return None;
         }
-        self.orphans.remove(index);
-        match reply {
-            PluginReply::Ran(Ok(())) => Some(Notice::Outcome(Outcome::Done(None))),
-            PluginReply::Ran(Err(failure)) => Some(Notice::Outcome(Outcome::Failed(failure))),
-            PluginReply::Submitted(Submitted::Finished(outcome)) => Some(Notice::Outcome(outcome)),
+        let orphan = self.orphans.remove(index);
+        let notice = match reply {
+            PluginReply::Ran(ran) => ran_notice(ran),
+            PluginReply::Submitted(Submitted::Finished(outcome)) => outcome_notice(outcome),
             PluginReply::Submitted(Submitted::Invalid(errors)) => {
-                Some(invalid_notice(errors.into_iter().next()))
+                invalid_notice(errors.into_iter().next())
             }
             PluginReply::Submitted(Submitted::Pending { .. })
             | PluginReply::Form(_)
-            | PluginReply::Validated(_) => None,
-        }
+            | PluginReply::Validated(_) => return None,
+        };
+        Some(set_aside(orphan.name, notice))
     }
 
     fn token(&mut self) -> u64 {
@@ -672,8 +703,7 @@ fn answered(current: Current, answer: PluginAnswer) -> (Option<Current>, Option<
 /// palette. A reply that does not answer `Choose` is dropped.
 fn chosen(closed: bool, reply: PluginReply) -> (Option<Stage>, Option<Notice>) {
     match reply {
-        PluginReply::Ran(Ok(())) => (None, Some(Notice::Outcome(Outcome::Done(None)))),
-        PluginReply::Ran(Err(failure)) => (None, Some(Notice::Outcome(Outcome::Failed(failure)))),
+        PluginReply::Ran(ran) => (None, Some(ran_notice(ran))),
         PluginReply::Form(Ok(spec)) if closed => {
             let title = spec.title;
             (None, Some(Notice::FormNotShown { title }))
@@ -728,7 +758,28 @@ fn settled(form: PluginForm, outcome: Outcome) -> (Option<Stage>, Notice) {
         }),
         Outcome::Uncertain(_) => Some(Stage::Uncertain { form }),
     };
-    (stage, Notice::Outcome(outcome))
+    (stage, outcome_notice(outcome))
+}
+
+/// What the owner is told of a command that ran.
+fn ran_notice(ran: Result<(), Failure>) -> Notice {
+    match ran {
+        Ok(()) => outcome_notice(Outcome::Done(None)),
+        Err(failure) => outcome_notice(Outcome::Failed(failure)),
+    }
+}
+
+/// What the owner is told of a submission's or a command's outcome.
+fn outcome_notice(outcome: Outcome) -> Notice {
+    Notice::Outcome(outcome)
+}
+
+/// `notice`, named for the set-aside call it is about.
+fn set_aside(command: String, notice: Notice) -> Notice {
+    Notice::SetAside {
+        command,
+        notice: Box::new(notice),
+    }
 }
 
 /// What the owner is told of a submission the plugin found invalid: its first failing field, or,

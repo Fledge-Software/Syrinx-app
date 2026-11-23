@@ -78,7 +78,7 @@ fn token(call: &PluginCall) -> u64 {
 
 /// The synthetic plugin's form, open and editable.
 fn open_form(commands: &mut PluginCommands) {
-    let chosen = commands.choose("test", "test.new-item", true);
+    let chosen = commands.choose("test", "test.new-item", true).0;
     let notice = commands.receive(answer(token(&chosen), PluginReply::Form(Ok(spec()))));
     assert_eq!(
         notice,
@@ -93,6 +93,14 @@ fn submitted(commands: &mut PluginCommands) -> u64 {
     open_form(commands);
     commands.set_value("name", "Ada").expect("editable");
     token(&commands.submit().expect("sent"))
+}
+
+/// `notice`, named for the set-aside call `command`.
+fn named(command: &str, notice: Notice) -> Notice {
+    Notice::SetAside {
+        command: command.to_owned(),
+        notice: Box::new(notice),
+    }
 }
 
 fn uncertain() -> Outcome {
@@ -187,7 +195,7 @@ fn a_failed_host_check_keeps_the_input_names_the_first_field_and_sends_nothing()
 #[test]
 fn a_form_starts_with_its_initial_values_and_toggles_off() {
     let mut commands = PluginCommands::default();
-    let chosen = commands.choose("test", "test.new-item", true);
+    let chosen = commands.choose("test", "test.new-item", true).0;
     let mut with_initial = spec();
     with_initial.fields[0].initial = Some("Grace".to_owned());
     commands.receive(answer(token(&chosen), PluginReply::Form(Ok(with_initial))));
@@ -383,7 +391,7 @@ fn closing_the_palette_drops_the_form_but_still_reports_its_submissions_outcome(
     let reply = PluginReply::Submitted(Submitted::Finished(uncertain()));
     assert_eq!(
         commands.receive(answer(first, reply)),
-        Some(Notice::Outcome(uncertain()))
+        Some(named("New item", Notice::Outcome(uncertain())))
     );
     assert!(commands.form().is_none());
 
@@ -400,7 +408,7 @@ fn closing_the_palette_drops_the_form_but_still_reports_its_submissions_outcome(
     assert_eq!(commands.receive_outcome(late(41)), None);
     assert_eq!(
         commands.receive_outcome(late(42)),
-        Some(Notice::Outcome(uncertain()))
+        Some(named("New item", Notice::Outcome(uncertain())))
     );
     assert!(commands.form().is_none());
     // Told once.
@@ -423,11 +431,11 @@ fn closing_the_palette_drops_an_unsent_form_and_its_validation() {
 fn choosing_another_command_leaves_the_first_forms_outcome_on_the_status_line_only() {
     let mut commands = PluginCommands::default();
     let first = submitted(&mut commands);
-    let other = commands.choose("test", "test.echo", true);
+    let other = commands.choose("test", "test.echo", true).0;
     let reply = PluginReply::Submitted(Submitted::Finished(Outcome::Done(None)));
     assert_eq!(
         commands.receive(answer(first, reply)),
-        Some(Notice::Outcome(Outcome::Done(None)))
+        Some(named("New item", Notice::Outcome(Outcome::Done(None))))
     );
     assert!(commands.form().is_none());
     // The second command's own answer still counts.
@@ -440,7 +448,7 @@ fn choosing_another_command_leaves_the_first_forms_outcome_on_the_status_line_on
 #[test]
 fn a_command_that_ran_is_reported_after_the_palette_closed_but_a_form_is_not_opened() {
     let mut commands = PluginCommands::default();
-    let ran = commands.choose("test", "test.echo", true);
+    let ran = commands.choose("test", "test.echo", true).0;
     commands.abandon();
     let failure = Failure {
         kind: FailureKind::Host,
@@ -451,7 +459,7 @@ fn a_command_that_ran_is_reported_after_the_palette_closed_but_a_form_is_not_ope
         Some(Notice::Outcome(Outcome::Failed(failure)))
     );
 
-    let form = commands.choose("test", "test.new-item", true);
+    let form = commands.choose("test", "test.new-item", true).0;
     commands.abandon();
     let title = "New item".to_owned();
     assert_eq!(
@@ -466,7 +474,7 @@ fn a_form_chosen_after_the_palette_entry_ended_is_told_not_opened() {
     // The real order today: `PaletteEvent::Run` ends the entry, then the command is chosen.
     let mut commands = PluginCommands::default();
     commands.abandon();
-    let chosen = commands.choose("test", "test.new-item", false);
+    let chosen = commands.choose("test", "test.new-item", false).0;
     let title = "New item".to_owned();
     assert_eq!(
         commands.receive(answer(token(&chosen), PluginReply::Form(Ok(spec())))),
@@ -499,7 +507,7 @@ fn a_submission_closed_on_its_way_that_then_answers_pending_still_reports_its_ou
     };
     assert_eq!(
         commands.receive_outcome(late),
-        Some(Notice::Outcome(uncertain()))
+        Some(named("New item", Notice::Outcome(uncertain())))
     );
     assert!(commands.form().is_none());
 }
@@ -512,26 +520,30 @@ fn a_closed_submissions_invalid_answer_names_its_field_or_says_nothing_happened(
     let invalid = PluginReply::Submitted(Submitted::Invalid(vec![error("name", "Taken.")]));
     assert_eq!(
         commands.receive(answer(first, invalid)),
-        Some(Notice::Invalid(error("name", "Taken.")))
+        Some(named("New item", Notice::Invalid(error("name", "Taken."))))
     );
 
     let second = submitted(&mut commands);
     commands.abandon();
     let unnamed = PluginReply::Submitted(Submitted::Invalid(Vec::new()));
-    let Some(Notice::Failed(failure)) = commands.receive(answer(second, unnamed)) else {
+    let Some(Notice::SetAside { notice, .. }) = commands.receive(answer(second, unnamed)) else {
         panic!("an invalid answer naming no field is still told");
+    };
+    let Notice::Failed(failure) = *notice else {
+        panic!("nothing happened");
     };
     assert_eq!(failure.kind, FailureKind::InvalidInput);
 }
 
 #[test]
-fn a_command_run_still_waiting_when_another_is_chosen_is_still_reported() {
+fn a_command_run_still_waiting_when_another_is_chosen_is_still_reported_by_name() {
     let mut commands = PluginCommands::default();
-    let first = commands.choose("test", "test.echo", true);
-    let second = commands.choose("test", "test.recall", true);
+    let first = commands.choose("test", "test.echo", true).0;
+    let second = commands.choose("test", "test.recall", true).0;
+    // The first's late answer arrives while the second is current, and names its command.
     assert_eq!(
         commands.receive(answer(token(&first), PluginReply::Ran(Ok(())))),
-        Some(Notice::Outcome(Outcome::Done(None)))
+        Some(named("test.echo", Notice::Outcome(Outcome::Done(None))))
     );
     assert_eq!(
         commands.receive(answer(token(&second), PluginReply::Ran(Ok(())))),
@@ -539,8 +551,10 @@ fn a_command_run_still_waiting_when_another_is_chosen_is_still_reported() {
     );
 
     // A form for a command set aside the same way is dropped: nobody can see it.
-    let form = commands.choose("test", "test.new-item", true);
-    commands.choose("test", "test.echo", true);
+    let form = commands.choose("test", "test.new-item", true).0;
+    let (superseding, forgotten) = commands.choose("test", "test.echo", true);
+    assert_eq!(forgotten, None);
+    assert_ne!(superseding.token, form.token);
     assert_eq!(
         commands.receive(answer(token(&form), PluginReply::Form(Ok(spec())))),
         None
@@ -558,8 +572,8 @@ fn a_stopped_plugin_forgets_its_set_aside_submissions_that_wait_for_an_outcome()
     // One on its way still gets its answer, which the stopped worker always sends.
     let second = submitted(&mut commands);
     commands.abandon();
-    commands.plugin_stopped("other");
-    commands.plugin_stopped("test");
+    assert_eq!(commands.plugin_stopped("other"), None);
+    assert_eq!(commands.plugin_stopped("test"), None);
     let late = LateOutcome {
         plugin: "test".to_owned(),
         request: 41,
@@ -569,28 +583,64 @@ fn a_stopped_plugin_forgets_its_set_aside_submissions_that_wait_for_an_outcome()
     let reply = PluginReply::Submitted(Submitted::Finished(uncertain()));
     assert_eq!(
         commands.receive(answer(second, reply)),
-        Some(Notice::Outcome(uncertain()))
+        Some(named("New item", Notice::Outcome(uncertain())))
     );
+}
+
+#[test]
+fn a_current_pending_form_whose_plugin_stopped_may_have_happened_and_is_not_busy_for_good() {
+    let mut commands = PluginCommands::default();
+    let first = submitted(&mut commands);
+    let pending = PluginReply::Submitted(Submitted::Pending { request: 41 });
+    commands.receive(answer(first, pending));
+    assert_eq!(commands.plugin_stopped("other"), None);
+    assert!(commands.is_submitting());
+    let Some(Notice::Outcome(Outcome::Uncertain(_))) = commands.plugin_stopped("test") else {
+        panic!("a pending write whose plugin stopped may have happened");
+    };
+    assert!(!commands.is_submitting());
+    assert_eq!(commands.submit(), Err(Refusal::Uncertain));
+    // Nothing was set aside for the stopped instance.
+    assert_eq!(commands.abandon(), None);
 }
 
 #[test]
 fn past_the_limit_the_oldest_set_aside_call_is_forgotten_and_the_owner_is_told() {
     let mut commands = PluginCommands::default();
+    let mut forgotten = Vec::new();
     let tokens: Vec<u64> = (0..=MAX_ORPHANS)
         .map(|_| {
             let token = submitted(&mut commands);
-            commands.abandon();
+            forgotten.extend(commands.abandon());
             token
         })
         .collect();
-    assert_eq!(commands.take_notice(), Some(Notice::Forgotten));
-    assert_eq!(commands.take_notice(), None);
+    let may_have_written = Notice::Forgotten {
+        may_have_written: true,
+    };
+    assert_eq!(forgotten, [named("New item", may_have_written)]);
     let done = || PluginReply::Submitted(Submitted::Finished(Outcome::Done(None)));
     assert_eq!(commands.receive(answer(tokens[0], done())), None);
     for &kept in &tokens[1..] {
         assert_eq!(
             commands.receive(answer(kept, done())),
-            Some(Notice::Outcome(Outcome::Done(None)))
+            Some(named("New item", Notice::Outcome(Outcome::Done(None))))
         );
     }
+}
+
+#[test]
+fn a_forgotten_choice_is_not_said_to_have_written() {
+    let mut commands = PluginCommands::default();
+    let mut forgotten = None;
+    for _ in 0..=MAX_ORPHANS + 1 {
+        forgotten = commands
+            .choose("test", "test.new-item", true)
+            .1
+            .or(forgotten);
+    }
+    let neutral = Notice::Forgotten {
+        may_have_written: false,
+    };
+    assert_eq!(forgotten, Some(named("test.new-item", neutral)));
 }
