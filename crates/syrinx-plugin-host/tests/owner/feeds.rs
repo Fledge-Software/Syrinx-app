@@ -140,3 +140,18 @@ fn removing_a_plugin_tells_the_application_once_the_store_kept_it() {
     assert_eq!(removed, ["test"]);
     close(runtime, store);
 }
+
+#[test]
+fn an_event_reads_as_its_plugin_and_kind_and_says_whether_it_is_a_failure() {
+    let removed = PluginEvent::Removed {
+        plugin: "test".to_owned(),
+    };
+    assert_eq!(removed.to_string(), "plugin test: the plugin was removed");
+    assert!(!removed.is_failure());
+    let failed = PluginEvent::PrepareFailed {
+        plugin: "test".to_owned(),
+        error: HostError::Unavailable("synthetic secret detail".to_owned()),
+    };
+    assert!(failed.is_failure());
+    assert!(!failed.to_string().contains("secret"), "no detail is shown");
+}

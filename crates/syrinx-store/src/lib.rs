@@ -33,8 +33,8 @@ pub use location::{
 pub use permissions::{PermissionKind, RememberedPermission};
 pub use plugin_feeds::{
     FeedRowChange, FeedRowOutcome, MAX_PLUGIN_FEED_CURSOR_BYTES, MAX_PLUGIN_FEED_ENTRY_ID_BYTES,
-    MAX_PLUGIN_FEED_KEYWORDS, PluginFeedCommit, PluginFeedEntry, StoredFeedEntry,
-    validate_plugin_feed_commit,
+    MAX_PLUGIN_FEED_KEYWORDS, PLUGIN_FEED_KEYWORD_END, PluginFeedCommit, PluginFeedEntry,
+    StoredFeedEntry, validate_plugin_feed_commit,
 };
 pub use plugins::{
     FolderAccess, MAX_PLUGIN_COMPILED_BYTES, MAX_PLUGIN_SCOPE_BYTES, MAX_PLUGIN_SETTING_KEY_BYTES,

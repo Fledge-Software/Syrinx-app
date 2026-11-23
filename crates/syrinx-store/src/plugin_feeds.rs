@@ -37,8 +37,9 @@ pub const MAX_PLUGIN_FEED_KEYWORDS: usize = 16;
 /// Characters of a title or subtitle, and of one keyword; the host allows 200 and 120.
 const MAX_TEXT_CHARS: usize = 1024;
 const MAX_KEYWORD_CHARS: usize = 120;
-/// Ends each stored keyword, so no list of keywords reads back as another.
-const KEYWORD_END: &str = "\u{1f}";
+/// Ends each stored keyword, so no list of keywords reads back as another; no keyword may
+/// hold it (the plugin host refuses one that does).
+pub const PLUGIN_FEED_KEYWORD_END: char = '\u{1f}';
 
 /// One tier 1 row as a plugin's feed sent it.
 #[derive(Clone, Eq, PartialEq)]
@@ -177,10 +178,9 @@ fn validate_entry(entry: &PluginFeedEntry) -> Result<(), StoreError> {
     let texts_fit = within(&entry.title, MAX_TEXT_CHARS) && within(&entry.subtitle, MAX_TEXT_CHARS);
     let icon_fits = !entry.icon.is_empty() && within(&entry.icon, 32);
     let keywords_fit = entry.keywords.len() <= MAX_PLUGIN_FEED_KEYWORDS
-        && entry
-            .keywords
-            .iter()
-            .all(|keyword| within(keyword, MAX_KEYWORD_CHARS) && !keyword.contains(KEYWORD_END));
+        && entry.keywords.iter().all(|keyword| {
+            within(keyword, MAX_KEYWORD_CHARS) && !keyword.contains(PLUGIN_FEED_KEYWORD_END)
+        });
     if !texts_fit || !icon_fits || !keywords_fit {
         return Err(invalid());
     }
@@ -302,15 +302,17 @@ fn held_revision(
 }
 
 fn encode_keywords(keywords: &[String]) -> String {
-    keywords
-        .iter()
-        .flat_map(|keyword| [keyword.as_str(), KEYWORD_END])
-        .collect()
+    let mut stored = String::new();
+    for keyword in keywords {
+        stored.push_str(keyword);
+        stored.push(PLUGIN_FEED_KEYWORD_END);
+    }
+    stored
 }
 
 fn decode_keywords(stored: &str) -> Vec<String> {
     stored
-        .split_terminator(KEYWORD_END)
+        .split_terminator(PLUGIN_FEED_KEYWORD_END)
         .map(str::to_owned)
         .collect()
 }

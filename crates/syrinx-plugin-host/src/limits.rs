@@ -70,3 +70,9 @@ pub const MAX_CURSOR_BYTES: usize = 1024;
 /// Keywords per catalogue entry, and characters per keyword (G9, item 7).
 pub const MAX_KEYWORDS: usize = 16;
 pub const MAX_KEYWORD_CHARS: usize = 120;
+/// Ends each keyword the store keeps (`syrinx_store::PLUGIN_FEED_KEYWORD_END`), so no keyword
+/// may hold it.
+pub const KEYWORD_SEPARATOR: char = '\u{1f}';
+/// Starts the ids the full-text index reserves for its own markers
+/// (`syrinx_search::fulltext`'s `RESERVED_ID_START`), so no entry or document id may.
+pub const RESERVED_ID_START: char = '\0';

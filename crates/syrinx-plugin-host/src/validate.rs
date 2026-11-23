@@ -191,7 +191,7 @@ pub fn batch(batch: &mut Batch, max: u32) -> Result<Vec<String>, PluginError> {
 /// An entry or document id Syrinx's store and index both keep: not empty, bounded, and not
 /// starting with the NUL the index reserves for its own markers.
 fn feed_id(what: &str, id: &str) -> Result<(), PluginError> {
-    if id.is_empty() || id.starts_with('\0') {
+    if id.is_empty() || id.starts_with(limits::RESERVED_ID_START) {
         return Err(invalid(format!("{what} is empty or starts with NUL")));
     }
     bytes(what, id, limits::MAX_ENTRY_ID_BYTES)
@@ -199,7 +199,10 @@ fn feed_id(what: &str, id: &str) -> Result<(), PluginError> {
 
 /// The store ends each keyword with U+001F, so no keyword may hold it.
 fn keyword_separators(keywords: &[String]) -> Result<(), PluginError> {
-    if keywords.iter().any(|keyword| keyword.contains('\u{1f}')) {
+    if keywords
+        .iter()
+        .any(|keyword| keyword.contains(limits::KEYWORD_SEPARATOR))
+    {
         return Err(invalid("a keyword holds U+001F"));
     }
     Ok(())

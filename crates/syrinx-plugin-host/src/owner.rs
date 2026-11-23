@@ -45,6 +45,8 @@ const _: () = assert!(limits::MAX_SETTINGS_KEYS == syrinx_store::MAX_PLUGIN_SETT
 const _: () = assert!(limits::MAX_CURSOR_BYTES == syrinx_store::MAX_PLUGIN_FEED_CURSOR_BYTES);
 const _: () = assert!(limits::MAX_ENTRY_ID_BYTES == syrinx_store::MAX_PLUGIN_FEED_ENTRY_ID_BYTES);
 const _: () = assert!(limits::MAX_KEYWORDS == syrinx_store::MAX_PLUGIN_FEED_KEYWORDS);
+const _: () =
+    assert!(limits::KEYWORD_SEPARATOR as u32 == syrinx_store::PLUGIN_FEED_KEYWORD_END as u32);
 // A scope lists only what its manifest names, so any accepted manifest's scope fits the store.
 const _: () = assert!(crate::manifest::MAX_MANIFEST_BYTES <= syrinx_store::MAX_PLUGIN_SCOPE_BYTES);
 
