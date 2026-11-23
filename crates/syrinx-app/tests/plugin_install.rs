@@ -18,15 +18,15 @@ use syrinx_plugin_host::manifest::{
     CapabilityKind, DiscoveryOptions, MANIFEST_FILE, PluginManifest,
 };
 use syrinx_plugin_host::owner::{
-    CacheSetup, Offer, OwnerRuntime, Plan, Reviewed, UNSIGNED_PUBLISHER,
+    CacheSetup, Hasher, Offer, OwnerRuntime, Plan, Reviewed, UNSIGNED_PUBLISHER,
 };
 use syrinx_plugin_host::{PluginRegistry, SignedIdentity};
-use syrinx_store::{DirectoryLease, LocationError, PluginInstall, Store};
+use syrinx_store::{DirectoryLease, FolderAccess, LocationError, PluginInstall, Store};
 use syrinx_update::{
     Basis, DetachedSignature, FileEntry, Installed, KeyId, PACKAGE_FILE, PACKAGE_SIGNATURE_FILE,
     PackagePath, PinnedKey, PlacedPlugin, PluginFolders, PluginInstallError, PluginOffer,
     PluginPackageList, Publisher, SignatureKind, StagedPlugin, TestKeyPair, Version,
-    find_pending_update, open_installed, sha256, stage_plugin,
+    open_installed, settle_pending_update, sha256, stage_plugin,
 };
 
 #[path = "support/plugin_fixture.rs"]
@@ -178,7 +178,7 @@ fn host_offer(
         manifest,
         Arc::from(component),
         publisher.to_record(),
-        app_sha256,
+        Hasher::new(app_sha256).map_err(|error| error.to_string())?,
     )
     .map_err(|error| error.to_string())
 }
@@ -270,6 +270,14 @@ impl Installer {
         Ok(())
     }
 
+    /// The installed version read again from its own folder, as an update is reviewed against.
+    fn base_offer(&self) -> Result<Offer, String> {
+        let record = self.record();
+        let placed = open_installed(&self.folders, installed(&record)?, self.developer_mode)
+            .map_err(|error| error.to_string())?;
+        placed_offer(&placed)
+    }
+
     /// Stage, review and place an update of `test` from its install record. The placed
     /// folder is kept: a held update waits there, beside the running version, for the owner.
     fn offer_update(&mut self, folder: &Path) -> Result<Reviewed, String> {
@@ -282,7 +290,7 @@ impl Installer {
         let staged = stage_plugin(&self.folders, &offer).map_err(|error| error.to_string())?;
         let reviewed = self
             .runtime
-            .review(staged_offer(&staged)?, Some("test"))
+            .review(staged_offer(&staged)?, Some(self.base_offer()?))
             .map_err(|error| error.to_string())?;
         staged
             .place(&self.folders)
@@ -296,9 +304,10 @@ impl Installer {
         let record = self.record();
         let basis = installed(&record).expect("a readable record");
         let placed =
-            find_pending_update(&self.folders, basis, self.developer_mode).expect("looked")?;
+            settle_pending_update(&self.folders, basis, self.developer_mode).expect("settled")?;
         let offer = placed_offer(&placed).expect("an offer");
-        Some(self.runtime.review(offer, Some("test")).expect("reviewed"))
+        let base = self.base_offer().expect("the installed version");
+        Some(self.runtime.review(offer, Some(base)).expect("reviewed"))
     }
 
     fn update(&mut self, reviewed: Reviewed, granted: &[CapabilityKind]) -> Result<(), String> {
@@ -458,6 +467,9 @@ fn a_held_update_survives_a_restart_while_the_old_version_runs_and_can_be_accept
     installer
         .update(held.accept(), &[CapabilityKind::Folder])
         .expect("updated");
+    // The old version's compiled code is gone the moment the update returns.
+    let compiled = installer.store.plugin_compiled("test").expect("read");
+    assert!(compiled.is_none_or(|compiled| compiled.module_sha256 == module_hash(v(2))));
     installer.echo();
     let record = installer.record();
     assert_eq!(record.version, "0.2.0");
@@ -519,33 +531,154 @@ fn an_update_signed_by_a_different_publisher_is_refused_and_leaves_nothing() {
     installer.close();
 }
 
-#[test]
-fn an_update_that_cannot_be_written_puts_the_old_version_back() {
-    let scratch = Scratch::new("busy");
-    let signer = TestKeyPair::generate().expect("a key");
-    let mut installer = Installer::start(&scratch);
-    let first = package(&scratch, v(1), "", Some(&signer));
+/// A folder request for two folders with write access, and its narrower successor.
+const TWO_FOLDERS: &str = "[[capabilities]]\nkind = \"folder\"\naccess = \"read-write\"\ncount = 2\nreason = \"Reads two synthetic vaults.\"\nrequired = false\n";
+const ONE_READ_FOLDER: &str = "[[capabilities]]\nkind = \"folder\"\naccess = \"read\"\ncount = 1\nreason = \"Reads one synthetic vault.\"\nrequired = false\n";
+const OPEN_EXTERNAL: &str = "[[capabilities]]\nkind = \"open-external\"\nreason = \"Opens synthetic links.\"\nrequired = false\n";
+
+/// The installed version as an update must leave it after failing.
+struct Snapshot {
+    record: PluginInstall,
+    grants: Vec<(String, String)>,
+    folders: Vec<(PathBuf, FolderAccess)>,
+}
+
+impl Snapshot {
+    fn of(installer: &Installer) -> Self {
+        let grants = installer
+            .store
+            .plugin_grants()
+            .expect("read")
+            .into_iter()
+            .map(|stored| (stored.grant.capability, stored.grant.scope_json))
+            .collect();
+        let folders = installer
+            .store
+            .plugin_folders("test")
+            .expect("read")
+            .into_iter()
+            .map(|folder| (folder.path, folder.access))
+            .collect();
+        Self {
+            record: installer.record(),
+            grants,
+            folders,
+        }
+    }
+}
+
+/// Install version 1 asking for storage and two writable folders, both granted, and run it.
+fn install_with_folders(scratch: &Scratch, signer: &TestKeyPair) -> Installer {
+    let mut installer = Installer::start(scratch);
+    let first = package(scratch, v(1), TWO_FOLDERS, Some(signer));
+    let granted = [CapabilityKind::Storage, CapabilityKind::Folder];
     installer
-        .install(&first, Some(key(&signer)), &[CapabilityKind::Storage])
+        .install(&first, Some(key(signer)), &granted)
         .expect("installed");
-    let before = installer.record();
-    let newer = package(&scratch, v(2), "", Some(&signer));
-    let reviewed = installer.offer_update(&newer).expect("reviewed");
+    for name in ["first-vault", "second-vault"] {
+        let vault = scratch.0.join(name);
+        fs::create_dir(&vault).expect("a synthetic vault");
+        installer
+            .runtime
+            .grant_folder("test", &vault, FolderAccess::ReadWrite)
+            .expect("granted");
+    }
+    installer.echo();
+    installer
+}
 
-    // Another connection holds the database's write lock while the update writes its record.
-    let blocker = rusqlite::Connection::open(scratch.database()).expect("a second connection");
-    blocker
-        .execute_batch("BEGIN IMMEDIATE")
-        .expect("the write lock");
-    assert!(installer.update(reviewed, &[]).is_err());
-    blocker.execute_batch("ROLLBACK").expect("released");
-    drop(blocker);
-
-    assert_eq!(installer.record(), before);
+/// Version 1, as `before` recorded it, is back in full and running.
+fn assert_old_version_back(installer: &mut Installer, before: &Snapshot) {
+    let after = Snapshot::of(installer);
+    assert_eq!(after.record, before.record);
+    assert_eq!(after.grants, before.grants);
+    assert_eq!(after.folders, before.folders);
+    assert_eq!(after.folders.len(), 2);
     let registered = installer.plugins.get("test").expect("registered again");
     assert_eq!(registered.manifest().version(), "0.1.0");
     assert!(installer.commands.find("test.echo").is_some());
     installer.echo();
+}
+
+/// Run `sql` on another connection to the same database, as a test's way to make one write fail.
+fn run_sql(scratch: &Scratch, sql: &str) {
+    let connection = rusqlite::Connection::open(scratch.database()).expect("a second connection");
+    connection.execute_batch(sql).expect("synthetic triggers");
+}
+
+#[test]
+fn an_update_whose_record_write_fails_puts_the_old_version_back() {
+    let scratch = Scratch::new("record-refused");
+    let signer = TestKeyPair::generate().expect("a key");
+    let mut installer = install_with_folders(&scratch, &signer);
+    let before = Snapshot::of(&installer);
+    let newer = package(&scratch, v(2), TWO_FOLDERS, Some(&signer));
+    let reviewed = installer.offer_update(&newer).expect("reviewed");
+
+    // The new record is refused; restoring the old one is not.
+    run_sql(
+        &scratch,
+        "CREATE TRIGGER refuse_new_record BEFORE UPDATE ON plugin_install
+         WHEN NEW.version = '0.2.0' BEGIN SELECT RAISE(ABORT, 'synthetic refusal'); END;",
+    );
+    assert!(installer.update(reviewed, &[]).is_err());
+    assert_old_version_back(&mut installer, &before);
+    installer.close();
+}
+
+#[test]
+fn an_update_failing_after_its_record_and_grants_are_written_puts_them_back() {
+    let scratch = Scratch::new("grant-refused");
+    let signer = TestKeyPair::generate().expect("a key");
+    let mut installer = install_with_folders(&scratch, &signer);
+    let before = Snapshot::of(&installer);
+    let newer = package(
+        &scratch,
+        v(2),
+        &format!("{ONE_READ_FOLDER}{OPEN_EXTERNAL}"),
+        Some(&signer),
+    );
+    let reviewed = installer.offer_update(&newer).expect("reviewed").accept();
+
+    // The record is written, the folder grant rescoped and its folders narrowed; then the
+    // owner's new grant is refused.
+    run_sql(
+        &scratch,
+        "CREATE TRIGGER refuse_open_external AFTER INSERT ON plugin_grant
+         WHEN NEW.capability = 'open-external' BEGIN SELECT RAISE(ABORT, 'synthetic refusal'); END;",
+    );
+    let granted = [CapabilityKind::OpenExternal];
+    assert!(installer.update(reviewed, &granted).is_err());
+    assert_old_version_back(&mut installer, &before);
+    installer.close();
+}
+
+#[test]
+fn an_update_failing_to_load_after_the_old_version_stopped_loads_the_old_one_again() {
+    let scratch = Scratch::new("load-refused");
+    let signer = TestKeyPair::generate().expect("a key");
+    let mut installer = install_with_folders(&scratch, &signer);
+    let before = Snapshot::of(&installer);
+    let newer = package(&scratch, v(2), TWO_FOLDERS, Some(&signer));
+    let reviewed = installer.offer_update(&newer).expect("reviewed");
+
+    // Writing the new record also writes a damaged one, so loading the new version, which
+    // reads the records after the old version stopped, fails. Restoring the old record
+    // removes the damage.
+    run_sql(
+        &scratch,
+        "CREATE TRIGGER damage_records AFTER UPDATE ON plugin_install
+         WHEN NEW.version = '0.2.0' BEGIN
+             INSERT INTO plugin_install VALUES
+                 ('DAMAGED', '1', zeroblob(32), zeroblob(32), 'synthetic', 1, 0, 0);
+         END;
+         CREATE TRIGGER repair_records AFTER UPDATE ON plugin_install
+         WHEN NEW.version = '0.1.0' BEGIN
+             DELETE FROM plugin_install WHERE plugin_id = 'DAMAGED';
+         END;",
+    );
+    assert!(installer.update(reviewed, &[]).is_err());
+    assert_old_version_back(&mut installer, &before);
     installer.close();
 }
 
