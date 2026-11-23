@@ -789,3 +789,48 @@ fn a_feed_announced_while_cooling_down_is_pulled_once_when_the_cool_down_ends() 
     );
     assert_eq!(titles(&mut catalogue, "synthetic"), ["Synthetic fixed"]);
 }
+
+#[test]
+fn an_index_emptied_between_two_batches_of_one_pull_is_fed_again_from_the_start() {
+    let folder = Folder::new();
+    let store = folder.store();
+    let mut index = folder.index("fulltext");
+    let mut catalogue = Catalogue::new();
+    let mut feeds = PluginFeeds::default();
+    let first = batch(vec![document("a", 1, "quillmark")], "c1", true);
+    let second = batch(vec![document("b", 1, "lanternfish")], "c2", false);
+    let mut plugin = Scripted::default()
+        .answer(None, first)
+        .answer(Some("c1"), second);
+    announce(&mut feeds);
+    let mut sinks = Sinks {
+        store: &store,
+        index: Some(&mut index),
+        catalogue: &mut catalogue,
+        now: NOW,
+        at: Instant::now(),
+    };
+    // One pump starts the pull, the next keeps the first batch and asks for the second.
+    feeds.pump(&mut plugin, &mut sinks).expect("the pull starts");
+    feeds.pump(&mut plugin, &mut sinks).expect("the first batch");
+    assert!(feeds.pull.is_some(), "the second batch is in flight");
+
+    // A history repair empties the index while the second batch is in flight.
+    let mut emptied = folder.index("fulltext-emptied");
+    settle(
+        &mut feeds,
+        &mut plugin,
+        &store,
+        &mut emptied,
+        &mut catalogue,
+    );
+
+    // The emptied index lost the first batch's text, so the feed is pulled from its start
+    // again instead of being marked as fed with only the second batch's.
+    assert_eq!(documents(&emptied, "lanternfish"), ["b"]);
+    assert_eq!(
+        documents(&emptied, "quillmark"),
+        ["a"],
+        "the first batch's text is in the emptied index again"
+    );
+}

@@ -252,6 +252,12 @@ impl PluginFeeds {
         let batch = answer
             .map_err(FeedError::Host)?
             .map_err(|_| FeedError::Plugin)?;
+        // An index emptied since the pull began lost the batches already kept, so the feed
+        // starts again from its start instead of being marked as fed without them.
+        if emptied_since_start(&pull, sinks)? {
+            self.announce(pull.name);
+            return Ok(());
+        }
         self.apply(&pull, &batch, sinks)?;
         self.follow(pull, batch, source, sinks.at)
     }
@@ -456,6 +462,18 @@ impl PluginFeeds {
             .map_err(FeedError::Search)
             .map(drop)
     }
+}
+
+/// Whether the index lost the feed's marker while a pull that went on from a kept cursor was
+/// in flight: a history repair emptied it between two batches (#141's comment).
+fn emptied_since_start(pull: &Pull, sinks: &Sinks<'_>) -> Result<bool, FeedError> {
+    let (false, Some(index)) = (pull.from_start, sinks.index.as_deref()) else {
+        return Ok(false);
+    };
+    let fed = index
+        .is_fed(&namespace(&pull.name)?)
+        .map_err(FeedError::Index)?;
+    Ok(!fed)
 }
 
 fn namespace(name: &FeedName) -> Result<Namespace, FeedError> {
