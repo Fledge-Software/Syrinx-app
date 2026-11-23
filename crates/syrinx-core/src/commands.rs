@@ -386,6 +386,16 @@ impl CommandRegistry {
         Ok(())
     }
 
+    /// Removes every command `plugin` registered, in one step, and returns how many went.
+    /// Later commands move up, so their keys change: whoever kept keys must look them up again.
+    pub fn remove_plugin(&mut self, plugin: &str) -> usize {
+        let before = self.commands.len();
+        self.commands.retain(|command| {
+            !matches!(&command.scope, CommandScope::Plugin { plugin: owner } if owner == plugin)
+        });
+        before - self.commands.len()
+    }
+
     pub fn get(&self, key: NonZeroU64) -> Option<&Command> {
         let index = usize::try_from(key.get() - 1).ok()?;
         self.commands.get(index)
@@ -688,6 +698,35 @@ mod tests {
                 .iter()
                 .all(|(_, command)| !command.is_plugin_action())
         );
+    }
+
+    #[test]
+    fn removing_a_plugin_takes_only_its_commands_and_frees_their_ids() {
+        let mut registry = CommandRegistry::browser();
+        let browser = registry.len();
+        let keys = registry
+            .register_all(vec![
+                owned_command("first", "first.one", None),
+                owned_command("second", "second.one", None),
+                owned_command("first", "first.two", None),
+            ])
+            .expect("registered");
+        assert_eq!(keys.len(), 3);
+
+        assert_eq!(registry.remove_plugin("first"), 2);
+        assert_eq!(registry.len(), browser + 1);
+        assert!(registry.find("first.one").is_none());
+        assert!(registry.find("first.two").is_none());
+        let (key, _) = registry
+            .find("second.one")
+            .expect("the other plugin keeps its command");
+        assert_eq!(key.get(), browser as u64 + 1, "later commands move up");
+        assert_eq!(registry.remove_plugin("first"), 0, "nothing left to remove");
+
+        // A corrected package may register the same ids again.
+        registry
+            .register(owned_command("first", "first.one", None))
+            .expect("the id is free again");
     }
 
     #[test]

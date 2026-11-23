@@ -124,6 +124,34 @@ impl PluginRegistry {
         Ok(self.plugins.entry(id).or_insert(registered))
     }
 
+    /// Withdraw a plugin in one step: its commands leave the palette's registry, and its tab
+    /// types and feeds leave with its entry, so a refused or removed plugin shows nothing and
+    /// a corrected package may take its id again. Removing commands moves later ones up, so
+    /// every other plugin's command keys are looked up again. `None` if it was not registered.
+    pub fn withdraw(
+        &mut self,
+        id: &str,
+        commands: &mut CommandRegistry,
+    ) -> Option<RegisteredPlugin> {
+        let withdrawn = self.plugins.remove(id)?;
+        commands.remove_plugin(id);
+        for plugin in self.plugins.values_mut() {
+            plugin.command_keys = current_keys(&plugin.manifest, commands);
+        }
+        Some(withdrawn)
+    }
+
+    #[cfg(feature = "store")]
+    /// Register a withdrawn plugin again, as an update that failed rolls back to the version
+    /// it replaced. Its manifest was signed when it was first registered.
+    pub(crate) fn reinstate(
+        &mut self,
+        withdrawn: RegisteredPlugin,
+        commands: &mut CommandRegistry,
+    ) -> Result<&RegisteredPlugin, RegistrationError> {
+        self.register(SignedManifest::vouched(withdrawn.manifest), commands)
+    }
+
     /// The registered plugin with this id.
     pub fn get(&self, id: &str) -> Option<&RegisteredPlugin> {
         self.plugins.get(id)
@@ -156,7 +184,7 @@ impl PluginRegistry {
 
     /// Refuse an id Syrinx reserves or another plugin already has.
     fn check_id(&self, id: &str) -> Result<(), RegistrationError> {
-        if RESERVED_IDS.contains(&id) {
+        if is_reserved_id(id) {
             return Err(RegistrationError::ReservedId(id.to_owned()));
         }
         if self.plugins.contains_key(id) {
@@ -164,6 +192,20 @@ impl PluginRegistry {
         }
         Ok(())
     }
+}
+
+/// Whether the id belongs to Syrinx itself, so no plugin may take it.
+pub fn is_reserved_id(id: &str) -> bool {
+    RESERVED_IDS.contains(&id)
+}
+
+/// The keys `manifest`'s commands have in the palette's registry now.
+fn current_keys(manifest: &PluginManifest, commands: &CommandRegistry) -> Vec<NonZeroU64> {
+    manifest
+        .commands()
+        .iter()
+        .filter_map(|command| commands.find(command.id.as_str()).map(|(key, _)| key))
+        .collect()
 }
 
 /// The palette command for a declared one. The manifest already proved its id carries the

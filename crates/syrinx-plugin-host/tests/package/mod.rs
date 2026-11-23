@@ -279,6 +279,50 @@ fn a_component_importing_an_unrequested_capability_is_refused_at_load() {
 }
 
 #[test]
+fn a_plugin_refused_at_load_is_withdrawn_in_one_step_and_its_id_freed() {
+    let mut commands = CommandRegistry::browser();
+    let browser = commands.len();
+    let mut plugins = PluginRegistry::new();
+    register(&mut plugins, manifest("idle"), &mut commands).expect("registers");
+    let refused = register(&mut plugins, manifest("test"), &mut commands).expect("registers");
+    let error = Runtime::new()
+        .expect("engine")
+        .compile_package(refused, &support::bytes(variant("imports-documents")))
+        .expect_err("the manifest requests no folder");
+    assert!(matches!(error, HostError::Identity(_)), "{error}");
+
+    let withdrawn = plugins.withdraw("test", &mut commands).expect("withdrawn");
+    assert_eq!(withdrawn.manifest().id(), "test");
+
+    // None of its commands stays runnable, and its tab types and feeds leave with it.
+    assert!(
+        commands
+            .iter()
+            .all(|(_, command)| !command.id.as_str().starts_with("test."))
+    );
+    assert!(plugins.get("test").is_none());
+    assert!(matches!(
+        plugins.tab_type("test", "test.page"),
+        Err(RegistrationError::UnknownPlugin(_))
+    ));
+
+    // The other plugin's keys still name its own commands.
+    let idle = plugins.get("idle").expect("kept");
+    assert_eq!(commands.len(), browser + idle.command_keys().len());
+    for (key, declared) in idle.command_keys().iter().zip(idle.manifest().commands()) {
+        assert_eq!(
+            commands.get(*key).map(|command| &command.id),
+            Some(&declared.id)
+        );
+    }
+
+    // A corrected package may take the id again, and withdrawing twice is refused.
+    register(&mut plugins, manifest("test"), &mut commands).expect("the id is free again");
+    plugins.withdraw("idle", &mut commands).expect("withdrawn");
+    assert!(plugins.withdraw("idle", &mut commands).is_none());
+}
+
+#[test]
 fn signed_lines_that_disagree_with_the_manifest_are_named() {
     for (identity, expected) in [
         (signed("notes", "0.1.0"), "signed as notes"),

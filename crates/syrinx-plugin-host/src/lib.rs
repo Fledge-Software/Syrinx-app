@@ -29,5 +29,5 @@ pub use engine::{CompileCounts, Runtime};
 pub use error::{Failure, HostError};
 pub use identity::{IdentityMismatch, SignedIdentity, SignedManifest, check_signed};
 pub use instance::{LoadedPlugin, PluginHost, PreparedPlugin, StoreData};
-pub use registry::{PluginRegistry, RegisteredPlugin, RegistrationError};
+pub use registry::{PluginRegistry, RegisteredPlugin, RegistrationError, is_reserved_id};
 pub use wasi::{OUTPUT_LIMIT_BYTES, OutputBuffer, PROVIDED_INTERFACES, WasiState};
