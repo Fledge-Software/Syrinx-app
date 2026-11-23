@@ -80,6 +80,8 @@ pub enum Section {
     OpenTabs,
     Bookmarks,
     History,
+    /// Plugin search feed rows (#141), drawn as any row until the owner settles their look (#265).
+    Plugins,
 }
 
 impl Section {
@@ -89,6 +91,7 @@ impl Section {
             Target::Tab(_) => Self::OpenTabs,
             Target::Saved(_) => Self::Bookmarks,
             Target::History(_) => Self::History,
+            Target::Plugin { .. } => Self::Plugins,
         }
     }
 
@@ -98,6 +101,7 @@ impl Section {
             Self::OpenTabs => "Open tabs",
             Self::Bookmarks => "Bookmarks",
             Self::History => "History",
+            Self::Plugins => "Plugins",
         }
     }
 }

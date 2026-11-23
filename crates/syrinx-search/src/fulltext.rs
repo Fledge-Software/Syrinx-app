@@ -13,7 +13,7 @@ use std::{collections::HashMap, ops::Bound, path::Path};
 
 use tantivy::{
     Directory, Index, IndexReader, IndexWriter, ReloadPolicy, Searcher, SegmentMeta,
-    TantivyDocument,
+    TantivyDocument, Term,
     collector::{Count, DocSetCollector, TopDocs},
     index::SegmentComponent,
     indexer::NoMergePolicy,
@@ -26,6 +26,10 @@ pub use types::{
     Change, ClearRequest, ClearScope, Deletion, FullTextDocument, FullTextError, FullTextHit,
     Namespace, NamespaceFilter, Outcome, PAGE_RETENTION_SECONDS, Retention, SearchRequest,
 };
+
+/// The id of `mark_fed`'s marker; `Change::validate` refuses it from every caller.
+const FED_MARKER: &str = "\0fed";
+const _: () = assert!(FED_MARKER.as_bytes()[0] == types::RESERVED_ID_START as u8);
 
 /// The writer's indexing memory; Tantivy's minimum is 15 MB.
 const WRITER_MEMORY_BYTES: usize = 32 * 1024 * 1024;
@@ -163,6 +167,67 @@ impl FullText {
         self.writer
             .delete_term(self.fields.namespace_term(namespace));
         self.commit_with(self.cleared)
+    }
+
+    /// Removes every namespace of `plugin`, whatever feeds its manifest declared, and commits.
+    ///
+    /// Plugin namespaces are spelled `plugin:{plugin}:{feed}` and a plugin id holds no `:`, so
+    /// the stored spellings from `plugin:{plugin}:` up to the next character after `:` are
+    /// exactly this plugin's: never another plugin's, a `Namespace::feed` or page text.
+    pub fn remove_plugin(&mut self, plugin: &str) -> Result<(), FullTextError> {
+        self.require_nothing_staged()?;
+        let namespace = |bound: char| {
+            let spelling = format!("{}{plugin}{bound}", types::PLUGIN_PREFIX);
+            Term::from_field_text(self.fields.namespace, &spelling)
+        };
+        let own = RangeQuery::new(
+            Bound::Included(namespace(':')),
+            Bound::Excluded(namespace(';')),
+        );
+        self.stage_deletion(BooleanQuery::new(vec![(
+            Occur::Must,
+            Box::new(own) as Box<dyn Query>,
+        )]))?;
+        self.commit_with(self.cleared)
+    }
+
+    /// The revision held for `id`, document or tombstone, once staged changes are counted.
+    pub fn held_revision(
+        &self,
+        namespace: &Namespace,
+        id: &str,
+    ) -> Result<Option<u64>, FullTextError> {
+        self.require_usable()?;
+        Ok(self.held(namespace, id)?.map(|held| held.revision))
+    }
+
+    /// Stages a marker saying this index has been fed `namespace`; the next commit keeps it.
+    ///
+    /// The owner of a feed's cursor checks `is_fed` before pulling on from it: an index
+    /// emptied since (a history repair empties the whole folder) has lost the marker with the
+    /// text, so the feed is pulled again from its start (#141). The marker is a tombstone under
+    /// a reserved id, so it is never a result and, outside page text, never expires.
+    pub fn mark_fed(&mut self, namespace: &Namespace) -> Result<(), FullTextError> {
+        self.require_usable()?;
+        if namespace.is_page() {
+            return Err(FullTextError::InvalidNamespace);
+        }
+        let marker = Change::Delete(Deletion {
+            namespace: namespace.clone(),
+            id: FED_MARKER.to_owned(),
+            revision: 1,
+            deleted_at: 0,
+        });
+        match self.stage_one(&marker, 0) {
+            Ok(_) => Ok(()),
+            Err(error) => Err(self.discard_after(error)),
+        }
+    }
+
+    /// Whether `mark_fed`'s marker for `namespace` is held, once staged changes are counted.
+    pub fn is_fed(&self, namespace: &Namespace) -> Result<bool, FullTextError> {
+        self.require_usable()?;
+        Ok(self.held(namespace, FED_MARKER)?.is_some())
     }
 
     /// The last D47 journal generation this index has applied.

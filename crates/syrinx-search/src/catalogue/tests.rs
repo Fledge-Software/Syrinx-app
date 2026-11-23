@@ -5,6 +5,7 @@ use std::num::NonZeroU64;
 use syrinx_core::{SavedPageId, TabId};
 
 use super::*;
+use crate::{EntryKey, FeedKey};
 use crate::{
     Usage,
     candidate::{FieldMasks, QueryBound, score_upper_bound},
@@ -205,6 +206,7 @@ fn scope_counts_include_every_match_before_filter_and_limit() {
         Target::Saved(SavedPageId::new(1).expect("saved ID")),
         Target::History(NonZeroU64::new(1).expect("history ID")),
         Target::Command(NonZeroU64::new(1).expect("command ID")),
+        plugin_target(1),
     ];
     let mut catalogue = Catalogue::new();
     for target in targets {
@@ -223,7 +225,8 @@ fn scope_counts_include_every_match_before_filter_and_limit() {
             tabs: 1,
             saved: 1,
             history: 1,
-            commands: 1
+            commands: 1,
+            plugins: 1
         }
     );
     assert_eq!(result.hits.len(), 1);
@@ -233,8 +236,57 @@ fn scope_counts_include_every_match_before_filter_and_limit() {
     let result = catalogue
         .query("marker", Scope::Commands, 100, limited)
         .expect("zero limit");
-    assert_eq!(result.counts.total(), 4);
+    assert_eq!(result.counts.total(), 5);
     assert!(result.hits.is_empty());
+}
+
+/// A plugin feed's row in a test: feed 1, entry `entry`.
+fn plugin_target(entry: u32) -> Target {
+    let key = |value| std::num::NonZeroU32::new(value).expect("synthetic nonzero key");
+    Target::Plugin {
+        feed: FeedKey::new(key(1)),
+        entry: EntryKey::new(key(entry)),
+    }
+}
+
+#[test]
+fn plugin_rows_are_found_under_everything_only() {
+    let mut catalogue = Catalogue::new();
+    catalogue
+        .upsert(entry(
+            1,
+            "Synthetic quillmark tab",
+            "https://example.test/tab",
+        ))
+        .expect("insert a tab row");
+    for id in 1..=3 {
+        let mut row = entry(1, "Synthetic quillmark note", "made-up subtitle");
+        row.target = plugin_target(id);
+        catalogue.upsert(row).expect("insert a plugin row");
+    }
+    let everything = search(&mut catalogue, "quillmark");
+    assert_eq!(everything.counts.plugins, 3);
+    assert_eq!(everything.counts.total(), 4);
+    let found = everything
+        .hits
+        .iter()
+        .filter(|hit| matches!(hit.target, Target::Plugin { .. }))
+        .count();
+    assert_eq!(found, 3);
+    for scope in [Scope::Tabs, Scope::Saved, Scope::History, Scope::Commands] {
+        let scoped = catalogue
+            .query("quillmark", scope, 100, policy())
+            .expect("scoped query");
+        assert!(
+            scoped
+                .hits
+                .iter()
+                .all(|hit| !matches!(hit.target, Target::Plugin { .. })),
+            "{scope:?}"
+        );
+    }
+    assert_eq!(catalogue.remove(plugin_target(2)), Ok(true));
+    assert_eq!(search(&mut catalogue, "quillmark").counts.plugins, 2);
 }
 
 #[test]
@@ -1057,6 +1109,7 @@ fn score_pruning_preserves_boosted_rank_target_ties_and_all_scope_counts() {
         saved: 80,
         history: 80,
         commands: 80,
+        plugins: 0,
     };
 
     // The two-typo policy also checks the full-matcher fallback, with the same rank contract.
@@ -1346,6 +1399,7 @@ fn equivalent_field_scores_keep_distinct_targets_counts_boosts_ties_and_highligh
         saved: 2,
         history: 2,
         commands: 2,
+        plugins: 0,
     };
     for scope in [
         Scope::Everything,

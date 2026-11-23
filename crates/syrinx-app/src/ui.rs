@@ -1547,6 +1547,11 @@ impl BrowserView {
                     Target::Command(_) => {
                         self.message = "Commands run through their own row.".to_owned()
                     }
+                    // Opening one resolves it through its plugin (`PluginFeeds::resolve`),
+                    // which needs plugin tabs (#29) and installed plugins (#140).
+                    Target::Plugin { .. } => {
+                        self.message = "Plugin rows cannot be opened yet.".to_owned()
+                    }
                 }
                 self.focus_page(window, cx);
             }

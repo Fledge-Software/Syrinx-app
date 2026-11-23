@@ -17,7 +17,19 @@ pub struct Namespace(Source);
 enum Source {
     Page,
     Feed(String),
+    /// One feed of one plugin (#141), so a plugin's text can be removed whatever it declared.
+    Plugin {
+        plugin: String,
+        feed: String,
+    },
 }
+
+/// Starts the stored spelling of every plugin namespace, `plugin:{plugin}:{feed}`.
+pub(super) const PLUGIN_PREFIX: &str = "plugin:";
+
+/// Ids starting with this byte are the adapter's own, such as the marker `mark_fed` writes;
+/// no caller may stage one.
+pub(super) const RESERVED_ID_START: char = '\0';
 
 /// How long a namespace keeps its documents.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -49,11 +61,28 @@ impl Namespace {
         Ok(Self(Source::Feed(name.to_owned())))
     }
 
+    /// One feed of one plugin. The plugin id and the feed name each follow
+    /// `syrinx_core::CommandId`'s rule, so neither holds `:` and every pair has its own
+    /// stored spelling, `plugin:{plugin}:{feed}`.
+    pub fn plugin_feed(plugin: &str, feed: &str) -> Result<Self, FullTextError> {
+        if !is_plugin_name(plugin) || !is_plugin_name(feed) {
+            return Err(FullTextError::InvalidNamespace);
+        }
+        Ok(Self(Source::Plugin {
+            plugin: plugin.to_owned(),
+            feed: feed.to_owned(),
+        }))
+    }
+
     pub fn retention(&self) -> Retention {
         match self.0 {
             Source::Page => Retention::ExpiresAfter(PAGE_RETENTION_SECONDS),
-            Source::Feed(_) => Retention::Kept,
+            Source::Feed(_) | Source::Plugin { .. } => Retention::Kept,
         }
+    }
+
+    pub(super) fn is_page(&self) -> bool {
+        self.0 == Source::Page
     }
 
     /// The stored spelling; `:` cannot occur in a feed name, so spellings never collide.
@@ -61,6 +90,7 @@ impl Namespace {
         match &self.0 {
             Source::Page => "page".to_owned(),
             Source::Feed(name) => format!("feed:{name}"),
+            Source::Plugin { plugin, feed } => format!("{PLUGIN_PREFIX}{plugin}:{feed}"),
         }
     }
 
@@ -68,9 +98,18 @@ impl Namespace {
         if stored == "page" {
             return Ok(Self::page());
         }
+        if let Some(pair) = stored.strip_prefix(PLUGIN_PREFIX) {
+            let (plugin, feed) = pair.split_once(':').ok_or(FullTextError::Damaged)?;
+            return Self::plugin_feed(plugin, feed).map_err(|_| FullTextError::Damaged);
+        }
         let name = stored.strip_prefix("feed:").ok_or(FullTextError::Damaged)?;
         Self::feed(name).map_err(|_| FullTextError::Damaged)
     }
+}
+
+/// A plugin id or feed name as `syrinx_core::CommandId` accepts it.
+fn is_plugin_name(name: &str) -> bool {
+    syrinx_core::CommandId::new(name).is_ok()
 }
 
 /// One searchable document. `revision` must grow with every new capture of the same id.
@@ -155,7 +194,7 @@ impl Change {
 
     pub(super) fn validate(&self) -> Result<(), FullTextError> {
         let id = self.id();
-        if id.is_empty() || id.len() > MAX_ID_BYTES {
+        if id.is_empty() || id.len() > MAX_ID_BYTES || id.starts_with(RESERVED_ID_START) {
             return Err(FullTextError::InvalidDocument);
         }
         Ok(())

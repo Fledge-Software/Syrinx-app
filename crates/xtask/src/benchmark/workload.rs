@@ -1,16 +1,22 @@
-//! Shares the unchanged synthetic tier-one workload between benchmark and search diagnostics.
+//! Shares the synthetic tier-one workload, D48's 100,000 rows and a plugin feed of the same
+//! size (#141), between the benchmark and its tests.
 
-use std::num::NonZeroU64;
+use std::num::{NonZeroU32, NonZeroU64};
 
 use syrinx_core::{SavedPageId, TabId};
 
-use super::{BlankQuery, BoostWeights, Catalogue, Entry, Scope, SearchPolicy, Target, Usage};
+use super::{
+    BlankQuery, BoostWeights, Catalogue, Entry, EntryKey, FeedKey, Scope, SearchPolicy, Target,
+    Usage,
+};
 
 pub(super) const ROWS: usize = 100_000;
 pub(super) const TABS: usize = 256;
 pub(super) const SAVED: usize = 20_000;
 pub(super) const COMMANDS: usize = 64;
 pub(super) const HISTORY: usize = ROWS - TABS - SAVED - COMMANDS;
+/// D48's rows once more as one synthetic plugin search feed (#141), found under Everything only.
+pub(super) const PLUGIN_ROWS: usize = ROWS;
 pub(super) const NOW: i64 = 1_800_000_000;
 pub(super) const LIMIT: usize = 50;
 pub(super) const WARMUPS: usize = 5;
@@ -47,7 +53,14 @@ pub(super) fn build_catalogue() -> Result<Catalogue, String> {
             .upsert(entry(index)?)
             .map_err(|error| format!("Synthetic catalogue insertion failed: {error:?}"))?;
     }
-    if catalogue.len() != ROWS {
+    // The plugin feed's rows go in the same permuted order, after every other row.
+    for position in 0..PLUGIN_ROWS {
+        let index = (position * 7_919) % PLUGIN_ROWS;
+        catalogue
+            .upsert(plugin_entry(index)?)
+            .map_err(|error| format!("Synthetic plugin row insertion failed: {error:?}"))?;
+    }
+    if catalogue.len() != ROWS + PLUGIN_ROWS {
         return Err("Synthetic catalogue has the wrong row count.".to_owned());
     }
     Ok(catalogue)
@@ -95,6 +108,29 @@ pub(super) fn entry(index: usize) -> Result<Entry, String> {
         open: matches!(target, Target::Tab(_))
             || (matches!(target, Target::Saved(_)) && index.is_multiple_of(13)),
     })
+}
+
+/// One synthetic plugin feed row: the same title as `entry(index)`, with a note's subtitle
+/// and keywords where a page has its address, as the application builds plugin rows.
+pub(super) fn plugin_entry(index: usize) -> Result<Entry, String> {
+    let mut row = entry(index)?;
+    let key = u32::try_from(index)
+        .ok()
+        .and_then(|index| index.checked_add(1))
+        .and_then(NonZeroU32::new)
+        .ok_or_else(|| "Synthetic plugin identity is out of range.".to_owned())?;
+    let feed = NonZeroU32::MIN;
+    row.target = Target::Plugin {
+        feed: FeedKey::new(feed),
+        entry: EntryKey::new(key),
+    };
+    let topic = TOPICS[index % TOPICS.len()];
+    row.address = format!(
+        "made-up note about {topic} synthetic keyword-{:03}",
+        index % 211
+    );
+    row.open = false;
+    Ok(row)
 }
 
 pub(super) fn target(index: usize) -> Result<Target, String> {

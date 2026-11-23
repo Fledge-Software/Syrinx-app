@@ -46,6 +46,7 @@ impl Class {
                 Target::Saved(_) => 1,
                 Target::History(_) => 2,
                 Target::Command(_) => 3,
+                Target::Plugin { .. } => 4,
             },
             open: entry.open,
             frequency: u32::BITS - entry.usage.visits.leading_zeros(),

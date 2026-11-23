@@ -1,6 +1,7 @@
 //! Checks the adapter's durability, deletion and namespace rules on synthetic documents.
 
 mod fixture;
+mod plugin_feeds;
 mod recovery;
 mod retention;
 mod robustness;

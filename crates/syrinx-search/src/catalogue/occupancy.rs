@@ -11,6 +11,8 @@ use crate::{
 const NOW: i64 = 1_800_000_000;
 type Pair = [GroupId; 2];
 type Bucket = (Pair, usize, bool, u32);
+/// Row kinds counted separately: tabs, saved pages, history, commands and plugin rows.
+const KINDS: usize = 5;
 
 #[derive(Debug, Eq, PartialEq)]
 struct Occupancy {
@@ -20,7 +22,7 @@ struct Occupancy {
     empty_fields: usize,
     long_fields: usize,
     missing_short_fields: usize,
-    pairs: BTreeMap<Pair, [usize; 4]>,
+    pairs: BTreeMap<Pair, [usize; KINDS]>,
     buckets: BTreeMap<Bucket, usize>,
 }
 
@@ -30,6 +32,7 @@ fn kind(target: Target) -> usize {
         Target::Saved(_) => 1,
         Target::History(_) => 2,
         Target::Command(_) => 3,
+        Target::Plugin { .. } => 4,
     }
 }
 
@@ -59,8 +62,8 @@ fn inspect(catalogue: &Catalogue) -> Occupancy {
         buckets: BTreeMap::new(),
     };
     let mut referenced = BTreeMap::new();
-    let mut all_kinds = [0; 4];
-    let mut fallback_kinds = [0; 4];
+    let mut all_kinds = [0; KINDS];
+    let mut fallback_kinds = [0; KINDS];
     for (entry, ids) in catalogue.entries.iter().zip(&catalogue.field_groups) {
         all_kinds[kind(entry.target)] += 1;
         for (field, id) in [&entry.title, &entry.address].into_iter().zip(ids) {
@@ -100,7 +103,7 @@ fn inspect(catalogue: &Catalogue) -> Occupancy {
         result.pairs.values().flatten().sum::<usize>(),
         result.grouped
     );
-    for row_kind in 0..4 {
+    for row_kind in 0..KINDS {
         let pair_count: usize = result.pairs.values().map(|counts| counts[row_kind]).sum();
         let bucket_count: usize = result
             .buckets

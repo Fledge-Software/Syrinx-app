@@ -163,6 +163,7 @@ impl ChipCounts {
                 .tabs
                 .saturating_add(search.saved)
                 .saturating_add(search.history)
+                .saturating_add(search.plugins)
                 .saturating_add(typed_commands),
             tabs: search.tabs,
             plugin_actions: commands.plugin,
@@ -234,20 +235,24 @@ mod tests {
             saved: 2,
             history: 4,
             commands: 0,
+            plugins: 5,
         };
         let commands = CommandCounts {
             browser: 4,
             plugin: 0,
         };
         let typed = ChipCounts::new(search, commands, true);
-        assert_eq!(typed.everything, 13);
+        assert_eq!(
+            typed.everything, 18,
+            "plugin feed rows count under Everything"
+        );
         assert_eq!(typed.get(Chip::Tabs), 3);
         assert_eq!(typed.get(Chip::Bookmarks), 2);
         assert_eq!(typed.get(Chip::History), 4);
         assert_eq!(typed.get(Chip::PluginActions), 0);
 
         let blank = ChipCounts::new(search, commands, false);
-        assert_eq!(blank.everything, 9);
+        assert_eq!(blank.everything, 14);
 
         let plugins = ChipCounts::new(
             ScopeCounts::default(),

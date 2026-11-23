@@ -11,7 +11,8 @@ use std::time::Instant;
 
 use serde_json::{Value, json};
 use syrinx_search::{
-    BlankQuery, BoostWeights, Catalogue, Entry, Scope, SearchPolicy, SearchResults, Target, Usage,
+    BlankQuery, BoostWeights, Catalogue, Entry, EntryKey, FeedKey, Scope, SearchPolicy,
+    SearchResults, Target, Usage,
 };
 
 mod usage_overhead;
@@ -135,6 +136,7 @@ fn validate_result(
         || result.counts.saved > SAVED
         || result.counts.history > HISTORY
         || result.counts.commands > COMMANDS
+        || result.counts.plugins > PLUGIN_ROWS
     {
         return Err(invalid(
             case,
@@ -156,6 +158,7 @@ fn validate_result(
             || result.counts.saved != SAVED
             || result.counts.history != HISTORY
             || result.counts.commands != COMMANDS
+            || result.counts.plugins != PLUGIN_ROWS
             || result.hits.len() != LIMIT)
     {
         return Err(invalid(
@@ -335,6 +338,7 @@ fn report(cases: &[Case], samples: &[Vec<Sample>], build_ns: u64) -> Result<(Val
             "operating_system": std::env::consts::OS,
             "rows": ROWS,
             "kinds": {"tabs": TABS, "saved": SAVED, "history": HISTORY, "commands": COMMANDS},
+            "plugin_feed_rows": PLUGIN_ROWS,
             "unicode_rows": ROWS / 5,
             "long_title_rows": ROWS / 10,
             "uppercase_title_rows": ROWS.div_ceil(101),
@@ -379,6 +383,7 @@ mod tests {
                 Target::Saved(_) => counts[1] += 1,
                 Target::History(_) => counts[2] += 1,
                 Target::Command(_) => counts[3] += 1,
+                Target::Plugin { .. } => return Err("the base corpus holds no plugin row".into()),
             }
             unicode += usize::from(!row.title.is_ascii());
             long += usize::from(row.title.len() >= 256);
@@ -530,8 +535,9 @@ mod tests {
         let mut catalogue = build_catalogue()?;
         for query in ["東京", "🧭"] {
             let mut expected = syrinx_search::ScopeCounts::default();
-            for index in 0..ROWS {
-                let row = entry(index)?;
+            let base = (0..ROWS).map(entry);
+            for row in base.chain((0..PLUGIN_ROWS).map(plugin_entry)) {
+                let row = row?;
                 if !row.title.contains(query) {
                     continue;
                 }
@@ -540,9 +546,14 @@ mod tests {
                     Target::Saved(_) => expected.saved += 1,
                     Target::History(_) => expected.history += 1,
                     Target::Command(_) => expected.commands += 1,
+                    Target::Plugin { .. } => expected.plugins += 1,
                 }
             }
-            assert_eq!(expected.total(), 4_000);
+            assert_eq!(expected.total(), 8_000);
+            assert_eq!(
+                expected.plugins, 4_000,
+                "the plugin feed repeats every title"
+            );
             let mut policy = policy(query)?;
             policy.max_typos = 0;
             let result = catalogue
