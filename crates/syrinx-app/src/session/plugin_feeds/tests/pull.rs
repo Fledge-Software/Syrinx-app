@@ -36,7 +36,8 @@ fn an_announced_feed_reaches_both_tiers_and_a_replay_changes_nothing() {
         name,
         from_start: false,
         answer: Box::new(Ready(first_batch())),
-        after: None,
+        asked: Vec::new(),
+        earlier: Vec::new(),
         batches: 0,
     });
     let mut replay = Scripted::default();
@@ -426,4 +427,55 @@ fn a_failed_fed_marker_still_shows_the_rows_the_store_kept() {
         titles(&mut catalogue, "synthetic"),
         ["Synthetic alpha", "Synthetic bravo"]
     );
+}
+
+#[test]
+fn a_feed_that_goes_round_between_cursors_stalls_and_its_repeat_is_only_logged() {
+    let folder = Folder::new();
+    let store = folder.store();
+    let mut index = folder.index("fulltext");
+    let mut catalogue = Catalogue::new();
+    let mut feeds = PluginFeeds::default();
+    let mut plugin = Scripted::default()
+        .answer(
+            None,
+            batch(vec![entry("a", 1, "Synthetic alpha")], "A", true),
+        )
+        .answer(Some("A"), batch(Vec::new(), "B", true))
+        .answer(Some("B"), batch(Vec::new(), "A", true));
+    announce(&mut feeds);
+    let stalled = settle_with(&mut feeds, &mut plugin, &store, &mut index, &mut catalogue);
+    assert_eq!(stalled, Err(FeedError::Stalled));
+    assert_eq!(
+        plugin.requests,
+        [None, Some("A".to_owned()), Some("B".to_owned())]
+    );
+
+    // The next announcement goes round again: stopped, but the owner is not told twice.
+    announce(&mut feeds);
+    let repeated = settle_with(&mut feeds, &mut plugin, &store, &mut index, &mut catalogue);
+    assert_eq!(repeated, Ok(()));
+    assert!(!feeds.busy(true));
+}
+
+#[test]
+fn a_feed_that_returns_to_a_cursor_of_its_previous_announcement_stalls() {
+    let folder = Folder::new();
+    let store = folder.store();
+    let mut index = folder.index("fulltext");
+    let mut catalogue = Catalogue::new();
+    let mut feeds = PluginFeeds::default();
+    let page = |cursor: usize| batch(Vec::new(), &format!("c{cursor}"), true);
+    let mut plugin = Scripted::default().answer(None, page(1));
+    let budget = BATCHES_PER_TRIGGER as usize;
+    for cursor in 1..budget {
+        plugin = plugin.answer(Some(&format!("c{cursor}")), page(cursor + 1));
+    }
+    // After spending its budget, the feed goes back to its second cursor.
+    plugin = plugin.answer(Some(&format!("c{budget}")), page(2));
+    announce(&mut feeds);
+    // One turn spends the budget, the next (the feed waits behind no other) goes round.
+    let stalled = settle_with(&mut feeds, &mut plugin, &store, &mut index, &mut catalogue);
+    assert_eq!(stalled, Err(FeedError::Stalled));
+    assert_eq!(plugin.requests.len(), budget + 1);
 }

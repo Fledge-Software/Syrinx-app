@@ -1146,8 +1146,18 @@ impl Worker {
         }
     }
 
-    /// The idle wake-up: retries a refused tab save, expires old history, takes the backup.
+    /// The idle wake-up: the session's own housekeeping, then plugin feeds' share.
     fn idle(
+        &mut self,
+        store: &Store,
+        events: &UnboundedSender<SessionEvent>,
+    ) -> Result<(), SessionError> {
+        self.idle_housekeeping(store, events)?;
+        self.pull_at_idle(store, events)
+    }
+
+    /// Retries a refused tab save, expires old history, takes the backup; never runs a plugin.
+    fn idle_housekeeping(
         &mut self,
         store: &Store,
         events: &UnboundedSender<SessionEvent>,
@@ -1173,7 +1183,6 @@ impl Worker {
         }
         self.page_text.retry_cleanup();
         self.report_page_text(events)?;
-        self.pump_plugin_feeds(store, events)?;
         self.survival.operation = SAVING_PAGE_TEXT_SETTING_AGAIN;
         let resaved = self.page_text_setting.retry(store, &self.page_text);
         self.survival.result(resaved, events)?;

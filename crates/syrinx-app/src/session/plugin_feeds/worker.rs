@@ -8,11 +8,40 @@ use syrinx_store::Store;
 
 use super::{FeedSource, Sinks};
 use crate::session::{
-    IDLE_DELAY, SessionCommand, SessionError, SessionEvent, Worker, emit_recoverable, utc_seconds,
+    BACKUP_CHECK_INTERVAL, SessionCommand, SessionError, SessionEvent, Worker, emit_recoverable,
+    utc_seconds,
 };
 
 /// How often the session looks for a plugin's answer while a feed is being pulled.
 const ANSWER_POLL: Duration = Duration::from_millis(20);
+
+/// How long pulling may hold the session's idle work off: the pace that work keeps on its own
+/// once the session is quiet, so a busy plugin never makes it run less often than that.
+const IDLE_BOUND: Duration = BACKUP_CHECK_INTERVAL;
+
+/// Since when pulling has held the session's idle work off, if it has.
+#[derive(Default)]
+pub(in crate::session) struct IdleClock {
+    busy_since: Option<Instant>,
+}
+
+impl IdleClock {
+    /// Whether the idle work has waited `IDLE_BOUND` behind pulling; if so, the wait starts
+    /// again from `now`. A plugin that always has more cannot hold it off for longer.
+    fn overdue(&mut self, now: Instant) -> bool {
+        let since = *self.busy_since.get_or_insert(now);
+        if now.saturating_duration_since(since) < IDLE_BOUND {
+            return false;
+        }
+        self.busy_since = Some(now);
+        true
+    }
+
+    /// Pulling has nothing left to do, so it holds no idle work off.
+    fn release(&mut self) {
+        self.busy_since = None;
+    }
+}
 
 /// Whether a command is the owner typing in the palette: no pull starts or moves on after it.
 pub(in crate::session) fn is_typing(command: &SessionCommand) -> bool {
@@ -58,9 +87,20 @@ impl Worker {
         self.with_runtime(|worker, runtime| worker.pump_feeds_from(runtime, store, events))
     }
 
+    /// The idle wake-up's part for plugin feeds: retries text a removal left in the index,
+    /// then moves pulling on.
+    pub(in crate::session) fn pull_at_idle(
+        &mut self,
+        store: &Store,
+        events: &UnboundedSender<SessionEvent>,
+    ) -> Result<(), SessionError> {
+        self.plugin_feeds.retry_removals();
+        self.pump_plugin_feeds(store, events)
+    }
+
     /// The loop's wake-up while a pull is under way: moves pulling on by one batch, and first
-    /// runs the idle work once it has waited `IDLE_DELAY` behind pulling, so a plugin that
-    /// always has more never stops page-text expiry or the backup.
+    /// runs the idle work once it has waited `IDLE_BOUND` behind pulling, so a plugin that
+    /// always has more never stops page-text expiry, a removal's retry or the backup.
     pub(in crate::session) fn pull_while_busy(
         &mut self,
         store: &Store,
@@ -79,9 +119,9 @@ impl Worker {
         events: &UnboundedSender<SessionEvent>,
         now: Instant,
     ) -> Result<(), SessionError> {
-        if self.plugin_feeds.idle_overdue(now, IDLE_DELAY) {
-            // The runtime is out of the worker here, so the idle work's own pull does nothing.
-            self.idle(store, events)?;
+        if self.plugin_feeds.idle_clock.overdue(now) {
+            self.idle_housekeeping(store, events)?;
+            self.plugin_feeds.retry_removals();
         }
         self.pump_feeds_from(source, store, events)
     }
@@ -120,7 +160,7 @@ impl Worker {
         };
         let pumped = self.plugin_feeds.pump(source, &mut sinks);
         if !self.plugin_feeds.busy(self.page_text.index_open()) {
-            self.plugin_feeds.idle_released();
+            self.plugin_feeds.idle_clock.release();
         }
         let Err(error) = pumped else {
             return Ok(());

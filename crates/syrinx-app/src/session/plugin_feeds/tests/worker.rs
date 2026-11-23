@@ -3,7 +3,7 @@
 
 use super::*;
 use crate::session::page_text::CapturedPage;
-use crate::session::{IDLE_DELAY, SessionError, SessionEvent, utc_seconds};
+use crate::session::{BACKUP_CHECK_INTERVAL, SessionError, SessionEvent, utc_seconds};
 
 /// A session worker over a synthetic store with the `notes` plugin installed.
 fn session_worker(folder: &Folder) -> (Store, Worker) {
@@ -144,7 +144,8 @@ fn a_never_ending_feed_does_not_stop_page_text_expiry() {
     let mut plugin = Endless::default();
     assert!(worker.plugin_feeds.notice([feed_changed()]).is_empty());
 
-    // The loop's busy wake-ups pull on and on; before the idle delay, nothing expires.
+    // `pull_while_busy_from` stands in for the loop's busy arm, which calls `pull_while_busy`
+    // with the real runtime and clock. Its wake-ups pull on and on; nothing expires yet.
     let start = Instant::now();
     for _ in 0..3 * BATCHES_PER_TRIGGER {
         worker
@@ -157,7 +158,7 @@ fn a_never_ending_feed_does_not_stop_page_text_expiry() {
 
     // Once the idle work has waited its delay behind pulling, it runs.
     worker
-        .pull_while_busy_from(&mut plugin, &store, &sender, start + IDLE_DELAY)
+        .pull_while_busy_from(&mut plugin, &store, &sender, start + BACKUP_CHECK_INTERVAL)
         .expect("a pull and the idle work");
     assert!(pages_with(&worker, "marrowbell").is_empty());
     assert!(worker.plugin_feeds.busy(true), "pulling goes on");

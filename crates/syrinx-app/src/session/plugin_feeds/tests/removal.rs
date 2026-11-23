@@ -119,3 +119,62 @@ fn two_plugins_removed_while_the_index_is_closed_lose_their_rows_at_once_and_the
     feeds.pump(&mut plugin, &mut open).expect("the retry");
     assert!(documents(&index, "quillmark").is_empty());
 }
+
+#[test]
+fn text_a_closed_index_kept_goes_once_it_reopens_even_under_a_never_ending_pull() {
+    let folder = Folder::new();
+    let store = folder.store();
+    let other = PluginInstall {
+        plugin_id: OTHER.to_owned(),
+        ..install()
+    };
+    store.save_plugin_install(other).expect("a second install");
+    let mut index = folder.index("fulltext");
+    let mut catalogue = Catalogue::new();
+    let mut feeds = PluginFeeds::default();
+    let mut scripted = Scripted::default().answer(None, first_batch());
+    let other_changed = PluginEvent::FeedChanged {
+        plugin: OTHER.to_owned(),
+        feed: OTHER_FEED.to_owned(),
+    };
+    assert!(feeds.notice([other_changed]).is_empty());
+    settle(
+        &mut feeds,
+        &mut scripted,
+        &store,
+        &mut index,
+        &mut catalogue,
+    );
+    assert_eq!(documents(&index, "quillmark"), ["a"]);
+
+    // The other plugin is removed while the index is closed.
+    assert_eq!(store.remove_plugin(OTHER.to_owned()), Ok(true));
+    let removed = PluginEvent::Removed {
+        plugin: OTHER.to_owned(),
+    };
+    assert!(feeds.notice([removed]).is_empty());
+    let mut closed = Sinks {
+        store: &store,
+        index: None,
+        catalogue: &mut catalogue,
+        now: NOW,
+        at: Instant::now(),
+    };
+    let reported = feeds.pump(&mut scripted, &mut closed);
+    assert_eq!(reported, Err(FeedError::Index(FullTextError::NeedsReopen)));
+
+    // A feed that never ends is pulled from then on; the first turn with the index open
+    // still removes the other plugin's text.
+    assert!(feeds.notice([feed_changed()]).is_empty());
+    let mut endless = Endless::default();
+    let mut open = Sinks {
+        store: &store,
+        index: Some(&mut index),
+        catalogue: &mut catalogue,
+        now: NOW,
+        at: Instant::now(),
+    };
+    feeds.pump(&mut endless, &mut open).expect("a pull");
+    assert!(feeds.busy(true), "the endless pull is under way");
+    assert!(documents(&index, "quillmark").is_empty());
+}
