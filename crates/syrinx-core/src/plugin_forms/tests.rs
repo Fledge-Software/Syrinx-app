@@ -484,3 +484,113 @@ fn a_reply_of_the_wrong_kind_for_its_token_changes_nothing() {
     assert_eq!(commands.receive(answer(first, stray)), None);
     assert!(commands.is_submitting());
 }
+
+#[test]
+fn a_submission_closed_on_its_way_that_then_answers_pending_still_reports_its_outcome() {
+    let mut commands = PluginCommands::default();
+    let first = submitted(&mut commands);
+    commands.abandon();
+    let pending = PluginReply::Submitted(Submitted::Pending { request: 41 });
+    assert_eq!(commands.receive(answer(first, pending)), None);
+    let late = LateOutcome {
+        plugin: "test".to_owned(),
+        request: 41,
+        outcome: uncertain(),
+    };
+    assert_eq!(
+        commands.receive_outcome(late),
+        Some(Notice::Outcome(uncertain()))
+    );
+    assert!(commands.form().is_none());
+}
+
+#[test]
+fn a_closed_submissions_invalid_answer_names_its_field_or_says_nothing_happened() {
+    let mut commands = PluginCommands::default();
+    let first = submitted(&mut commands);
+    commands.abandon();
+    let invalid = PluginReply::Submitted(Submitted::Invalid(vec![error("name", "Taken.")]));
+    assert_eq!(
+        commands.receive(answer(first, invalid)),
+        Some(Notice::Invalid(error("name", "Taken.")))
+    );
+
+    let second = submitted(&mut commands);
+    commands.abandon();
+    let unnamed = PluginReply::Submitted(Submitted::Invalid(Vec::new()));
+    let Some(Notice::Failed(failure)) = commands.receive(answer(second, unnamed)) else {
+        panic!("an invalid answer naming no field is still told");
+    };
+    assert_eq!(failure.kind, FailureKind::InvalidInput);
+}
+
+#[test]
+fn a_command_run_still_waiting_when_another_is_chosen_is_still_reported() {
+    let mut commands = PluginCommands::default();
+    let first = commands.choose("test", "test.echo", true);
+    let second = commands.choose("test", "test.recall", true);
+    assert_eq!(
+        commands.receive(answer(token(&first), PluginReply::Ran(Ok(())))),
+        Some(Notice::Outcome(Outcome::Done(None)))
+    );
+    assert_eq!(
+        commands.receive(answer(token(&second), PluginReply::Ran(Ok(())))),
+        Some(Notice::Outcome(Outcome::Done(None)))
+    );
+
+    // A form for a command set aside the same way is dropped: nobody can see it.
+    let form = commands.choose("test", "test.new-item", true);
+    commands.choose("test", "test.echo", true);
+    assert_eq!(
+        commands.receive(answer(token(&form), PluginReply::Form(Ok(spec())))),
+        None
+    );
+    assert!(commands.form().is_none());
+}
+
+#[test]
+fn a_stopped_plugin_forgets_its_set_aside_submissions_that_wait_for_an_outcome() {
+    let mut commands = PluginCommands::default();
+    let first = submitted(&mut commands);
+    let pending = PluginReply::Submitted(Submitted::Pending { request: 41 });
+    commands.receive(answer(first, pending));
+    commands.abandon();
+    // One on its way still gets its answer, which the stopped worker always sends.
+    let second = submitted(&mut commands);
+    commands.abandon();
+    commands.plugin_stopped("other");
+    commands.plugin_stopped("test");
+    let late = LateOutcome {
+        plugin: "test".to_owned(),
+        request: 41,
+        outcome: uncertain(),
+    };
+    assert_eq!(commands.receive_outcome(late), None);
+    let reply = PluginReply::Submitted(Submitted::Finished(uncertain()));
+    assert_eq!(
+        commands.receive(answer(second, reply)),
+        Some(Notice::Outcome(uncertain()))
+    );
+}
+
+#[test]
+fn past_the_limit_the_oldest_set_aside_call_is_forgotten_and_the_owner_is_told() {
+    let mut commands = PluginCommands::default();
+    let tokens: Vec<u64> = (0..=MAX_ORPHANS)
+        .map(|_| {
+            let token = submitted(&mut commands);
+            commands.abandon();
+            token
+        })
+        .collect();
+    assert_eq!(commands.take_notice(), Some(Notice::Forgotten));
+    assert_eq!(commands.take_notice(), None);
+    let done = || PluginReply::Submitted(Submitted::Finished(Outcome::Done(None)));
+    assert_eq!(commands.receive(answer(tokens[0], done())), None);
+    for &kept in &tokens[1..] {
+        assert_eq!(
+            commands.receive(answer(kept, done())),
+            Some(Notice::Outcome(Outcome::Done(None)))
+        );
+    }
+}
