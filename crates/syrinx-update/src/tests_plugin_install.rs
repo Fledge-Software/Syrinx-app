@@ -598,6 +598,26 @@ fn of_two_waiting_updates_the_newer_is_offered_and_the_older_removed() -> Result
 }
 
 #[test]
+fn a_waiting_folder_without_its_package_file_is_removed() -> Result<(), UpdateError> {
+    let scratch = Scratch::new();
+    let signer = TestKeyPair::generate()?;
+    let folders = scratch.folders();
+    place_new(&scratch, &folders, v(1), &signer)?;
+    place_update(&scratch, &folders, v(2), &signer)?;
+    place_update(&scratch, &folders, v(3), &signer)?;
+    std::fs::remove_file(folders.version_folder("sample", v(3)).join("package")).expect("removed");
+    let installed = Installed {
+        id: "sample",
+        version: v(1),
+        publisher: Publisher::Key(key(&signer)?),
+    };
+    let pending = settle_pending_update(&folders, installed, false).expect("settled");
+    assert_eq!(pending.map(|placed| placed.list().version()), Some(v(2)));
+    assert_eq!(folders.versions("sample").expect("listed"), [v(1), v(2)]);
+    Ok(())
+}
+
+#[test]
 fn a_waiting_folder_named_for_another_version_is_removed() -> Result<(), UpdateError> {
     let scratch = Scratch::new();
     let signer = TestKeyPair::generate()?;

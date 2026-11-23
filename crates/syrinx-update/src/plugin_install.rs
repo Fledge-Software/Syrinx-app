@@ -548,13 +548,13 @@ pub fn open_installed(
 /// The update waiting for the owner, if any, with the waiting folders settled: the newest
 /// version folder newer than the record that still verifies against the recorded publisher.
 /// It survives a restart because it is its own signed folder; nothing about it is recorded
-/// until the owner accepts. A newer folder whose contents are refused (signature, hash, slot,
-/// version, publisher, or a version other than the folder's name) is removed, and so is every
-/// older waiting folder once a newer one is offered, so none is left stuck. An unsigned folder
-/// while developer mode is off is kept and skipped: an older waiting folder may then be offered
-/// instead. A failure to read or check a folder is returned and removes nothing. The update
-/// offered holds the id until it is accepted (`keep`) or declined, so no other flow touches the
-/// plugin meanwhile.
+/// until the owner accepts. A newer folder whose contents are refused (no package, signature,
+/// hash, slot, version, publisher, or a version other than the folder's name) is removed, and
+/// so is every older waiting folder once a newer one is offered, so none is left stuck. An
+/// unsigned folder while developer mode is off is kept and skipped: an older waiting folder may
+/// then be offered instead. A failure to read or check a folder is returned and removes
+/// nothing. The update offered holds the id until it is accepted (`keep`) or declined, so no
+/// other flow touches the plugin meanwhile.
 pub fn settle_pending_update(
     folders: &PluginFolders,
     installed: Installed<'_>,
@@ -612,17 +612,49 @@ fn verify_waiting(
 fn is_content_refusal(error: &PluginInstallError) -> bool {
     match error {
         PluginInstallError::Package(error) => verifier_refused(error),
+        PluginInstallError::Files(error) => files_refused(error),
         PluginInstallError::DifferentPublisher | PluginInstallError::NotRecordedVersion { .. } => {
             true
         }
-        PluginInstallError::Files(_)
-        | PluginInstallError::Unsigned
+        PluginInstallError::Unsigned
         | PluginInstallError::NoPublisherKey
         | PluginInstallError::RecordedPublisher
         | PluginInstallError::AlreadyInstalled
         | PluginInstallError::InstalledVersion
         | PluginInstallError::NotANewPlugin
         | PluginInstallError::InstallInProgress => false,
+    }
+}
+
+/// Whether reading a folder's files found it is not a package, or the verifier refused it,
+/// rather than failing to read it. Every variant is named, as for `verifier_refused`.
+fn files_refused(error: &InstallError) -> bool {
+    match error {
+        InstallError::NotAPackage => true,
+        InstallError::Update(error) => verifier_refused(error),
+        // A file failure, or a step of the program's own updates that a plugin folder never
+        // reaches: report, never delete.
+        InstallError::Io { .. }
+        | InstallError::Layout
+        | InstallError::NotInstalled
+        | InstallError::Busy
+        | InstallError::TimedOut { .. }
+        | InstallError::UnexpectedEntry { .. }
+        | InstallError::Record { .. }
+        | InstallError::MissingProgramFile { .. }
+        | InstallError::NotEnoughSpace { .. }
+        | InstallError::StagedManifestChanged
+        | InstallError::StagedVersionMismatch { .. }
+        | InstallError::NothingStaged
+        | InstallError::ProgramInUse
+        | InstallError::SetAside(_)
+        | InstallError::UpdateWaiting
+        | InstallError::AfterSwap(_)
+        | InstallError::Transfer(_)
+        | InstallError::NoReleaseKeys
+        | InstallError::Incomplete { .. } => false,
+        #[cfg(test)]
+        InstallError::Interrupted(_) => false,
     }
 }
 
@@ -938,5 +970,21 @@ mod tests {
         }
         assert!(is_content_refusal(&PluginInstallError::DifferentPublisher));
         assert!(!is_content_refusal(&PluginInstallError::Unsigned));
+    }
+
+    #[test]
+    fn a_folder_that_is_not_a_package_is_refused_but_a_file_failure_is_kept() {
+        let not_a_package = PluginInstallError::Files(InstallError::NotAPackage);
+        assert!(is_content_refusal(&not_a_package));
+        let refused = PluginInstallError::Files(InstallError::Update(UpdateError::BadSignature));
+        assert!(is_content_refusal(&refused));
+        let failed = PluginInstallError::Files(InstallError::Io {
+            step: "synthetic",
+            kind: io::ErrorKind::PermissionDenied,
+        });
+        assert!(
+            !is_content_refusal(&failed),
+            "an I/O failure removes nothing"
+        );
     }
 }
