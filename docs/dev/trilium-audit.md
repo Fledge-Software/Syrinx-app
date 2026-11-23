@@ -362,22 +362,22 @@ the data directory's `config.ini` (template
 `apps/server/src/assets/config-sample.ini`); each ini key can also be set by
 an environment variable `TRILIUM_<SECTION>_<KEY>`, and an environment
 variable wins over the file (`apps/server/src/services/config.ts`). Paths
-are relative to the Trilium repository; `server/` stands for `apps/server/src/`,
-`core/` for `packages/trilium-core/src/` and `client/` for
-`apps/client/src/`. #281 is the slice proposed to change these defaults.
+are relative to the Trilium repository; `server/` stands for
+`apps/server/src/`, `core/` for `packages/trilium-core/src/` and `client/`
+for `apps/client/src/`. #281 is the slice proposed to change these defaults.
 
 **Who listens.**
 
 | Feature | Default | Where switched | Source |
 |---|---|---|---|
-| Listening address | `0.0.0.0` (all interfaces), port 8080 | ini `[Network] host`, `port`; env `TRILIUM_NETWORK_HOST`, `TRILIUM_HOST`, `TRILIUM_NETWORK_PORT`, `TRILIUM_PORT` | `server/services/config.ts`, `host.ts`, `port.ts`, `server/www.ts` |
+| Listening address | `0.0.0.0` (all interfaces), port 8080 | ini `[Network] host`, `port`; env `TRILIUM_NETWORK_HOST`, `TRILIUM_HOST`, `TRILIUM_NETWORK_PORT`, `TRILIUM_PORT` | `server/services/config.ts`, `server/services/host.ts`, `server/services/port.ts`, `server/www.ts` |
 | Login check | on | ini `[General] noAuthentication` (default false); env `TRILIUM_GENERAL_NOAUTHENTICATION` | `server/services/auth.ts` |
-| CORS headers | none sent | ini `[Network] corsAllowOrigin`, `corsAllowMethods`, `corsAllowHeaders` (empty) | `server/services/config.ts`, `server/app.ts` |
-| First-run setup routes | open, without login, until a password is set | no setting; turning it off needs a fork change | `server/routes/routes.ts`, `core/routes/index.ts`, `server/services/auth.ts` |
+| CORS headers | no `Access-Control-*` headers; CORP `same-origin` | ini `[Network] corsAllowOrigin`, `corsAllowMethods`, `corsAllowHeaders` (empty), `corsResourcePolicy` | `server/services/config.ts`, `server/app.ts` |
+| First-run setup routes | `/api/setup/*` open before the database is initialised; `/set-password` open after it until a password is set | no setting; turning it off needs a fork change | `server/routes/routes.ts`, `core/routes/index.ts`, `server/services/auth.ts` |
 | ETAPI, `/etapi/*` | mounted; needs a user-created token | no setting; turning it off needs a fork change | `server/etapi/`, `server/routes/routes.ts` |
-| `/custom/*path` | mounted; no login, no CSRF check | no setting for the route; handlers need `backendScriptingEnabled`, resource providers do not | `server/routes/custom.ts`, `core/routes/custom.ts` |
-| MCP server, `/mcp` | off | option `mcpEnabled` (false); needs an ETAPI token | `server/routes/mcp.ts` |
-| ACP agents' MCP listener | off (only while an ACP agent runs) | follows the AI chat options | `server/services/llm/providers/acp_mcp_endpoint.ts` |
+| `/custom/*path` | mounted; no login, no CSRF (cross-site request forgery) check | no setting for the route; handlers need `backendScriptingEnabled`, resource providers do not | `server/routes/custom.ts`, `core/routes/custom.ts` |
+| MCP (Model Context Protocol, an endpoint AI agents call) server, `/mcp` | off | option `mcpEnabled` (false); needs an ETAPI token | `server/routes/mcp.ts` |
+| ACP (Agent Client Protocol) agents' MCP listener | off (only while an ACP agent runs) | follows the AI chat options | `server/services/llm/providers/acp_mcp_endpoint.ts` |
 | Web clipper, `/api/clipper/*` | mounted; needs an ETAPI token | no setting; turning it off needs a fork change | `server/routes/routes.ts` |
 | Sync target, `/api/sync/*` | mounted; needs the password | no setting; turning it off needs a fork change | `core/routes/api/sync.ts` |
 | Public sharing, `/share/` | mounted; notes under `_share` served without login | no setting for the route; options `redirectBareDomain`, `showLoginInShareTheme` (false) | `server/share/routes.ts`, `core/share/share_root.ts` |
@@ -387,7 +387,7 @@ are relative to the Trilium repository; `server/` stands for `apps/server/src/`,
 | Feature | Default | Where switched | Source |
 |---|---|---|---|
 | Update check (from the page) to `api.github.com` | **on** | option `checkForUpdates` (true) | `client/widgets/buttons/global_menu.tsx` |
-| Sync to another Trilium, every 60 s | off | option or ini `[Sync] syncServerHost` (empty or `disabled` is off), `syncProxy`, `syncServerTimeout`; env `TRILIUM_SYNC_SYNCSERVERHOST` | `core/services/sync_options.ts`, `sync.ts` |
+| Sync to another Trilium, every 60 s | off | option or ini `[Sync] syncServerHost` (empty or `disabled` is off), `syncProxy`, `syncServerTimeout`; env `TRILIUM_SYNC_SYNCSERVERHOST` | `core/services/sync_options.ts`, `core/services/sync.ts` |
 | Download of remote images in notes | **on** | option `downloadImagesAutomatically` (true) | `core/services/image_download.ts` |
 | Link previews (page, oEmbed, thumbnails) | on when a link is pasted | no setting; turning it off needs a fork change | `core/routes/api/link_embed.ts` |
 | AI chat, providers and web search | off | option `aiEnabled` (false), `llmProviders`, `llmWebSearchProvider` | `core/services/llm/`, `server/services/llm/providers/` |
@@ -397,32 +397,36 @@ are relative to the Trilium repository; `server/` stands for `apps/server/src/`,
 | Map notes: tiles and place search | on when a map note opens | no setting; turning it off needs a fork change | `client/widgets/collections/geomap/` |
 | Web View notes embed any address | on when such a note opens | label `webViewSrc` on the note; no global setting | `client/widgets/type_widgets/WebView.tsx` |
 | Backend scripts (full server access) | off | ini `[Security] backendScriptingEnabled`; env `TRILIUM_SECURITY_BACKEND_SCRIPTING_ENABLED` | `server/services/scripting_guard.ts` |
-| Frontend scripts (any request a page can make) | on | no setting; turning it off needs a fork change | `client/` |
+| Frontend scripts (any request a page can make) | on | no setting; turning it off needs a fork change | no single file; scripts run in `client/` |
 | Links to upstream's repository | open only when clicked | no setting | `client/widgets/dialogs/about.tsx` |
 
 Notes on the tables:
 
 - **A loopback recipe for #281.** Three things together, not one:
   (a) `127.0.0.1` must be set where nothing can override it. Environment
-  variables win over `config.ini`, and `host.ts` reads `TRILIUM_HOST` before
+  variables win over `config.ini`, and `server/services/host.ts` reads
+  `TRILIUM_HOST` before
   either, so the launcher (#279) must set or clear every `TRILIUM_*`
   variable it passes on, or the fork must change the default in code.
   (b) Loopback alone is no boundary against a web page that uses DNS
   rebinding (a name that first resolves to a public server and then to
   `127.0.0.1`, so the page's script reaches the local port as its own
-  origin). The server checks no `Host` header, and `/mcp` creates its
-  transport with `enableDnsRebindingProtection: false`
-  (`server/routes/mcp.ts`). A `Host` allow-list (`127.0.0.1:<port>` only)
-  is a recommended #281 change. (c) The three CORS keys stay empty, so no
+  origin). The server checks no `Host` header. `/mcp` sets
+  `enableDnsRebindingProtection: false` (`server/routes/mcp.ts`) but is off
+  by default and relies on its required ETAPI bearer token instead; the
+  routes that check no token (setup, `/custom/*path`, `/share/`) are the
+  reason a `Host` allow-list (`127.0.0.1:<port>` only) is a recommended
+  #281 change. (c) The three CORS keys stay empty, so no
   other origin is invited to read responses.
-- **First-run setup routes.** On a fresh data directory, `GET` and `POST
-  /set-password` (`server/routes/routes.ts`) and `POST
-  /api/setup/new-document`, `POST /api/setup/sync-from-server` and
-  `POST /api/setup/sync-seed` (`core/routes/index.ts`) answer without login:
-  `checkSetupAuth` in `server/services/auth.ts` asks for nothing until data
-  exists and a password is set (`isSetupAuthRequired` in
-  `core/services/setup_auth.ts`). Whoever reaches the port first can set the
-  password or seed the database from a sync server of their choosing. The
+- **First-run setup routes.** `POST /api/setup/new-document`,
+  `POST /api/setup/sync-from-server` and `POST /api/setup/sync-seed`
+  (`core/routes/index.ts`) answer before the database is initialised;
+  `GET` and `POST /set-password` (`server/routes/routes.ts`) answer after
+  it, until a password is set. None needs a login: `checkSetupAuth` in
+  `server/services/auth.ts` applies only once data exists and a password is
+  set (`isSetupAuthRequired` in `core/services/setup_auth.ts`). Whoever
+  reaches the port first can set the password or seed the database from a
+  sync server of their choosing. The
   recommendation for #281 is to initialise the database and set the
   Syrinx-issued credential before the listener opens, or to keep these
   routes closed until then.
@@ -435,10 +439,11 @@ Notes on the tables:
   as a public endpoint, once backend scripting is on. #281 should unmount
   the route or put it behind authentication.
 - **ACP agents' listener.** When the AI chat runs one of the ACP agents
-  (GitHub Copilot or Google Antigravity), the server opens a second HTTP
+  (GitHub Copilot, Google Antigravity or OpenAI Codex through `codex-acp`;
+  `server/services/llm/providers/acp_agent.ts`), the server opens a second HTTP
   listener on `127.0.0.1` at a random port, under an unguessable path, and
   checks its `Host` header. It exists only while AI chat is on, which it is
-  not by default upstream; keeping AI chat off is recommended for #281.
+  not by default upstream.
 - **AI providers and agents.** With `aiEnabled` on, the server calls the
   providers in `llmProviders` (Anthropic, OpenAI, Google, DeepSeek,
   OpenRouter or a local model), a web-search provider (Brave, Tavily, Exa,
@@ -455,8 +460,8 @@ Notes on the tables:
   Syrinx's history would record note text and addresses unless the fork's
   loopback origin is excluded. Requests the page itself makes (update check,
   map tiles, frontend scripts) leave from that tab. The Notes plugin's own
-  HTTP goes only through the host-owned, owner-granted capability of #280,
-  limited to the fork's address.
+  HTTP goes only through #280, the slice that gives the Notes plugin HTTP
+  to one owner-approved address, limited to the fork's address.
 - **Telemetry.** A search of the server, core and client sources for
   telemetry, analytics or crash-reporting services (Sentry, PostHog,
   Plausible, Umami, Google Analytics) found none. The Claude agent SDK's
@@ -566,23 +571,28 @@ should link to that commit's source (§13).
    Agreements. Recommendation: keep AI chat off by default in the fork, and
    if the owner chooses to bundle, have the licence review cover whether
    that package may be redistributed, or build the fork without it.
-6. **Proposed additions to #281's scope,** each a recommendation from this
-   audit, not yet in the issue: the loopback recipe (pinned `127.0.0.1`,
-   cleared `TRILIUM_*` variables, a `Host` allow-list, empty CORS keys);
-   closing the first-run setup routes until the credential is set;
-   unmounting or authenticating `/custom/*path`; turning
-   `checkForUpdates` and `downloadImagesAutomatically` off and keeping
-   `aiEnabled` off; and pointing the interface's source links at the fork
-   (AGPL §13). For #279: the launcher sets or clears the `TRILIUM_*`
-   variables. For #279 and #281: exclude the fork's origin from D35's
-   page-text capture and from history.
+6. **Proposed additions to #281 and #279,** recommendations not yet in
+   either issue; each is set out under "Notes on the tables" or "Bundling":
+   the loopback recipe; closing the first-run setup routes; unmounting or
+   authenticating `/custom/*path`; turning `checkForUpdates` and
+   `downloadImagesAutomatically` off, with AI chat (`aiEnabled`) staying
+   off; the fork's source links (AGPL §13); and excluding the fork's origin
+   from D35 and history.
 
 ## Reproducing this audit
 
-The audit read Trilium from a shallow git clone without file contents
-(`--filter=tree:0`), kept outside the repository and checked out at
-`v0.107.0`; it ran no npm install and no build. The licence lookup and the
-graph walk are, in outline:
+The audit read Trilium from a shallow clone outside the repository; it
+ran no npm install and no build. The tag came in without file contents,
+which git then fetched on demand at checkout:
+
+```sh
+git fetch --filter=tree:0 --depth=1 --no-tags origin \
+  +refs/tags/v0.107.0:refs/tags/v0.107.0
+git worktree add --detach <scratch>/v107 v0.107.0
+git fetch --filter=tree:0 --shallow-since=2025-11-23 origin main  # history
+```
+
+The licence lookup and the graph walk are, in outline:
 
 ```sh
 # 1. One registry lookup per lockfile entry ("name@version" under packages:)

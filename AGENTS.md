@@ -338,7 +338,7 @@ style problem.
   kept under MPL (Plan 1's "Open threads"). Zed's editor and `languages`
   crate are GPL-3.0 and stay out.
 - **Trilium is never a dependency.** No crate, npm package, vendored file,
-  submodule or copied text from the AGPL Trilium fork (#278) comes into
+  submodule or copied text from the AGPL Trilium fork comes into
   Syrinx, the plugin template or the Notes plugin; it is a separate program
   reached over HTTP (see "Plugins" above and `docs/dev/trilium-audit.md`).
 - **Approved narrow licence exception, 2026-10-10:** `unicode-ident 1.0.26`
