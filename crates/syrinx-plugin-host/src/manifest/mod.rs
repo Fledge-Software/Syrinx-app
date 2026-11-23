@@ -2,6 +2,7 @@
 //! runs (note 10, section 3). Parsing never compiles or instantiates anything.
 
 mod capability;
+mod compare;
 mod error;
 mod raw;
 #[cfg(test)]
@@ -12,6 +13,7 @@ use std::collections::BTreeSet;
 use syrinx_core::{CommandId, CommandRegistry};
 
 pub use capability::CapabilityKind;
+pub use compare::{CapabilityChanges, compare};
 pub use error::ManifestError;
 use raw::{RawCapability, RawEntry, RawInterface, RawManifest, RawPlugin};
 
