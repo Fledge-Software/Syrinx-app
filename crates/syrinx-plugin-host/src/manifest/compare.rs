@@ -43,9 +43,11 @@ pub fn compare(old: &PluginManifest, new: &PluginManifest) -> CapabilityChanges 
             continue;
         };
         // A request that becomes required asks for more: the plugin no longer runs without it.
-        let became_required = request.required && !before.required;
+        if request.required && !before.required {
+            changes.widened.push(request.kind);
+            continue;
+        }
         match reach(&before.scope, &request.scope) {
-            _ if became_required => changes.widened.push(request.kind),
             Reach::Wider => changes.widened.push(request.kind),
             Reach::Narrower => changes.narrowed.push(request.kind),
             Reach::Same if before.reason != request.reason => changes.reworded.push(request.kind),

@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 use syrinx_core::CommandRegistry;
 use syrinx_store::{
-    FolderNarrowing, PluginFolder, PluginGrant, PluginInstall, StoreError, StoredGrant,
+    FolderNarrowing, PluginFolder, PluginGrant, PluginInstall, PluginState, StoreError, StoredGrant,
 };
 
 use super::install::{
@@ -38,7 +38,10 @@ impl OwnerRuntime {
     /// compile can be updated too. The new version must compile against its manifest before
     /// anything is written. Its record replaces the old one, its grants are rescoped to what it
     /// asks for (folders granted under them narrowed to match), grants of dropped requests are
-    /// deleted, and new capabilities are granted only as the owner chose. If any step fails,
+    /// deleted, and new capabilities are granted only as the owner chose. Every kind the new
+    /// version requires must be granted already or granted now, or the update is refused with
+    /// `RequiredDeclined` before anything is written. The record keeps its state, so a disabled
+    /// plugin is updated but not enabled, registered or started. If any step fails,
     /// the old version's registration, record, grants and folders are put back, and it is
     /// loaded again if it was loaded.
     ///
@@ -59,7 +62,11 @@ impl OwnerRuntime {
             Plan::Install => return Err(InstallRefusal::WrongPlan),
         }
         let id = reviewed.manifest().id().to_owned();
-        let stored = self.stored_kinds(&id)?;
+        let grants = self.stored_grants(&id)?;
+        let stored: Vec<CapabilityKind> = grants
+            .iter()
+            .filter_map(|stored| CapabilityKind::from_name(&stored.grant.capability))
+            .collect();
         // Every required kind must end up granted: already held, or granted now.
         let available: Vec<CapabilityKind> = stored.iter().chain(granted).copied().collect();
         check_required(reviewed.manifest(), &available, |_| true)?;
@@ -78,7 +85,8 @@ impl OwnerRuntime {
         } = reviewed;
         let base = base.ok_or(InstallRefusal::WrongPlan)?;
         self.check_base(&base, signed.manifest().version())?;
-        let previous = self.previous(&id, base, registry, commands)?;
+        let previous = self.previous(&id, base, grants, registry, commands)?;
+        let enabled = previous.record.state == PluginState::Enabled;
 
         if let Err(error) = registry.register(signed, commands) {
             self.restore(&id, previous, registry, commands);
@@ -88,18 +96,21 @@ impl OwnerRuntime {
             self.restore(&id, previous, registry, commands);
             return Err(error);
         }
-        self.commit_grants(&id, &new_grants);
+        self.commit_grants(&id, &requested, &new_grants);
+        // As at start-up, a plugin that is not enabled offers no commands, tabs or feeds.
+        if !enabled {
+            registry.withdraw(&id, commands);
+        }
         Ok(())
     }
 
-    /// The kinds the store holds grants of for `plugin`.
-    fn stored_kinds(&self, plugin: &str) -> Result<Vec<CapabilityKind>, InstallRefusal> {
+    /// The grants the store holds for `plugin`.
+    fn stored_grants(&self, plugin: &str) -> Result<Vec<StoredGrant>, InstallRefusal> {
         Ok(self
             .store
             .plugin_grants()?
             .into_iter()
             .filter(|stored| stored.plugin_id == plugin)
-            .filter_map(|stored| CapabilityKind::from_name(&stored.grant.capability))
             .collect())
     }
 
@@ -120,21 +131,16 @@ impl OwnerRuntime {
         Ok(())
     }
 
-    /// Everything the installed version holds, with its registration withdrawn so the new
-    /// version can take the id.
+    /// Everything the installed version holds, its `grants` read already, with its registration
+    /// withdrawn so the new version can take the id.
     fn previous(
         &self,
         plugin: &str,
         base: Base,
+        grants: Vec<StoredGrant>,
         registry: &mut PluginRegistry,
         commands: &mut CommandRegistry,
     ) -> Result<Previous, InstallRefusal> {
-        let grants = self
-            .store
-            .plugin_grants()?
-            .into_iter()
-            .filter(|stored| stored.plugin_id == plugin)
-            .collect();
         let folders = self.store.plugin_folders(plugin)?;
         Ok(Previous {
             record: base.record,
@@ -146,8 +152,9 @@ impl OwnerRuntime {
         })
     }
 
-    /// Check the new component, write the new record and grants, then load it in place of the
-    /// installed version. The caller puts everything back if this fails.
+    /// Check the new component, write the new record and grants, then, if the plugin is
+    /// enabled, load it in place of the installed version. The caller puts everything back if
+    /// this fails.
     fn swap(
         &mut self,
         plugin: &str,
@@ -161,13 +168,17 @@ impl OwnerRuntime {
             .get(plugin)
             .ok_or_else(|| RegistrationError::UnknownPlugin(plugin.to_owned()))?;
         self.check_component(registered, &offer.component)?;
-        let record = install_record(
-            plugin,
-            offer,
-            registered.manifest(),
-            previous.record.installed_at,
-            now.max(previous.record.installed_at),
-        );
+        let record = PluginInstall {
+            // The owner's choice stands: an update never enables a disabled plugin.
+            state: previous.record.state,
+            ..install_record(
+                plugin,
+                offer,
+                registered.manifest(),
+                previous.record.installed_at,
+                now.max(previous.record.installed_at),
+            )
+        };
         self.store.save_plugin_install(record)?;
         self.rescope_grants(
             plugin,
@@ -188,6 +199,10 @@ impl OwnerRuntime {
         self.stop(plugin)?;
         if let Some(cache) = self.cache.as_ref() {
             cache.delete_entry_or_report(plugin);
+        }
+        // A plugin that is not enabled is updated in place, but not started.
+        if previous.record.state != PluginState::Enabled {
+            return Ok(());
         }
         Ok(self.load(registered, Arc::clone(&offer.component))?)
     }
@@ -235,18 +250,15 @@ impl OwnerRuntime {
         Ok(())
     }
 
-    /// The new version is in place: the grants the workers check follow the store. No worker
-    /// needs telling: `load` added the new version fresh, so no instance holds an old grant.
-    fn commit_grants(&mut self, plugin: &str, new_grants: &[CapabilityKind]) {
-        let Ok(added) = self.added(plugin) else {
-            return;
-        };
-        let requested: Vec<CapabilityKind> = added
-            .manifest
-            .capabilities()
-            .iter()
-            .map(|request| request.kind)
-            .collect();
+    /// The new version is in place: the grants the workers check follow the store, whether or
+    /// not it was started, keeping only the kinds it `requested`. No worker needs telling:
+    /// `load` added the new version fresh, so no instance holds an old grant.
+    fn commit_grants(
+        &mut self,
+        plugin: &str,
+        requested: &[CapabilityKind],
+        new_grants: &[CapabilityKind],
+    ) {
         for kind in self.grants.kinds(plugin) {
             if !requested.contains(&kind) {
                 self.grants.revoke(plugin, kind);

@@ -401,6 +401,51 @@ fn a_widened_update_is_held_while_the_old_version_runs_until_accepted() {
 }
 
 #[test]
+fn an_update_of_a_disabled_plugin_keeps_it_disabled_and_not_running() {
+    let temp = TempStore::new();
+    let store = temp.open();
+    let mut installer = Installer::start(&store);
+    installer
+        .install(offer("test", "0.1.0", STORAGE), &[CapabilityKind::Storage])
+        .expect("installed");
+    installer.runtime.shutdown();
+
+    // The owner disabled it; the next session does not load it.
+    let disabled = PluginInstall {
+        state: PluginState::Disabled,
+        ..record(&store)
+    };
+    store
+        .save_plugin_install(disabled.clone())
+        .expect("disabled");
+    let mut installer = Installer::start(&store);
+
+    let narrower = installer.review_update(
+        offer("test", "0.2.0", STORAGE),
+        offer("test", "0.1.0", STORAGE),
+    );
+    installer.update(narrower, &[]).expect("updated");
+    let updated = record(&store);
+    assert_eq!(updated.version, "0.2.0");
+    assert_eq!(
+        updated.state,
+        PluginState::Disabled,
+        "an update never enables a plugin the owner disabled"
+    );
+    assert!(
+        installer.runtime.status("test").is_none(),
+        "a disabled plugin is not started by its update"
+    );
+    // As at start-up, nothing is registered to answer its commands.
+    assert!(
+        !installer.has_command("test.echo"),
+        "no command stays in the palette"
+    );
+    assert!(installer.plugins.get("test").is_none(), "not registered");
+    close(installer.runtime, store);
+}
+
+#[test]
 fn an_update_reviewed_against_an_older_record_is_refused() {
     let temp = TempStore::new();
     let store = temp.open();
