@@ -170,6 +170,24 @@ fn money_must_be_a_number_and_dates_are_left_to_the_plugin() {
 }
 
 #[test]
+fn an_optional_field_of_only_spaces_is_still_checked_since_the_spaces_are_sent() {
+    let spec = FormSpec {
+        fields: vec![text_field("note", false, 3), spec().fields[2].clone()],
+        ..spec()
+    };
+    let errors = host_checks(&spec, &[value("note", "     "), value("source", " ")]);
+    assert_eq!(
+        errors,
+        vec![
+            error("note", "At most 3 characters."),
+            error("source", "Choose one of the options."),
+        ]
+    );
+    // An optional field left empty is still fine.
+    assert!(host_checks(&spec, &[]).is_empty());
+}
+
+#[test]
 fn a_failed_host_check_keeps_the_input_names_the_first_field_and_sends_nothing() {
     let mut commands = PluginCommands::default();
     open_form(&mut commands);

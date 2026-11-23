@@ -23,10 +23,14 @@ pub fn host_checks(spec: &FormSpec, values: &[FieldValue]) -> Vec<FieldError> {
         .collect()
 }
 
-/// What is wrong with `value` for `field`, if anything. An empty optional field is fine.
+/// What is wrong with `value` for `field`, if anything. An empty optional field is fine; one of
+/// only spaces is sent as typed, so it is checked like any other value.
 fn field_problem(field: &Field, value: &str) -> Option<String> {
-    if value.trim().is_empty() {
-        return field.required.then(|| "Required.".to_owned());
+    if field.required && value.trim().is_empty() {
+        return Some("Required.".to_owned());
+    }
+    if value.is_empty() {
+        return None;
     }
     match &field.kind {
         FieldKind::Text(options) | FieldKind::Multiline(options) => {
