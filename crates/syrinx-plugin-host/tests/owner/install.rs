@@ -13,7 +13,7 @@ use syrinx_plugin_host::bindings::syrinx::plugin::types::PluginError;
 use syrinx_plugin_host::grants::DenyList;
 use syrinx_plugin_host::manifest::CapabilityKind;
 use syrinx_plugin_host::owner::{
-    CacheSetup, InstallRefusal, Offer, OwnerRuntime, Plan, Reviewed, UNSIGNED_PUBLISHER,
+    CacheSetup, Hasher, InstallRefusal, Offer, OwnerRuntime, Plan, Reviewed, UNSIGNED_PUBLISHER,
 };
 use syrinx_plugin_host::worker::PluginEvent;
 use syrinx_plugin_host::{PluginRegistry, SignedIdentity};
@@ -67,8 +67,9 @@ impl Installer {
             .update_reviewed(reviewed, granted, &mut self.plugins, &mut self.commands, 30)
     }
 
-    fn review_update(&self, offer: Offer) -> Reviewed {
-        self.runtime.review(offer, Some("test")).expect("reviewed")
+    /// Review `offer` as an update of the installed version that `base` reproduces.
+    fn review_update(&self, offer: Offer, base: Offer) -> Reviewed {
+        self.runtime.review(offer, Some(base)).expect("reviewed")
     }
 
     fn has_command(&self, id: &str) -> bool {
@@ -93,17 +94,21 @@ fn offer_of(
         text.into_bytes(),
         Arc::from(support::bytes(component)),
         publisher.to_owned(),
-        sha256,
+        hasher(),
     )
     .expect("an offer")
+}
+
+fn hasher() -> Hasher {
+    Hasher::new(sha256).expect("SHA-256")
 }
 
 fn offer(plugin: &str, version: &str, capabilities: &str) -> Offer {
     offer_of(plugin, version, capabilities, PUBLISHER, FULL)
 }
 
-fn refusal(installer: &Installer, offer: Offer, updating: Option<&str>) -> InstallRefusal {
-    match installer.runtime.review(offer, updating) {
+fn refusal(installer: &Installer, offer: Offer, base: Option<Offer>) -> InstallRefusal {
+    match installer.runtime.review(offer, base) {
         Ok(_) => panic!("the offer was accepted"),
         Err(refusal) => refusal,
     }
@@ -150,18 +155,14 @@ fn a_new_plugin_installs_with_what_the_owner_granted_and_records_the_bytes_it_lo
 }
 
 #[test]
-fn an_offer_hashed_by_anything_but_sha256_is_refused() {
+fn a_hash_function_that_is_not_sha256_is_refused() {
     fn not_sha256(_: &[u8]) -> Result<[u8; 32], String> {
         Ok([0; 32])
     }
-    let refused = Offer::new(
-        SignedIdentity::from_signed_lines("test", "0.1.0", WORLD),
-        Vec::new(),
-        Arc::from(Vec::new()),
-        PUBLISHER.to_owned(),
-        not_sha256,
-    );
-    assert!(matches!(refused, Err(InstallRefusal::Hash(_))));
+    assert!(matches!(
+        Hasher::new(not_sha256),
+        Err(InstallRefusal::Hash(_))
+    ));
 }
 
 #[test]
@@ -219,7 +220,7 @@ fn full_trust_a_newer_syrinx_and_a_declined_required_capability_install_nothing(
         text.into_bytes(),
         Arc::from(support::bytes(FULL)),
         PUBLISHER.to_owned(),
-        sha256,
+        hasher(),
     )
     .expect("an offer");
     assert_eq!(
@@ -248,7 +249,8 @@ fn a_widened_update_is_held_while_the_old_version_runs_until_accepted() {
     let installed = record(&store);
 
     let wider = || offer("test", "0.2.0", &format!("{STORAGE}{FOLDER}"));
-    let held = installer.review_update(wider());
+    let base = || offer("test", "0.1.0", STORAGE);
+    let held = installer.review_update(wider(), base());
     let Plan::Held(changes) = held.plan().clone() else {
         panic!("not held: {:?}", held.plan());
     };
@@ -267,7 +269,7 @@ fn a_widened_update_is_held_while_the_old_version_runs_until_accepted() {
     assert_eq!(echo(&mut installer.runtime, "test"), Ok(Ok(())));
 
     // Accepted, with the new folder capability granted: the new version replaces it.
-    let accepted = installer.review_update(wider()).accept();
+    let accepted = installer.review_update(wider(), base()).accept();
     installer
         .update(accepted, &[CapabilityKind::Folder])
         .expect("updated");
@@ -288,8 +290,9 @@ fn an_update_reviewed_against_an_older_record_is_refused() {
     installer
         .install(offer("test", "0.1.0", STORAGE), &[CapabilityKind::Storage])
         .expect("installed");
-    let late = installer.review_update(offer("test", "0.2.0", STORAGE));
-    let early = installer.review_update(offer("test", "0.3.0", STORAGE));
+    let base = || offer("test", "0.1.0", STORAGE);
+    let late = installer.review_update(offer("test", "0.2.0", STORAGE), base());
+    let early = installer.review_update(offer("test", "0.3.0", STORAGE), base());
     installer
         .update(early, &[])
         .expect("updated to version 0.3.0");
@@ -297,6 +300,24 @@ fn an_update_reviewed_against_an_older_record_is_refused() {
     // Applied now, the review against version 0.1.0 would downgrade version 0.3.0.
     assert_eq!(installer.update(late, &[]), Err(InstallRefusal::Stale));
     assert_eq!(record(&store).version, "0.3.0");
+
+    // The same version with other files recorded is a changed record too.
+    let base = || offer("test", "0.3.0", STORAGE);
+    let reviewed = installer.review_update(offer("test", "0.4.0", STORAGE), base());
+    let current = record(&store);
+    let changed = PluginInstall {
+        manifest_sha256: [9; 32],
+        ..current.clone()
+    };
+    store.save_plugin_install(changed).expect("changed");
+    assert_eq!(installer.update(reviewed, &[]), Err(InstallRefusal::Stale));
+    store.save_plugin_install(current).expect("put back");
+
+    // An update must be newer than the installed version.
+    assert_eq!(
+        refusal(&installer, offer("test", "0.3.0", STORAGE), Some(base())),
+        InstallRefusal::NotNewer
+    );
     assert_eq!(echo(&mut installer.runtime, "test"), Ok(Ok(())));
     close(installer.runtime, store);
 }
@@ -326,7 +347,8 @@ fn a_narrower_update_narrows_grants_and_folders_and_deletes_dropped_grants() {
             .expect("granted");
     }
 
-    let reviewed = installer.review_update(offer("test", "0.2.0", READ_ONE_FOLDER));
+    let base = offer("test", "0.1.0", &format!("{STORAGE}{TWO_FOLDERS}"));
+    let reviewed = installer.review_update(offer("test", "0.2.0", READ_ONE_FOLDER), base);
     let Plan::Update(changes) = reviewed.plan().clone() else {
         panic!("held: {:?}", reviewed.plan());
     };
@@ -400,8 +422,10 @@ fn an_update_refused_at_registration_or_by_its_component_puts_the_old_version_ba
 
     // Registration: the new version declares one command more than the registry has room for.
     fill_commands(&mut installer.commands, 0);
-    let bigger =
-        installer.review_update(offer("test", "0.2.0", &format!("{EXTRA_COMMAND}{STORAGE}")));
+    let bigger = installer.review_update(
+        offer("test", "0.2.0", &format!("{EXTRA_COMMAND}{STORAGE}")),
+        offer("test", "0.1.0", STORAGE),
+    );
     assert!(matches!(
         installer.update(bigger, &[]),
         Err(InstallRefusal::Registration(_))
@@ -416,7 +440,7 @@ fn an_update_refused_at_registration_or_by_its_component_puts_the_old_version_ba
         PUBLISHER,
         variant("imports-documents"),
     );
-    let reviewed = installer.review_update(refused);
+    let reviewed = installer.review_update(refused, offer("test", "0.1.0", STORAGE));
     assert!(matches!(
         installer.update(reviewed, &[]),
         Err(InstallRefusal::Owner(_))
@@ -469,6 +493,18 @@ fn a_plugin_whose_background_compile_is_refused_is_withdrawn() {
     assert!(installer.plugins.get("test").is_none());
     // The record stays, so the owner can see why and update or uninstall it.
     assert_eq!(record(&store).plugin_id, "test");
+
+    // A fixed update installs over the refused version, which is not running, and runs.
+    let base = offer_of("test", "0.1.0", "", PUBLISHER, variant("imports-documents"));
+    let fixed = installer
+        .review_update(offer("test", "0.2.0", STORAGE), base)
+        .accept();
+    installer
+        .update(fixed, &[CapabilityKind::Storage])
+        .expect("updated");
+    assert_eq!(record(&store).version, "0.2.0");
+    assert!(installer.has_command("test.echo"));
+    assert_eq!(echo(&mut installer.runtime, "test"), Ok(Ok(())));
     let unrelated = PluginEvent::Deactivated {
         plugin: "test".into(),
         reason: syrinx_plugin_host::worker::StopReason::Uninstalled,
@@ -496,11 +532,15 @@ fn an_update_offered_by_another_publisher_or_for_another_plugin_is_refused() {
 
     let stranger = offer_of("test", "0.2.0", "", "another-publisher", FULL);
     assert_eq!(
-        refusal(&installer, stranger, Some("test")),
+        refusal(&installer, stranger, Some(offer("test", "0.1.0", ""))),
         InstallRefusal::NotCheckedAgainstRecord
     );
     assert_eq!(
-        refusal(&installer, offer("other", "0.2.0", ""), Some("test")),
+        refusal(
+            &installer,
+            offer("other", "0.2.0", ""),
+            Some(offer("test", "0.1.0", ""))
+        ),
         InstallRefusal::WrongPlugin {
             expected: "test".into(),
             offered: "other".into()

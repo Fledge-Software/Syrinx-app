@@ -206,14 +206,6 @@ impl<S: PluginHost> Plugins<S> {
         Ok(())
     }
 
-    /// The component bytes `plugin` was added with, so a failed update can add them again.
-    #[cfg(feature = "store")]
-    pub(crate) fn component(&self, plugin: &str) -> Option<Arc<[u8]>> {
-        self.slots
-            .get(plugin)
-            .map(|slot| Arc::clone(&slot.component))
-    }
-
     /// Compile `component` against `plugin`'s registered manifest without adding it, so an
     /// update the runtime would refuse never replaces a working version.
     #[cfg(feature = "store")]

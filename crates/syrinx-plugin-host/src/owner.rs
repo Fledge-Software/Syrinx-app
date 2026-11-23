@@ -6,6 +6,7 @@
 mod cache;
 mod install;
 mod services;
+mod update;
 
 use std::collections::BTreeMap;
 use std::fmt;
@@ -21,7 +22,9 @@ use syrinx_store::{
 use wasmtime::Engine;
 
 pub use cache::{CacheSetup, Sha256};
-pub use install::{BUILT_IN_PLUGINS, InstallRefusal, Offer, Plan, Reviewed, UNSIGNED_PUBLISHER};
+pub use install::{
+    BUILT_IN_PLUGINS, Hasher, InstallRefusal, Offer, Plan, Reviewed, UNSIGNED_PUBLISHER,
+};
 pub use services::StoreServices;
 
 use crate::grants::{DenyList, FolderRefusal, GrantSet};
@@ -394,11 +397,16 @@ impl OwnerRuntime {
     }
 
     /// Stop a plugin added this session and forget it; one not added has nothing to stop.
+    /// It stays added until its worker is told, so a failure leaves it known as loaded.
     fn stop(&mut self, plugin: &str) -> CallResult<()> {
-        match (self.added.remove(plugin), self.running.as_mut()) {
-            (Some(_), Some(running)) => running.plugins.uninstall(plugin),
-            _ => Ok(()),
+        if !self.added.contains_key(plugin) {
+            return Ok(());
         }
+        if let Some(running) = self.running.as_mut() {
+            running.plugins.uninstall(plugin)?;
+        }
+        self.added.remove(plugin);
+        Ok(())
     }
 
     /// The plugin as loaded this session; otherwise whether the store knows it at all.
