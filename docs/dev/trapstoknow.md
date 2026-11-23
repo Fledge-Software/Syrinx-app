@@ -1265,6 +1265,20 @@ uses its own tree. Still use a private target directory for each worktree.
   `crates/syrinx-search/tests/fulltext_maintenance_crash.rs` does. Source:
   #53's maintenance crash tests (observed 2026-10-26).
 
+- **A test passes under `cargo test -p <crate>` but fails in `cargo xtask
+  check` when it compares JSON as text.** The gate tests with `--workspace`,
+  which unifies features across every crate, and `gpui-pre` and
+  `gpui-pre-http-client` (through `syrinx-app`) turn on serde_json's
+  `preserve_order`. A `json!` object then keeps its keys in the order
+  written instead of sorted, so a stored plugin grant scope came out as
+  `{"writable":false,"count":1,"watch":false}` against an expected
+  `{"count":1,"watch":false,"writable":false}`. Compare JSON as parsed
+  `serde_json::Value`s, never as text, in tests and product code alike. To
+  reproduce a crate's tests with the gate's features, build it together
+  with `syrinx-app` (`cargo test -p <crate> -p syrinx-app --test <name>`).
+  Source: #140's Windows gate on d6ac84f, reproduced on Linux with
+  `syrinx-plugin-host` built alongside `syrinx-app` (observed 2026-11-23).
+
 - **Windows PowerShell can replace Unicode in a native-program pipeline.**
   An edit piped to Python lost its middle-dot separator, so a replacement did
   not match and a P1-14 label regression failed. Use direct patches for Unicode
