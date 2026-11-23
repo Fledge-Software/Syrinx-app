@@ -12,9 +12,10 @@ use super::site_zoom::{VersionSixScripts, permissions_database};
 use super::{TestDirectory, close, fixture};
 use crate::plugins::{PluginWrite, PluginWritten};
 use crate::{
-    EncodingField, FolderAccess, MAX_PLUGIN_SCOPE_BYTES, MAX_PLUGIN_SETTING_KEY_BYTES,
-    MAX_PLUGIN_SETTING_VALUE_BYTES, MAX_PLUGIN_SETTINGS, PluginFolder, PluginGrant, PluginInstall,
-    PluginState, Store, StoreError, StoreOperation, schema,
+    EncodingField, FolderAccess, FolderNarrowing, MAX_PLUGIN_SCOPE_BYTES,
+    MAX_PLUGIN_SETTING_KEY_BYTES, MAX_PLUGIN_SETTING_VALUE_BYTES, MAX_PLUGIN_SETTINGS,
+    PluginFolder, PluginGrant, PluginInstall, PluginState, Store, StoreError, StoreOperation,
+    schema,
 };
 
 pub(super) fn user_version(connection: &Connection) -> i64 {
@@ -646,5 +647,53 @@ fn a_writer_left_inside_a_transaction_answers_the_write_then_stops() {
         .execute_batch("ROLLBACK")
         .expect("end the synthetic transaction");
     close(writer.connection);
+    directory.cleanup();
+}
+
+#[test]
+fn narrowing_a_grant_makes_its_folders_read_only_and_keeps_the_earliest() {
+    let directory = TestDirectory::new();
+    let store = installed(&directory, &["notes", "other"]);
+    let grant_id = store
+        .grant_plugin("notes".to_owned(), grant("folder"))
+        .expect("grant folder");
+    for name in ["first", "second", "third"] {
+        let folder = PluginFolder {
+            grant_id,
+            path: synthetic_folder(&directory, name),
+            access: FolderAccess::ReadWrite,
+        };
+        store
+            .add_plugin_folder("notes".to_owned(), folder)
+            .expect("record folder");
+    }
+    let narrowing = FolderNarrowing {
+        grant_id,
+        read_only: true,
+        keep: Some(2),
+    };
+    // Another plugin cannot narrow this plugin's folders.
+    store
+        .narrow_plugin_folders("other".to_owned(), narrowing)
+        .expect("narrows nothing");
+    assert_eq!(store.plugin_folders("notes").map(|list| list.len()), Ok(3));
+
+    store
+        .narrow_plugin_folders("notes".to_owned(), narrowing)
+        .expect("narrowed");
+    let kept = store.plugin_folders("notes").expect("read");
+    let names: Vec<PathBuf> = kept.iter().map(|folder| folder.path.clone()).collect();
+    assert_eq!(
+        names,
+        [
+            synthetic_folder(&directory, "first"),
+            synthetic_folder(&directory, "second")
+        ]
+    );
+    assert!(
+        kept.iter()
+            .all(|folder| folder.access == FolderAccess::Read)
+    );
+    store.shutdown().expect("close synthetic store");
     directory.cleanup();
 }
