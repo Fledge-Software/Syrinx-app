@@ -1,12 +1,19 @@
 //! Notices a feed going round: a plugin that keeps saying "more" while sending cursors it has
 //! already sent would otherwise be pulled for as long as Syrinx stays open (#141).
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
+use std::time::{Duration, Instant};
 
+use super::worker::IDLE_BOUND;
 use super::{FeedError, FeedName};
 
+/// How long a stalled feed's announcements are dropped. A plugin that announces its feed
+/// again at once, even from inside its own answer, would otherwise restart the loop every
+/// few wake-ups; this reuses the idle work's own pace instead of a new tuning number.
+const STALL_COOL_DOWN: Duration = IDLE_BOUND;
+
 /// The cursors the pull in flight and its feed's previous budget-spent announcement asked
-/// after, and the feeds whose stall the owner has already been shown this session.
+/// after, and when each feed last stalled this session.
 #[derive(Default)]
 pub(super) struct CursorHistory {
     /// Every cursor the pull in flight's announcement asked after.
@@ -15,8 +22,9 @@ pub(super) struct CursorHistory {
     earlier: Vec<String>,
     /// The cursors of each feed waiting after spending its budget, for its next `earlier`.
     carried: BTreeMap<FeedName, Vec<String>>,
-    /// Feeds whose stall the owner has been shown; repeats are only logged.
-    stalled: BTreeSet<FeedName>,
+    /// When each feed last stalled. Its first stall is shown to the owner and later ones only
+    /// logged; for `STALL_COOL_DOWN` after any of them, its announcements are dropped.
+    stalled: BTreeMap<FeedName, Instant>,
     /// Whether a reset has already cleared this announcement's cursors.
     reset_cleared: bool,
 }
@@ -49,22 +57,26 @@ impl CursorHistory {
             .insert(name.clone(), std::mem::take(&mut self.asked));
     }
 
-    /// Forgets the pull's cursors. A pull from the feed's start begins it again, so a plugin
-    /// may rightly send a cursor it sent before.
-    pub(super) fn clear(&mut self) {
+    /// Forgets the pull's cursors when its batch begins the feed again: always for a pull from
+    /// the start, and for the announcement's first reset only. A plugin that starts its feed
+    /// again, as a Notes vault switch (#36) would, may resend its offsets; one that resets
+    /// every batch still stalls within the announcement.
+    pub(super) fn restart(&mut self, from_start: bool, reset: bool) {
+        let first_reset = !from_start && reset && !self.reset_cleared;
+        if !from_start && !first_reset {
+            return;
+        }
+        self.reset_cleared |= first_reset;
         self.asked.clear();
         self.earlier.clear();
     }
 
-    /// Forgets the pull's cursors for the announcement's first reset only. A plugin that
-    /// starts its feed again, as Notes does when the owner switches vaults (#36), may resend
-    /// its offsets; one that resets every batch still stalls within the announcement.
-    pub(super) fn clear_for_reset(&mut self) {
-        if self.reset_cleared {
-            return;
-        }
-        self.reset_cleared = true;
-        self.clear();
+    /// Whether `name` stalled less than `STALL_COOL_DOWN` before `now`, so its announcement is
+    /// dropped.
+    pub(super) fn cooling(&self, name: &FeedName, now: Instant) -> bool {
+        self.stalled
+            .get(name)
+            .is_some_and(|stalled| now.saturating_duration_since(*stalled) < STALL_COOL_DOWN)
     }
 
     /// Whether any waiting feed carries cursors into its next announcement.
@@ -73,17 +85,18 @@ impl CursorHistory {
         !self.carried.is_empty()
     }
 
-    /// Forgets what a removed plugin's feeds carried, and that they stalled.
+    /// Forgets what a removed plugin's feeds carried, that they stalled, and their cool-down.
     pub(super) fn forget_plugin(&mut self, plugin: &str) {
         self.carried.retain(|name, _| name.plugin != plugin);
-        self.stalled.retain(|name| name.plugin != plugin);
+        self.stalled.retain(|name, _| name.plugin != plugin);
     }
 
-    /// Stops a feed that went round: the owner is shown its first stall this session, and the
-    /// rest are only logged, by plugin id, so a looping plugin cannot flood the window.
-    pub(super) fn report_stall(&mut self, name: FeedName) -> Result<(), FeedError> {
+    /// Stops a feed that went round at `now` and starts its cool-down: the owner is shown its
+    /// first stall this session, and the rest are only logged, by plugin id, so a looping
+    /// plugin cannot flood the window.
+    pub(super) fn report_stall(&mut self, name: FeedName, now: Instant) -> Result<(), FeedError> {
         let plugin = name.plugin.clone();
-        if self.stalled.insert(name) {
+        if self.stalled.insert(name, now).is_none() {
             return Err(FeedError::Stalled { plugin });
         }
         eprintln!("Syrinx: plugin {plugin}: a search feed went round again and was stopped");

@@ -17,7 +17,7 @@ const ANSWER_POLL: Duration = Duration::from_millis(20);
 
 /// How long pulling may hold the session's idle work off: the pace that work keeps on its own
 /// once the session is quiet, so a busy plugin never makes it run less often than that.
-const IDLE_BOUND: Duration = BACKUP_CHECK_INTERVAL;
+pub(super) const IDLE_BOUND: Duration = BACKUP_CHECK_INTERVAL;
 
 /// Since when pulling has held the session's idle work off, if it has.
 #[derive(Default)]

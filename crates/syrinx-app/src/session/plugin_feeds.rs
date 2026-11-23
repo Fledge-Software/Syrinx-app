@@ -246,7 +246,7 @@ impl PluginFeeds {
             .map_err(FeedError::Host)?
             .map_err(|_| FeedError::Plugin)?;
         self.apply(&pull, &batch, sinks)?;
-        self.follow(pull, batch, source)
+        self.follow(pull, batch, source, sinks.at)
     }
 
     /// Queues a feed once; one already waiting covers this announcement too.
@@ -269,6 +269,10 @@ impl PluginFeeds {
         let Some(name) = self.waiting.pop_front() else {
             return Ok(());
         };
+        // A feed that stalled a moment ago is not pulled again yet, however often announced.
+        if self.history.cooling(&name, sinks.at) {
+            return Ok(());
+        }
         let namespace = namespace(&name)?;
         let cursor = sinks
             .store
@@ -299,12 +303,13 @@ impl PluginFeeds {
         pull: Pull,
         batch: Batch,
         source: &mut dyn FeedSource,
+        now: Instant,
     ) -> Result<(), FeedError> {
         if !batch.more {
             return Ok(());
         }
         if self.history.seen(&batch.next_cursor) {
-            return self.history.report_stall(pull.name);
+            return self.history.report_stall(pull.name, now);
         }
         let batches = pull.batches + 1;
         if batches >= BATCHES_PER_TRIGGER {
@@ -351,11 +356,7 @@ impl PluginFeeds {
         batch::check(&commit, &namespace, kept.changes)?;
         // A pull from the feed's start, or the first reset of an announcement, begins the feed
         // again, so cursors sent before may come again.
-        if pull.from_start {
-            self.history.clear();
-        } else if kept.clear_first {
-            self.history.clear_for_reset();
-        }
+        self.history.restart(pull.from_start, kept.clear_first);
         let index = sinks
             .index
             .as_deref_mut()

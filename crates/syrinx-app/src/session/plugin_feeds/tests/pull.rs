@@ -655,3 +655,55 @@ fn a_cursor_repeated_by_the_batch_that_spends_the_budget_stalls_at_once() {
     );
     assert!(!feeds.busy(true));
 }
+
+#[test]
+fn a_looping_feed_that_announces_itself_is_pulled_once_per_cool_down() {
+    let folder = Folder::new();
+    let store = folder.store();
+    let mut index = folder.index("fulltext");
+    let mut catalogue = Catalogue::new();
+    let mut feeds = PluginFeeds::default();
+    let mut plugin = Scripted::default()
+        .answer(None, batch(Vec::new(), "A", true))
+        .answer(Some("A"), batch(Vec::new(), "B", true))
+        .answer(Some("B"), batch(Vec::new(), "A", true));
+    let cool_down = crate::session::plugin_feeds::worker::IDLE_BOUND;
+    // Twenty wake-ups at `at`, the plugin announcing its feed again before each one.
+    let mut wake_ups = |feeds: &mut PluginFeeds, plugin: &mut Scripted, at: Instant| {
+        let mut sinks = Sinks {
+            store: &store,
+            index: Some(&mut index),
+            catalogue: &mut catalogue,
+            now: NOW,
+            at,
+        };
+        let mut failures = Vec::new();
+        for _ in 0..20 {
+            assert!(feeds.notice([feed_changed()]).is_empty());
+            if let Err(error) = feeds.pump(plugin, &mut sinks) {
+                failures.push(error);
+            }
+        }
+        failures
+    };
+    let stalled = FeedError::Stalled {
+        plugin: PLUGIN.to_owned(),
+    };
+
+    // The loop is pulled once, stalls, and its announcements are then dropped.
+    let start = Instant::now();
+    assert_eq!(wake_ups(&mut feeds, &mut plugin, start), [stalled]);
+    assert_eq!(plugin.requests.len(), 3);
+    let almost = start + cool_down - Duration::from_millis(1);
+    assert!(wake_ups(&mut feeds, &mut plugin, almost).is_empty());
+    assert_eq!(
+        plugin.requests.len(),
+        3,
+        "nothing is pulled while it cools down"
+    );
+
+    // After the cool-down its next announcement is pulled again, from its kept cursor; it
+    // goes round again, which is only logged, and cools down once more.
+    assert!(wake_ups(&mut feeds, &mut plugin, start + cool_down).is_empty());
+    assert_eq!(plugin.requests.len(), 5);
+}
