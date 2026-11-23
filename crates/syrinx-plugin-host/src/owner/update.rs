@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 use syrinx_core::CommandRegistry;
 use syrinx_store::{
-    FolderNarrowing, PluginFolder, PluginGrant, PluginInstall, StoreError, StoredGrant,
+    FolderNarrowing, PluginFolder, PluginGrant, PluginInstall, PluginState, StoreError, StoredGrant,
 };
 
 use super::install::{
@@ -82,7 +82,7 @@ impl OwnerRuntime {
             self.restore(&id, previous, registry, commands);
             return Err(error);
         }
-        self.commit_grants(&id, &new_grants);
+        self.commit_grants(&id, registry, &new_grants);
         Ok(())
     }
 
@@ -129,8 +129,9 @@ impl OwnerRuntime {
         })
     }
 
-    /// Check the new component, write the new record and grants, then load it in place of the
-    /// installed version. The caller puts everything back if this fails.
+    /// Check the new component, write the new record and grants, then, if the plugin is
+    /// enabled, load it in place of the installed version. The caller puts everything back if
+    /// this fails.
     fn swap(
         &mut self,
         plugin: &str,
@@ -144,13 +145,17 @@ impl OwnerRuntime {
             .get(plugin)
             .ok_or_else(|| RegistrationError::UnknownPlugin(plugin.to_owned()))?;
         self.check_component(registered, &offer.component)?;
-        let record = install_record(
-            plugin,
-            offer,
-            registered.manifest(),
-            previous.record.installed_at,
-            now.max(previous.record.installed_at),
-        );
+        let record = PluginInstall {
+            // The owner's choice stands: an update never enables a disabled plugin.
+            state: previous.record.state,
+            ..install_record(
+                plugin,
+                offer,
+                registered.manifest(),
+                previous.record.installed_at,
+                now.max(previous.record.installed_at),
+            )
+        };
         self.store.save_plugin_install(record)?;
         self.rescope_grants(
             plugin,
@@ -171,6 +176,10 @@ impl OwnerRuntime {
         self.stop(plugin)?;
         if let Some(cache) = self.cache.as_ref() {
             cache.delete_entry_or_report(plugin);
+        }
+        // A plugin that is not enabled is updated in place, but not started.
+        if previous.record.state != PluginState::Enabled {
+            return Ok(());
         }
         Ok(self.load(registered, Arc::clone(&offer.component))?)
     }
@@ -218,14 +227,20 @@ impl OwnerRuntime {
         Ok(())
     }
 
-    /// The new version is in place: the grants the workers check follow the store. No worker
-    /// needs telling: `load` added the new version fresh, so no instance holds an old grant.
-    fn commit_grants(&mut self, plugin: &str, new_grants: &[CapabilityKind]) {
-        let Ok(added) = self.added(plugin) else {
+    /// The new version is in place: the grants the workers check follow the store, whether or
+    /// not it was started. No worker needs telling: `load` added the new version fresh, so no
+    /// instance holds an old grant.
+    fn commit_grants(
+        &mut self,
+        plugin: &str,
+        registry: &PluginRegistry,
+        new_grants: &[CapabilityKind],
+    ) {
+        let Some(registered) = registry.get(plugin) else {
             return;
         };
-        let requested: Vec<CapabilityKind> = added
-            .manifest
+        let requested: Vec<CapabilityKind> = registered
+            .manifest()
             .capabilities()
             .iter()
             .map(|request| request.kind)
