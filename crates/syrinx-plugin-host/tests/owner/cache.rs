@@ -341,7 +341,12 @@ fn removing_a_plugin_deletes_its_entry_and_record() {
     runtime.remove(PLUGIN).expect("removed");
     assert_eq!(record(&store), None);
     assert!(cached.files().is_empty());
-    assert!(runtime.take_events().is_empty());
+    // No cache problem is reported; only the removal itself is announced (#141).
+    let events = runtime.take_events();
+    assert!(
+        matches!(events.as_slice(), [PluginEvent::Removed { plugin }] if plugin == PLUGIN),
+        "{events:?}"
+    );
     close(runtime, store);
 }
 

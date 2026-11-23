@@ -250,10 +250,7 @@ impl<'a> Rows<'a> {
             let mut finalists = Vec::new();
             for result in completed {
                 let (partition_counts, ranked) = result?;
-                counts.tabs += partition_counts.tabs;
-                counts.saved += partition_counts.saved;
-                counts.history += partition_counts.history;
-                counts.commands += partition_counts.commands;
+                counts.add(partition_counts);
                 finalists.extend(ranked);
             }
             Ok(PartitionOutcome {

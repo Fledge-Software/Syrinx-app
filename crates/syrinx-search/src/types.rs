@@ -1,6 +1,10 @@
 //! Defines search inputs and results without exposing their text through diagnostics.
 
-use std::{fmt, num::NonZeroU64, ops::Range};
+use std::{
+    fmt,
+    num::{NonZeroU32, NonZeroU64},
+    ops::Range,
+};
 
 use syrinx_core::{SavedPageId, TabId};
 
@@ -10,6 +14,44 @@ pub enum Target {
     Saved(SavedPageId),
     History(NonZeroU64),
     Command(NonZeroU64),
+    /// A plugin search feed's row (#141); the application maps both keys back to the plugin
+    /// id, feed name and entry id it interned them for.
+    Plugin {
+        feed: FeedKey,
+        entry: EntryKey,
+    },
+}
+
+// Every catalogue row carries a target, so a plugin row must not make each one larger.
+const _: () = assert!(std::mem::size_of::<Target>() <= 16);
+
+/// One plugin search feed, interned by the application: it stands for a plugin id and the
+/// name of one feed that plugin declares.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct FeedKey(NonZeroU32);
+
+impl FeedKey {
+    pub const fn new(key: NonZeroU32) -> Self {
+        Self(key)
+    }
+
+    pub const fn get(self) -> NonZeroU32 {
+        self.0
+    }
+}
+
+/// One entry of a plugin search feed, interned by the application within its feed.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct EntryKey(NonZeroU32);
+
+impl EntryKey {
+    pub const fn new(key: NonZeroU32) -> Self {
+        Self(key)
+    }
+
+    pub const fn get(self) -> NonZeroU32 {
+        self.0
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -22,6 +64,7 @@ pub enum Scope {
 }
 
 impl Scope {
+    /// A plugin row is found under `Everything` only; its own chip is the owner's call (#265).
     pub(crate) fn includes(self, target: Target) -> bool {
         matches!(self, Self::Everything)
             || matches!(
@@ -101,6 +144,8 @@ pub struct ScopeCounts {
     pub saved: usize,
     pub history: usize,
     pub commands: usize,
+    /// Plugin search feed rows (#141), which only `Scope::Everything` returns.
+    pub plugins: usize,
 }
 
 impl ScopeCounts {
@@ -109,14 +154,55 @@ impl ScopeCounts {
             .saturating_add(self.saved)
             .saturating_add(self.history)
             .saturating_add(self.commands)
+            .saturating_add(self.plugins)
     }
 
     pub(crate) fn include(&mut self, target: Target) {
-        match target {
-            Target::Tab(_) => self.tabs += 1,
-            Target::Saved(_) => self.saved += 1,
-            Target::History(_) => self.history += 1,
-            Target::Command(_) => self.commands += 1,
+        *self.kinds_mut()[target.kind_index()] += 1;
+    }
+
+    /// Adds counts kept per kind, in `Target::kind_index` order.
+    pub(crate) fn add_kinds(&mut self, counts: &[usize; KINDS]) {
+        for (count, added) in self.kinds_mut().into_iter().zip(counts) {
+            *count += added;
+        }
+    }
+
+    /// Adds another set of counts, as disjoint partitions sum.
+    pub(crate) fn add(&mut self, other: Self) {
+        self.add_kinds(&[
+            other.tabs,
+            other.saved,
+            other.history,
+            other.commands,
+            other.plugins,
+        ]);
+    }
+
+    /// Each kind's count, in `Target::kind_index` order.
+    fn kinds_mut(&mut self) -> [&mut usize; KINDS] {
+        [
+            &mut self.tabs,
+            &mut self.saved,
+            &mut self.history,
+            &mut self.commands,
+            &mut self.plugins,
+        ]
+    }
+}
+
+/// How many kinds of row the catalogue counts apart.
+pub(crate) const KINDS: usize = 5;
+
+impl Target {
+    /// The kind's position wherever counts are kept per kind; the one mapping from kinds.
+    pub(crate) fn kind_index(self) -> usize {
+        match self {
+            Self::Tab(_) => 0,
+            Self::Saved(_) => 1,
+            Self::History(_) => 2,
+            Self::Command(_) => 3,
+            Self::Plugin { .. } => 4,
         }
     }
 }

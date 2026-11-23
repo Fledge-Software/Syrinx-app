@@ -188,16 +188,37 @@ pub fn batch(batch: &mut Batch, max: u32) -> Result<Vec<String>, PluginError> {
     Ok(dropped)
 }
 
+/// An entry or document id Syrinx's store and index both keep: not empty, bounded, and not
+/// starting with the NUL the index reserves for its own markers.
+fn feed_id(what: &str, id: &str) -> Result<(), PluginError> {
+    if id.is_empty() || id.starts_with(limits::RESERVED_ID_START) {
+        return Err(invalid(format!("{what} is empty or starts with NUL")));
+    }
+    bytes(what, id, limits::MAX_ENTRY_ID_BYTES)
+}
+
+/// The store ends each keyword with U+001F, so no keyword may hold it.
+fn keyword_separators(keywords: &[String]) -> Result<(), PluginError> {
+    if keywords
+        .iter()
+        .any(|keyword| keyword.contains(limits::KEYWORD_SEPARATOR))
+    {
+        return Err(invalid("a keyword holds U+001F"));
+    }
+    Ok(())
+}
+
 fn change_fits(change: &mut Change) -> Result<Vec<String>, PluginError> {
     match change {
         Change::UpsertEntry(entry) => {
-            bytes("entry id", &entry.id, limits::MAX_ENTRY_ID_BYTES)?;
+            feed_id("entry id", &entry.id)?;
             chars("entry title", &entry.title, limits::MAX_TITLE_CHARS)?;
             chars("entry subtitle", &entry.subtitle, limits::MAX_TITLE_CHARS)?;
+            keyword_separators(&entry.keywords)?;
             Ok(keep_keywords(&mut entry.keywords))
         }
         Change::UpsertDocument(document) => {
-            bytes("document id", &document.id, limits::MAX_ENTRY_ID_BYTES)?;
+            feed_id("document id", &document.id)?;
             chars("document title", &document.title, limits::MAX_TITLE_CHARS)?;
             bytes(
                 "document body",
@@ -206,11 +227,38 @@ fn change_fits(change: &mut Change) -> Result<Vec<String>, PluginError> {
             )?;
             Ok(Vec::new())
         }
-        Change::Delete(id) => {
-            bytes("deleted id", id, limits::MAX_ENTRY_ID_BYTES).map(|()| Vec::new())
-        }
+        Change::Delete(id) => feed_id("deleted id", id).map(|()| Vec::new()),
         Change::Reset => Ok(Vec::new()),
     }
+}
+
+/// The search tiers a feed's manifest declares (`catalogue`, `full-text`).
+/// Only the application's runtime (`owner`) pulls feeds, so only it enforces them.
+#[cfg(feature = "store")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct FeedTiers {
+    pub(crate) catalogue: bool,
+    pub(crate) full_text: bool,
+}
+
+/// Drops each change for a tier the feed did not declare; returns a description of each,
+/// for the log. A deletion and a reset reach whichever tiers the feed has.
+#[cfg(feature = "store")]
+pub(crate) fn keep_declared_tiers(batch: &mut Batch, tiers: FeedTiers) -> Vec<String> {
+    let mut dropped = Vec::new();
+    batch.changes.retain(|change| {
+        let undeclared = match change {
+            Change::UpsertEntry(_) => (!tiers.catalogue).then_some("a catalogue entry"),
+            Change::UpsertDocument(_) => (!tiers.full_text).then_some("a full-text document"),
+            Change::Delete(_) | Change::Reset => None,
+        };
+        let Some(what) = undeclared else {
+            return true;
+        };
+        dropped.push(format!("{what} for a tier the feed does not declare"));
+        false
+    });
+    dropped
 }
 
 /// Keep the first keywords that fit; return a description of each one dropped.
@@ -239,6 +287,90 @@ mod tests {
     use crate::bindings::exports::syrinx::plugin::forms::{
         ChoiceOption, Field, TextFormat, TextOptions,
     };
+
+    use crate::bindings::exports::syrinx::plugin::search_feed::{CatalogueEntry, Document};
+    use crate::bindings::syrinx::plugin::types::Icon;
+
+    fn entry(id: &str, keywords: &[&str]) -> Change {
+        Change::UpsertEntry(CatalogueEntry {
+            id: id.to_owned(),
+            revision: 1,
+            title: "Synthetic".to_owned(),
+            subtitle: "made-up".to_owned(),
+            icon: Icon::Document,
+            last_used: None,
+            keywords: keywords
+                .iter()
+                .map(|keyword| (*keyword).to_owned())
+                .collect(),
+        })
+    }
+
+    fn document(id: &str) -> Change {
+        Change::UpsertDocument(Document {
+            id: id.to_owned(),
+            revision: 1,
+            title: "Synthetic".to_owned(),
+            body: "made-up".to_owned(),
+        })
+    }
+
+    fn one(change: Change) -> Result<Vec<String>, PluginError> {
+        let mut changes = Batch {
+            changes: vec![change],
+            next_cursor: "1".to_owned(),
+            more: false,
+        };
+        batch(&mut changes, 8)
+    }
+
+    #[test]
+    fn a_batch_the_store_or_index_would_refuse_is_refused_up_front() {
+        assert!(one(entry("a", &["synthetic"])).is_ok());
+        for refused in [
+            entry("", &[]),
+            entry("\0fed", &[]),
+            entry("a", &["made\u{1f}up"]),
+            document(""),
+            document("\0fed"),
+            Change::Delete(String::new()),
+            Change::Delete("\0fed".to_owned()),
+        ] {
+            assert!(
+                matches!(one(refused), Err(PluginError::InvalidInput(_))),
+                "refused"
+            );
+        }
+    }
+
+    #[cfg(feature = "store")]
+    #[test]
+    fn changes_for_an_undeclared_tier_are_dropped_and_named() {
+        let mut changes = Batch {
+            changes: vec![
+                entry("a", &[]),
+                document("a"),
+                Change::Delete("b".to_owned()),
+                Change::Reset,
+            ],
+            next_cursor: "1".to_owned(),
+            more: false,
+        };
+        let tiers = FeedTiers {
+            catalogue: true,
+            full_text: false,
+        };
+        let dropped = keep_declared_tiers(&mut changes, tiers);
+        assert_eq!(dropped.len(), 1);
+        assert!(dropped[0].contains("full-text document"));
+        assert_eq!(changes.changes.len(), 3);
+        assert!(
+            !changes
+                .changes
+                .iter()
+                .any(|change| matches!(change, Change::UpsertDocument(_)))
+        );
+    }
 
     #[test]
     fn ids_follow_the_command_rule_and_the_plugin_prefix() {

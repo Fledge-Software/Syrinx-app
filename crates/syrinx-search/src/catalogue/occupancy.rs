@@ -5,7 +5,7 @@ use std::{collections::BTreeMap, mem::size_of, num::NonZeroU64, time::Instant};
 use super::Catalogue;
 use crate::{
     BlankQuery, BoostWeights, Entry, Scope, SearchPolicy, Target, field_groups::GroupId,
-    membership::indexed::diagnostic,
+    membership::indexed::diagnostic, types::KINDS,
 };
 
 const NOW: i64 = 1_800_000_000;
@@ -20,17 +20,8 @@ struct Occupancy {
     empty_fields: usize,
     long_fields: usize,
     missing_short_fields: usize,
-    pairs: BTreeMap<Pair, [usize; 4]>,
+    pairs: BTreeMap<Pair, [usize; KINDS]>,
     buckets: BTreeMap<Bucket, usize>,
-}
-
-fn kind(target: Target) -> usize {
-    match target {
-        Target::Tab(_) => 0,
-        Target::Saved(_) => 1,
-        Target::History(_) => 2,
-        Target::Command(_) => 3,
-    }
 }
 
 fn canonical(text: &str) -> String {
@@ -59,10 +50,10 @@ fn inspect(catalogue: &Catalogue) -> Occupancy {
         buckets: BTreeMap::new(),
     };
     let mut referenced = BTreeMap::new();
-    let mut all_kinds = [0; 4];
-    let mut fallback_kinds = [0; 4];
+    let mut all_kinds = [0; KINDS];
+    let mut fallback_kinds = [0; KINDS];
     for (entry, ids) in catalogue.entries.iter().zip(&catalogue.field_groups) {
-        all_kinds[kind(entry.target)] += 1;
+        all_kinds[entry.target.kind_index()] += 1;
         for (field, id) in [&entry.title, &entry.address].into_iter().zip(ids) {
             result.empty_fields += usize::from(field.is_empty());
             result.long_fields += usize::from(field.len() > 1_024);
@@ -77,16 +68,16 @@ fn inspect(catalogue: &Catalogue) -> Occupancy {
         }
         let [Some(title), Some(address)] = *ids else {
             result.fallback += 1;
-            fallback_kinds[kind(entry.target)] += 1;
+            fallback_kinds[entry.target.kind_index()] += 1;
             continue;
         };
         result.grouped += 1;
         let pair = [title, address];
-        result.pairs.entry(pair).or_default()[kind(entry.target)] += 1;
+        result.pairs.entry(pair).or_default()[entry.target.kind_index()] += 1;
         let frequency_class = u32::BITS - entry.usage.visits.leading_zeros();
         *result
             .buckets
-            .entry((pair, kind(entry.target), entry.open, frequency_class))
+            .entry((pair, entry.target.kind_index(), entry.open, frequency_class))
             .or_default() += 1;
     }
     assert_eq!(referenced.len(), catalogue.groups.len());
@@ -100,7 +91,7 @@ fn inspect(catalogue: &Catalogue) -> Occupancy {
         result.pairs.values().flatten().sum::<usize>(),
         result.grouped
     );
-    for row_kind in 0..4 {
+    for row_kind in 0..KINDS {
         let pair_count: usize = result.pairs.values().map(|counts| counts[row_kind]).sum();
         let bucket_count: usize = result
             .buckets

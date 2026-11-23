@@ -14,6 +14,6 @@ mod types;
 
 pub use catalogue::Catalogue;
 pub use types::{
-    BlankQuery, BoostWeights, Entry, Scope, ScopeCounts, SearchError, SearchHit, SearchPolicy,
-    SearchResults, Target, TextField, Usage, WorkerFallbacks,
+    BlankQuery, BoostWeights, Entry, EntryKey, FeedKey, Scope, ScopeCounts, SearchError, SearchHit,
+    SearchPolicy, SearchResults, Target, TextField, Usage, WorkerFallbacks,
 };

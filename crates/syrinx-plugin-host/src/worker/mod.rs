@@ -77,6 +77,63 @@ pub enum PluginEvent {
         plugin: String,
         error: HostError,
     },
+    /// A declared search feed may have changed (#141): the plugin called `feed-changed` under
+    /// a current `index` grant, or it activated with `index` granted, once per declared feed.
+    /// Nothing is pulled here; the application pulls when it is ready.
+    FeedChanged {
+        plugin: String,
+        feed: String,
+    },
+    /// The owner removed the plugin and the store kept it (#141): what the application holds
+    /// for it outside the store, its search rows and full-text text, goes too.
+    Removed {
+        plugin: String,
+    },
+}
+
+impl PluginEvent {
+    /// Whether the event reports something going wrong, which the owner should be shown.
+    pub fn is_failure(&self) -> bool {
+        matches!(
+            self,
+            Self::Failed { .. } | Self::Cache { .. } | Self::PrepareFailed { .. }
+        )
+    }
+
+    /// The plugin the event is about; `None` for the compiled-code cache as a whole.
+    fn plugin(&self) -> Option<&str> {
+        match self {
+            Self::Outcome { plugin, .. }
+            | Self::Failed { plugin, .. }
+            | Self::Deactivated { plugin, .. }
+            | Self::PrepareFailed { plugin, .. }
+            | Self::FeedChanged { plugin, .. }
+            | Self::Removed { plugin } => Some(plugin),
+            Self::Cache { plugin, .. } => plugin.as_deref(),
+        }
+    }
+
+    fn kind(&self) -> &'static str {
+        match self {
+            Self::Outcome { .. } => "a write's outcome arrived",
+            Self::Failed { .. } => "the plugin failed and stopped",
+            Self::Deactivated { .. } => "the plugin stopped",
+            Self::Cache { .. } => "its compiled code could not be cached",
+            Self::PrepareFailed { .. } => "compiling it in the background failed",
+            Self::FeedChanged { .. } => "a search feed changed",
+            Self::Removed { .. } => "the plugin was removed",
+        }
+    }
+}
+
+/// The plugin and what happened, never a plugin's own text, so it is safe to show and log.
+impl fmt::Display for PluginEvent {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self.plugin() {
+            Some(plugin) => write!(formatter, "plugin {plugin}: {}", self.kind()),
+            None => write!(formatter, "plugins: {}", self.kind()),
+        }
+    }
 }
 
 /// The answer to one queued call, collected without blocking the caller.

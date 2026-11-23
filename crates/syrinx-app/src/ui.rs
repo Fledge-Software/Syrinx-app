@@ -1491,7 +1491,8 @@ impl BrowserView {
             PaletteEvent::Closed | PaletteEvent::ClickedAway => {
                 usage.count(Feature::PaletteDismissed);
             }
-            PaletteEvent::Activate(Target::Command(_))
+            // No usage feature names a plugin row yet; adding one is a D39 schema change.
+            PaletteEvent::Activate(Target::Command(_) | Target::Plugin { .. })
             | PaletteEvent::Query { .. }
             | PaletteEvent::Shortcut(_)
             | PaletteEvent::Resized => {}
@@ -1546,6 +1547,11 @@ impl BrowserView {
                     Target::History(id) => self.command(SessionCommand::OpenHistory(id)),
                     Target::Command(_) => {
                         self.message = "Commands run through their own row.".to_owned()
+                    }
+                    // Opening one resolves it through its plugin (`resolve_feed_entry`),
+                    // which needs plugin tabs (#29) and installed plugins (#140).
+                    Target::Plugin { .. } => {
+                        self.message = "Plugin rows cannot be opened yet.".to_owned()
                     }
                 }
                 self.focus_page(window, cx);

@@ -117,7 +117,7 @@ fn version_6_upgrades_to_7_keeping_session_and_permissions_with_no_zoom() {
 
     let connection = directory.connection();
     assert_eq!(user_version(&connection), schema::SCHEMA_VERSION);
-    assert_eq!(schema::SCHEMA_VERSION, 9);
+    assert_eq!(schema::SCHEMA_VERSION, 10);
     assert!(object_exists(&connection, "site_zoom"));
     close(connection);
     directory.cleanup();

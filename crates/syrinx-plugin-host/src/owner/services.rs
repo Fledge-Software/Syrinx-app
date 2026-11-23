@@ -2,6 +2,7 @@
 //! Syrinx's store, under its own id only, and in-memory views until plugin tabs exist (#29).
 
 use std::sync::Arc;
+use std::sync::mpsc::Sender;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use syrinx_store::{Store, StoreError};
@@ -11,6 +12,7 @@ use crate::bindings::syrinx::plugin::host::{self, LogLevel};
 use crate::bindings::syrinx::plugin::types::{self, PluginError};
 use crate::deadline::CallDeadline;
 use crate::views::{ViewBook, ViewRecord};
+use crate::worker::{PluginEvent, send_event};
 
 /// Made for one plugin: no call can name another plugin's namespace.
 pub struct StoreServices {
@@ -18,6 +20,8 @@ pub struct StoreServices {
     store: Arc<Store>,
     book: ViewBook,
     deadline: Option<CallDeadline>,
+    /// Where a changed feed is announced for the application to pull (#141).
+    events: Option<Sender<PluginEvent>>,
 }
 
 impl StoreServices {
@@ -27,7 +31,14 @@ impl StoreServices {
             store,
             book: ViewBook::new(),
             deadline: None,
+            events: None,
         }
+    }
+
+    /// These services, announcing each changed feed on `events` as `PluginEvent::FeedChanged`.
+    pub fn with_events(mut self, events: Sender<PluginEvent>) -> Self {
+        self.events = Some(events);
+        self
     }
 
     /// What the plugin logged, oldest first; kept in memory and bounded.
@@ -111,7 +122,16 @@ impl host::Host for StoreServices {
         self.book.post_view_event(view, topic, json)
     }
 
+    /// The mediator has already checked the `index` grant and the feed's declaration.
     fn feed_changed(&mut self, feed: String) {
+        if let Some(events) = &self.events {
+            let plugin = self.plugin.clone();
+            let changed = PluginEvent::FeedChanged {
+                plugin,
+                feed: feed.clone(),
+            };
+            send_event(events, changed);
+        }
         self.book.feed_changed(feed);
     }
 

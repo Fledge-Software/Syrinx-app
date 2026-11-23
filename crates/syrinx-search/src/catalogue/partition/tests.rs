@@ -67,6 +67,52 @@ fn compare(catalogue: &mut Catalogue, query: &str, scope: Scope, now: i64, polic
 }
 
 #[test]
+fn plugin_rows_are_counted_across_partitions() {
+    let mut catalogue = fixture(19);
+    for entry in 1..=7 {
+        let key = std::num::NonZeroU32::new(entry).expect("synthetic key");
+        let target = Target::Plugin {
+            feed: crate::FeedKey::new(std::num::NonZeroU32::MIN),
+            entry: crate::EntryKey::new(key),
+        };
+        let row = Entry {
+            target,
+            title: format!("project note {entry}"),
+            address: "made-up subtitle".to_owned(),
+            usage: Usage {
+                visits: 0,
+                last_used: None,
+            },
+            open: false,
+        };
+        catalogue.upsert(row).expect("insert synthetic plugin row");
+    }
+    let policy = SearchPolicy {
+        limit: 50,
+        max_typos: 0,
+        blank: BlankQuery::All,
+        boosts: BoostWeights {
+            open: 0,
+            frequency: 0,
+            recency: 0,
+            recency_window_secs: NonZeroU64::new(1).expect("nonzero window"),
+        },
+    };
+    compare(&mut catalogue, "project", Scope::Everything, 0, policy);
+    let partitioned = catalogue
+        .query_with_strategy(
+            "project",
+            Scope::Everything,
+            0,
+            policy,
+            QueryStrategy::Partitioned,
+            &mut Unobserved,
+        )
+        .expect("partitioned result");
+    assert_eq!(partitioned.counts.plugins, 7);
+}
+
+#[test]
 fn counts_ties_and_limits_match_across_uneven_partitions() {
     let mut catalogue = fixture(19);
     let mut policy = SearchPolicy {

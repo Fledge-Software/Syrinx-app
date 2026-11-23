@@ -24,7 +24,7 @@ fn compiled(plugin_id: &str) -> PluginCompiled {
 }
 
 /// Builds the version 8 (plugins) schema with the fixture session and one synthetic install.
-fn plugins_database(directory: &TestDirectory) -> Connection {
+pub(super) fn plugins_database(directory: &TestDirectory) -> Connection {
     close(site_zoom_database(directory));
     let mut connection = directory.connection();
     schema::configure_connection(&connection).expect("configure synthetic connection");
@@ -60,7 +60,7 @@ fn version_8_upgrades_to_9_keeping_installs_with_nothing_compiled() {
 
     let connection = directory.connection();
     assert_eq!(user_version(&connection), schema::SCHEMA_VERSION);
-    assert_eq!(schema::SCHEMA_VERSION, 9);
+    assert_eq!(schema::SCHEMA_VERSION, 10);
     close(connection);
     directory.cleanup();
 }

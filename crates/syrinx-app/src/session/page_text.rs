@@ -228,6 +228,16 @@ impl PageText {
         self.problem.take().map_or(Ok(()), Err)
     }
 
+    /// The open index, which plugin search feeds also write to (#141); `None` once closed.
+    pub(super) fn index_mut(&mut self) -> Option<&mut FullText> {
+        self.index.as_mut()
+    }
+
+    /// Whether the index is open.
+    pub(super) fn index_open(&self) -> bool {
+        self.index.is_some()
+    }
+
     /// The open index, for tests that read what it holds.
     #[cfg(test)]
     pub(super) fn index(&self) -> Option<&FullText> {
@@ -241,10 +251,10 @@ impl PageText {
         self.folder = None;
     }
 
-    /// The open index, for tests that stage work in it.
+    /// Makes the daily expiry due at the next idle wake-up, for tests of what runs it.
     #[cfg(test)]
-    pub(super) fn index_mut(&mut self) -> Option<&mut FullText> {
-        self.index.as_mut()
+    pub(super) fn expiry_due_for_test(&mut self) {
+        self.expiry_due = 0;
     }
 
     /// Restarts the open index's count; false when it is closed or the restart failed.

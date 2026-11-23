@@ -274,10 +274,7 @@ impl Catalogue {
             )? {
                 continue;
             }
-            search.counts.tabs += pair.counts[0];
-            search.counts.saved += pair.counts[1];
-            search.counts.history += pair.counts[2];
-            search.counts.commands += pair.counts[3];
+            search.counts.add_kinds(&pair.counts);
             let pair_slot = search.pairs.len();
             search.pairs.push(PairScore {
                 representative,

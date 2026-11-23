@@ -361,6 +361,7 @@ fn target_kind(target: Target) -> &'static str {
         Target::Tab(_) => "Open tab",
         Target::Saved(_) => "Saved page",
         Target::History(_) => "History",
+        Target::Plugin { .. } => "Plugin item",
     }
 }
 
@@ -370,6 +371,7 @@ fn target_glyph(target: Target) -> &'static str {
         Target::Tab(_) => "○",
         Target::Saved(_) => "◆",
         Target::History(_) => "↺",
+        Target::Plugin { .. } => "•",
     }
 }
 

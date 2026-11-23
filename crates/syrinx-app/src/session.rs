@@ -7,6 +7,7 @@ mod history;
 mod history_repair;
 mod page_text;
 mod page_text_setting;
+mod plugin_feeds;
 mod plugins;
 mod preferences;
 mod recovery;
@@ -409,6 +410,10 @@ pub enum SessionError {
     Plugins(syrinx_plugin_host::owner::OwnerError),
     /// The compiled-code cache's folder was refused; plugins compile at each activation (#137).
     PluginCache(LocationError),
+    /// A plugin search feed could not be pulled or kept; it is pulled again later (#141).
+    PluginFeed(plugin_feeds::FeedError),
+    /// A plugin failed in a way the owner should hear of, named by plugin and kind only (#141).
+    PluginEvent(String),
     NoActiveTab,
     /// The session worker could not take a request, or stopped before answering it.
     StorageUnavailable,
@@ -480,6 +485,10 @@ impl fmt::Display for SessionError {
             Self::Deletion(error) => write!(formatter, "Cannot clear history safely: {error}"),
             Self::Usage(error) => write!(formatter, "{error}"),
             Self::Plugins(error) => write!(formatter, "Plugins are unavailable: {error}"),
+            Self::PluginFeed(error) => {
+                write!(formatter, "A plugin's search feed was not indexed: {error}")
+            }
+            Self::PluginEvent(event) => write!(formatter, "A plugin reported a problem: {event}"),
             Self::PluginCache(error) => {
                 write!(formatter, "Compiled plugin code cannot be kept: {error}")
             }
@@ -660,6 +669,7 @@ fn serve_accepted(
     // The session owns the plugin runtime, which shares its store; plugins never stop browsing.
     let store = Arc::new(store);
     let (plugins, problems) = plugins::start(&store, data_dir, plugin_cache);
+    worker.plugins = plugins;
     let started = problems
         .into_iter()
         .try_for_each(|error| emit_recoverable(events, error));
@@ -679,7 +689,7 @@ fn serve_accepted(
         stop::keep_stop(data_dir, error);
     }
     // A shutdown failure after the line is written goes to the window and stderr only.
-    finish_store(result, plugins::close(plugins, store))
+    finish_store(result, plugins::close(worker.plugins.take(), store))
 }
 
 /// Loads usage counting, serves until the loop ends and saves the counts.
@@ -936,6 +946,10 @@ struct Worker {
     unsaved: unsaved::Unsaved,
     /// Whether the window missed the zoom levels a clear applied; an idle tick resends them (#196).
     zoom_levels: zoom_levels::ZoomLevelsReport,
+    /// The plugin runtime, while the loop serves; plugins never stop browsing (#136).
+    plugins: Option<plugins::SessionPlugins>,
+    /// Plugin search feeds waiting to be pulled, and the rows already pulled (#141).
+    plugin_feeds: plugin_feeds::PluginFeeds,
 }
 
 /// The tabs a command created, and those of them that put back an earlier tab's page.
@@ -995,6 +1009,8 @@ impl Worker {
                 .upsert(history::history_entry(&entry))
                 .map_err(SessionError::Search)?;
         }
+        let plugin_feeds = plugin_feeds::PluginFeeds::restore(store, &mut catalogue)
+            .map_err(SessionError::PluginFeed)?;
         Ok(Self {
             model,
             catalogue,
@@ -1018,6 +1034,8 @@ impl Worker {
             survival: stop::Survival::new(),
             unsaved: unsaved::Unsaved::default(),
             zoom_levels: zoom_levels::ZoomLevelsReport::default(),
+            plugins: None,
+            plugin_feeds,
         })
     }
 
@@ -1059,6 +1077,7 @@ impl Worker {
                 Some(retry) => wait.min(retry),
                 None => wait,
             };
+            let wait = self.plugin_feed_wait(wait);
             let received = commands.recv_timeout(wait);
             // The worker's existing wake-ups carry the five-minute usage write; it adds none,
             // and reads no clock unless a write is waiting.
@@ -1099,9 +1118,11 @@ impl Worker {
                     let settled = self.settle_titles(store, false);
                     self.survival.result(settled, events)?;
                     self.survival.operation = command.operation();
+                    let typed = plugin_feeds::is_typing(&command);
                     let handled = self.handle(store, command, events);
                     self.survival.result(handled, events)?;
                     self.report_page_text(events)?;
+                    self.pull_after_command(typed, store, events)?;
                     delay = IDLE_DELAY;
                 }
                 Err(mpsc::RecvTimeoutError::Timeout) if self.history.has_pending_titles() => {
@@ -1113,6 +1134,10 @@ impl Worker {
                     let settled = self.settle_titles(store, false);
                     self.survival.result(settled, events)?;
                 }
+                // A pull under way wakes the loop often; the idle work still runs on time.
+                Err(mpsc::RecvTimeoutError::Timeout) if self.plugin_feeds_busy() => {
+                    self.pull_while_busy(store, events)?;
+                }
                 Err(mpsc::RecvTimeoutError::Timeout) => {
                     self.idle(store, events)?;
                     delay = BACKUP_CHECK_INTERVAL;
@@ -1121,8 +1146,18 @@ impl Worker {
         }
     }
 
-    /// The idle wake-up: retries a refused tab save, expires old history, takes the backup.
+    /// The idle wake-up: the session's own housekeeping, then plugin feeds' share.
     fn idle(
+        &mut self,
+        store: &Store,
+        events: &UnboundedSender<SessionEvent>,
+    ) -> Result<(), SessionError> {
+        self.idle_housekeeping(store, events)?;
+        self.pull_at_idle(store, events)
+    }
+
+    /// Retries a refused tab save, expires old history, takes the backup; never runs a plugin.
+    fn idle_housekeeping(
         &mut self,
         store: &Store,
         events: &UnboundedSender<SessionEvent>,

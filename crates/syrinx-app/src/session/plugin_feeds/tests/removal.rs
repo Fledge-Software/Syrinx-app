@@ -1,0 +1,322 @@
+//! A removed plugin's rows and text leave both tiers, even across a closed index.
+
+use super::*;
+
+#[test]
+fn a_plugin_removed_mid_session_leaves_both_tiers_at_the_next_pump() {
+    let folder = Folder::new();
+    let store = folder.store();
+    let mut index = folder.index("fulltext");
+    let mut catalogue = Catalogue::new();
+    let mut feeds = PluginFeeds::default();
+    let mut plugin = Scripted::default().answer(None, first_batch());
+    announce(&mut feeds);
+    settle(&mut feeds, &mut plugin, &store, &mut index, &mut catalogue);
+    assert!(!titles(&mut catalogue, "synthetic").is_empty());
+
+    // The runtime removed it and the store cascaded; the next pump hears it.
+    assert_eq!(store.remove_plugin(PLUGIN.to_owned()), Ok(true));
+    plugin.events.push(PluginEvent::Removed {
+        plugin: PLUGIN.to_owned(),
+    });
+    let unread = feeds.notice(plugin.take_events());
+    assert!(unread.is_empty());
+    settle(&mut feeds, &mut plugin, &store, &mut index, &mut catalogue);
+    assert!(titles(&mut catalogue, "synthetic").is_empty());
+    assert!(documents(&index, "quillmark").is_empty());
+    assert_eq!(store.plugin_feed_cursor(PLUGIN, FEED), Ok(None));
+    assert_eq!(store.plugin_feed_entries(), Ok(Vec::new()));
+    let namespace = Namespace::plugin_feed(PLUGIN, FEED).expect("a namespace");
+    assert_eq!(index.is_fed(&namespace), Ok(false));
+}
+
+#[test]
+fn text_left_by_a_plugin_removed_while_the_index_was_closed_goes_at_the_next_pull() {
+    let folder = Folder::new();
+    let store = folder.store();
+    let mut index = folder.index("fulltext");
+    let mut catalogue = Catalogue::new();
+    let mut feeds = PluginFeeds::default();
+    let mut plugin = Scripted::default().answer(None, first_batch());
+    announce(&mut feeds);
+    settle(&mut feeds, &mut plugin, &store, &mut index, &mut catalogue);
+
+    // Removed while the index is closed: the rows go, and the text is reported as left.
+    assert_eq!(store.remove_plugin(PLUGIN.to_owned()), Ok(true));
+    let closed = feeds.forget_plugin(PLUGIN, None, &mut catalogue);
+    assert_eq!(closed, Err(FeedError::Index(FullTextError::NeedsReopen)));
+    assert!(titles(&mut catalogue, "synthetic").is_empty());
+    assert_eq!(documents(&index, "quillmark"), ["a"]);
+
+    // A new session's first pump, with the index open, finds and removes it.
+    let mut feeds = PluginFeeds::restore(&store, &mut catalogue).expect("nothing kept");
+    let mut sinks = Sinks {
+        store: &store,
+        index: Some(&mut index),
+        catalogue: &mut catalogue,
+        now: NOW,
+        at: Instant::now(),
+    };
+    feeds.pump(&mut plugin, &mut sinks).expect("the sweep");
+    assert!(documents(&index, "quillmark").is_empty());
+}
+
+#[test]
+fn two_plugins_removed_while_the_index_is_closed_lose_their_rows_at_once_and_their_text_later() {
+    let folder = Folder::new();
+    let store = folder.store();
+    let other = PluginInstall {
+        plugin_id: OTHER.to_owned(),
+        ..install()
+    };
+    store.save_plugin_install(other).expect("a second install");
+    let mut index = folder.index("fulltext");
+    let mut catalogue = Catalogue::new();
+    let mut feeds = PluginFeeds::default();
+    let mut plugin = Scripted::default().answer(None, first_batch());
+    let other_changed = PluginEvent::FeedChanged {
+        plugin: OTHER.to_owned(),
+        feed: OTHER_FEED.to_owned(),
+    };
+    assert!(feeds.notice([feed_changed(), other_changed]).is_empty());
+    settle(&mut feeds, &mut plugin, &store, &mut index, &mut catalogue);
+    assert_eq!(titles(&mut catalogue, "synthetic").len(), 4);
+    assert_eq!(documents(&index, "quillmark"), ["a", "a"]);
+
+    // Both are removed while the index is closed: every row goes, the text waits.
+    for removed in [PLUGIN, OTHER] {
+        assert_eq!(store.remove_plugin(removed.to_owned()), Ok(true));
+    }
+    let removals = [PLUGIN, OTHER].map(|removed| PluginEvent::Removed {
+        plugin: removed.to_owned(),
+    });
+    assert!(feeds.notice(removals).is_empty());
+    let mut closed = Sinks {
+        store: &store,
+        index: None,
+        catalogue: &mut catalogue,
+        now: NOW,
+        at: Instant::now(),
+    };
+    let reported = feeds.pump(&mut plugin, &mut closed);
+    assert_eq!(reported, Err(FeedError::Index(FullTextError::NeedsReopen)));
+    assert_eq!(
+        feeds.pump(&mut plugin, &mut closed),
+        Ok(()),
+        "reported once"
+    );
+    assert!(titles(&mut catalogue, "synthetic").is_empty());
+    assert_eq!(documents(&index, "quillmark"), ["a", "a"]);
+
+    // Once the index is open again, the next turn removes both plugins' text.
+    let mut open = Sinks {
+        store: &store,
+        index: Some(&mut index),
+        catalogue: &mut catalogue,
+        now: NOW,
+        at: Instant::now(),
+    };
+    feeds.pump(&mut plugin, &mut open).expect("the retry");
+    assert!(documents(&index, "quillmark").is_empty());
+}
+
+#[test]
+fn text_a_closed_index_kept_goes_once_it_reopens_even_under_a_never_ending_pull() {
+    let folder = Folder::new();
+    let store = folder.store();
+    let other = PluginInstall {
+        plugin_id: OTHER.to_owned(),
+        ..install()
+    };
+    store.save_plugin_install(other).expect("a second install");
+    let mut index = folder.index("fulltext");
+    let mut catalogue = Catalogue::new();
+    let mut feeds = PluginFeeds::default();
+    let mut scripted = Scripted::default().answer(None, first_batch());
+    let other_changed = PluginEvent::FeedChanged {
+        plugin: OTHER.to_owned(),
+        feed: OTHER_FEED.to_owned(),
+    };
+    assert!(feeds.notice([other_changed]).is_empty());
+    settle(
+        &mut feeds,
+        &mut scripted,
+        &store,
+        &mut index,
+        &mut catalogue,
+    );
+    assert_eq!(documents(&index, "quillmark"), ["a"]);
+
+    // The other plugin is removed while the index is closed.
+    assert_eq!(store.remove_plugin(OTHER.to_owned()), Ok(true));
+    let removed = PluginEvent::Removed {
+        plugin: OTHER.to_owned(),
+    };
+    assert!(feeds.notice([removed]).is_empty());
+    let mut closed = Sinks {
+        store: &store,
+        index: None,
+        catalogue: &mut catalogue,
+        now: NOW,
+        at: Instant::now(),
+    };
+    let reported = feeds.pump(&mut scripted, &mut closed);
+    assert_eq!(reported, Err(FeedError::Index(FullTextError::NeedsReopen)));
+
+    // A feed that never ends is pulled from then on; the first turn with the index open
+    // still removes the other plugin's text.
+    assert!(feeds.notice([feed_changed()]).is_empty());
+    let mut endless = Endless::default();
+    let mut open = Sinks {
+        store: &store,
+        index: Some(&mut index),
+        catalogue: &mut catalogue,
+        now: NOW,
+        at: Instant::now(),
+    };
+    feeds.pump(&mut endless, &mut open).expect("a pull");
+    assert!(feeds.busy(true), "the endless pull is under way");
+    assert!(documents(&index, "quillmark").is_empty());
+}
+
+#[test]
+fn a_removal_the_open_index_refused_is_tried_again_only_at_the_next_idle_tick() {
+    let folder = Folder::new();
+    let store = folder.store();
+    let mut index = folder.index("fulltext");
+    let mut catalogue = Catalogue::new();
+    let mut feeds = PluginFeeds::default();
+    let mut plugin = Scripted::default().answer(None, first_batch());
+    announce(&mut feeds);
+    settle(&mut feeds, &mut plugin, &store, &mut index, &mut catalogue);
+    assert_eq!(store.remove_plugin(PLUGIN.to_owned()), Ok(true));
+    let removed = PluginEvent::Removed {
+        plugin: PLUGIN.to_owned(),
+    };
+    assert!(feeds.notice([removed]).is_empty());
+
+    // The open index refuses the removal once.
+    let mut failing = FailingIndex {
+        index: &mut index,
+        passes: 0,
+        failures: 0,
+        remove_failures: 1,
+        held_failures: Cell::new(0),
+    };
+    let mut sinks = Sinks {
+        store: &store,
+        index: Some(&mut failing),
+        catalogue: &mut catalogue,
+        now: NOW,
+        at: Instant::now(),
+    };
+    let refused = feeds.pump(&mut plugin, &mut sinks);
+    assert_eq!(refused, Err(FeedError::Index(FullTextError::Io)));
+    // The next turn does not ask the index again.
+    assert_eq!(feeds.pump(&mut plugin, &mut sinks), Ok(()));
+    assert!(
+        titles(&mut catalogue, "synthetic").is_empty(),
+        "the rows went at once"
+    );
+    assert_eq!(documents(&index, "quillmark"), ["a"]);
+
+    // The idle tick makes a retry due, and the next turn removes the text.
+    feeds.retry_removals();
+    let mut sinks = Sinks {
+        store: &store,
+        index: Some(&mut index),
+        catalogue: &mut catalogue,
+        now: NOW,
+        at: Instant::now(),
+    };
+    feeds.pump(&mut plugin, &mut sinks).expect("the retry");
+    assert!(documents(&index, "quillmark").is_empty());
+}
+
+#[test]
+fn a_plugin_removed_and_added_again_has_its_next_stall_shown_again() {
+    let folder = Folder::new();
+    let store = folder.store();
+    let mut index = folder.index("fulltext");
+    let mut catalogue = Catalogue::new();
+    let mut feeds = PluginFeeds::default();
+    let going_round = || {
+        Scripted::default()
+            .answer(None, batch(Vec::new(), "A", true))
+            .answer(Some("A"), batch(Vec::new(), "B", true))
+            .answer(Some("B"), batch(Vec::new(), "A", true))
+    };
+    let stalled = Err(FeedError::Stalled {
+        plugin: PLUGIN.to_owned(),
+    });
+    let mut plugin = going_round();
+    announce(&mut feeds);
+    let first = settle_with(&mut feeds, &mut plugin, &store, &mut index, &mut catalogue);
+    assert_eq!(first, stalled);
+
+    // Removed, then installed again: the new install's first stall is the owner's to see.
+    assert_eq!(store.remove_plugin(PLUGIN.to_owned()), Ok(true));
+    let removed = PluginEvent::Removed {
+        plugin: PLUGIN.to_owned(),
+    };
+    assert!(feeds.notice([removed]).is_empty());
+    settle(&mut feeds, &mut plugin, &store, &mut index, &mut catalogue);
+    store
+        .save_plugin_install(install())
+        .expect("installed again");
+    let mut plugin = going_round();
+    announce(&mut feeds);
+    let again = settle_with(&mut feeds, &mut plugin, &store, &mut index, &mut catalogue);
+    assert_eq!(again, stalled);
+}
+
+#[test]
+fn a_sweep_that_cannot_read_the_installs_is_tried_again_at_the_next_idle_tick() {
+    let folder = Folder::new();
+    let store = folder.store();
+    let mut index = folder.index("fulltext");
+    let mut catalogue = Catalogue::new();
+    let mut feeds = PluginFeeds::default();
+    let mut plugin = Scripted::default().answer(None, first_batch());
+    announce(&mut feeds);
+    settle(&mut feeds, &mut plugin, &store, &mut index, &mut catalogue);
+
+    // Removed while the index was closed, so a new session's sweep must find the text.
+    assert_eq!(store.remove_plugin(PLUGIN.to_owned()), Ok(true));
+    let closed = feeds.forget_plugin(PLUGIN, None, &mut catalogue);
+    assert_eq!(closed, Err(FeedError::Index(FullTextError::NeedsReopen)));
+    let mut feeds = PluginFeeds::restore(&store, &mut catalogue).expect("nothing kept");
+
+    // The first sweep cannot read the installs.
+    let busy = FailingStore {
+        store: &store,
+        failures: Cell::new(0),
+        installed_failures: Cell::new(1),
+    };
+    let mut sinks = Sinks {
+        store: &busy,
+        index: Some(&mut index),
+        catalogue: &mut catalogue,
+        now: NOW,
+        at: Instant::now(),
+    };
+    let refused = feeds.pump(&mut plugin, &mut sinks);
+    assert_eq!(refused, Err(FeedError::Store(StoreError::Busy)));
+    // The next turn neither asks again nor reports it again.
+    assert_eq!(feeds.pump(&mut plugin, &mut sinks), Ok(()));
+    assert_eq!(documents(&index, "quillmark"), ["a"]);
+
+    // The idle tick makes the sweep due again, and the next turn removes the text.
+    feeds.retry_removals();
+    let mut sinks = Sinks {
+        store: &busy,
+        index: Some(&mut index),
+        catalogue: &mut catalogue,
+        now: NOW,
+        at: Instant::now(),
+    };
+    feeds
+        .pump(&mut plugin, &mut sinks)
+        .expect("the sweep again");
+    assert!(documents(&index, "quillmark").is_empty());
+}
