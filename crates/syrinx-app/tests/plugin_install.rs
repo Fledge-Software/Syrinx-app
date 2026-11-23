@@ -18,7 +18,8 @@ use syrinx_plugin_host::manifest::{
     CapabilityKind, DiscoveryOptions, MANIFEST_FILE, PluginManifest,
 };
 use syrinx_plugin_host::owner::{
-    CacheSetup, Hasher, InstalledOffer, Offer, OwnerRuntime, Plan, Reviewed, UNSIGNED_PUBLISHER,
+    CacheSetup, Hasher, InstallRefusal, InstalledOffer, Offer, OwnerRuntime, Plan, Reviewed,
+    UNSIGNED_PUBLISHER,
 };
 use syrinx_plugin_host::{PluginRegistry, SignedIdentity};
 use syrinx_store::{
@@ -413,6 +414,89 @@ fn the_test_plugin_installs_from_a_signed_folder_and_records_what_loads() {
     installer.wait_for_compiled("test", module_hash(v(1)));
     assert_eq!(installer.folders.versions("test").expect("listed"), [v(1)]);
     installer.close();
+}
+
+#[test]
+fn a_first_install_offered_for_an_installed_id_is_refused_and_changes_nothing() {
+    let scratch = Scratch::new("taken");
+    let signer = TestKeyPair::generate().expect("a key");
+    let mut installer = Installer::start(&scratch);
+    let first = package(&scratch, v(1), "", Some(&signer));
+    installer
+        .install(&first, Some(key(&signer)), &[CapabilityKind::Storage])
+        .expect("installed");
+
+    let again = package(&scratch, v(2), "", Some(&signer));
+    let refusal = installer.install(&again, Some(key(&signer)), &[CapabilityKind::Storage]);
+    assert_eq!(
+        refusal,
+        Err(InstallRefusal::IdTaken("test".to_owned()).to_string())
+    );
+    assert_eq!(installer.folders.versions("test").expect("listed"), [v(1)]);
+    installer.echo();
+    installer.close();
+}
+
+#[test]
+fn a_new_install_that_loses_a_race_leaves_the_winner_in_place() {
+    let scratch = Scratch::new("race");
+    let winner_key = TestKeyPair::generate().expect("a key");
+    let loser_key = TestKeyPair::generate().expect("a key");
+    let mut installer = Installer::start(&scratch);
+    let stage = |installer: &Installer, folder: &Path, signer: &TestKeyPair| {
+        let offer = PluginOffer {
+            folder,
+            basis: Basis::New {
+                trusted: Some(key(signer)),
+            },
+            developer_mode: false,
+        };
+        let staged = stage_plugin(&installer.folders, &offer).expect("staged");
+        let reviewed = installer
+            .runtime
+            .review_new(staged_offer(&staged).expect("an offer"))
+            .expect("reviewed while the id is free");
+        (staged, reviewed)
+    };
+
+    // Both are reviewed while the id is still free.
+    let winner_folder = package(&scratch, v(1), "", Some(&winner_key));
+    let loser_folder = package(&scratch, v(2), "", Some(&loser_key));
+    let (winner, winner_review) = stage(&installer, &winner_folder, &winner_key);
+    let (loser, loser_review) = stage(&installer, &loser_folder, &loser_key);
+
+    let placed = winner.place_unrecorded(&installer.folders).expect("placed");
+    installer
+        .runtime
+        .install_reviewed(
+            winner_review,
+            &[CapabilityKind::Storage],
+            &mut installer.plugins,
+            &mut installer.commands,
+            20,
+        )
+        .expect("installed");
+    placed.keep();
+    let before = installer.record();
+
+    // The loser's place moves the winner's folder aside; its refused install puts it back.
+    let placed = loser.place_unrecorded(&installer.folders).expect("placed");
+    let refused = installer.runtime.install_reviewed(
+        loser_review,
+        &[CapabilityKind::Storage],
+        &mut installer.plugins,
+        &mut installer.commands,
+        25,
+    );
+    assert_eq!(refused, Err(InstallRefusal::IdTaken("test".to_owned())));
+    drop(placed);
+
+    assert_eq!(installer.record(), before);
+    assert_eq!(installer.folders.versions("test").expect("listed"), [v(1)]);
+    installer.echo();
+    installer.close();
+    // The winner's folder still verifies at the next start.
+    Installer::start(&scratch).close();
 }
 
 #[test]
