@@ -135,13 +135,6 @@ impl SignedManifest {
     pub(crate) fn into_manifest(self) -> PluginManifest {
         self.manifest
     }
-
-    #[cfg(feature = "store")]
-    /// The proof again for a manifest that was registered from one, which only
-    /// `PluginRegistry::reinstate` holds.
-    pub(crate) fn vouched(manifest: PluginManifest) -> Self {
-        Self { manifest }
-    }
 }
 
 /// The signed lines and the manifest must name the same id, version and world. This is the

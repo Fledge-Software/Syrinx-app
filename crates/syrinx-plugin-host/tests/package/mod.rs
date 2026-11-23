@@ -283,13 +283,15 @@ fn a_plugin_refused_at_load_is_withdrawn_in_one_step_and_its_id_freed() {
     let mut commands = CommandRegistry::browser();
     let browser = commands.len();
     let mut plugins = PluginRegistry::new();
-    register(&mut plugins, manifest("idle"), &mut commands).expect("registers");
+    // The refused plugin registers first, so the other's commands sit after its own.
     let refused = register(&mut plugins, manifest("test"), &mut commands).expect("registers");
+    let stale_keys = refused.command_keys().to_vec();
     let error = Runtime::new()
         .expect("engine")
         .compile_package(refused, &support::bytes(variant("imports-documents")))
         .expect_err("the manifest requests no folder");
     assert!(matches!(error, HostError::Identity(_)), "{error}");
+    register(&mut plugins, manifest("idle"), &mut commands).expect("registers");
 
     let withdrawn = plugins.withdraw("test", &mut commands).expect("withdrawn");
     assert_eq!(withdrawn.manifest().id(), "test");
@@ -306,7 +308,9 @@ fn a_plugin_refused_at_load_is_withdrawn_in_one_step_and_its_id_freed() {
         Err(RegistrationError::UnknownPlugin(_))
     ));
 
-    // The other plugin's keys still name its own commands.
+    // A key kept from before names nothing, and the other plugin's keys still name its own
+    // commands.
+    assert!(stale_keys.iter().all(|key| commands.get(*key).is_none()));
     let idle = plugins.get("idle").expect("kept");
     assert_eq!(commands.len(), browser + idle.command_keys().len());
     for (key, declared) in idle.command_keys().iter().zip(idle.manifest().commands()) {
