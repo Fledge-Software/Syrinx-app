@@ -254,6 +254,7 @@ impl<'a> Rows<'a> {
                 counts.saved += partition_counts.saved;
                 counts.history += partition_counts.history;
                 counts.commands += partition_counts.commands;
+                counts.plugins += partition_counts.plugins;
                 finalists.extend(ranked);
             }
             Ok(PartitionOutcome {
