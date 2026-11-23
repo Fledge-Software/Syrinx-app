@@ -268,14 +268,21 @@ impl<S: PluginHost> Worker<S> {
     }
 
     /// Tell the application; once it stopped listening there is no one left to tell.
+    /// Every event goes through here in the order it is raised: `finish` and `fail` settle the
+    /// writes in flight (`Outcome`) before they report `Deactivated` or `Failed`.
     fn send(&self, event: PluginEvent) {
-        // The application hears of it at once; the queue keeps it for its next look.
-        let watch = self.watch.lock().unwrap_or_else(PoisonError::into_inner);
-        if let Some(watch) = watch.as_ref() {
-            watch(&event);
-        }
-        if self.events.send(event).is_err() {
+        if self.events.send(event.clone()).is_err() {
             self.shared.request_stop(StopReason::Shutdown);
+            return;
+        }
+        // Queued first, then the application hears of it at once, outside the lock.
+        let watcher = self
+            .watch
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone();
+        if let Some(watcher) = watcher {
+            watcher(&event);
         }
     }
 }

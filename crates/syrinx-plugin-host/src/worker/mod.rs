@@ -26,9 +26,12 @@ use thread::{Job, Prepared, Shared, Worker};
 /// Makes the services behind a plugin's imports, once per instance.
 pub type ServiceFactory<S> = Arc<dyn Fn(&PluginManifest) -> S + Send + Sync>;
 
-/// Hears each event a worker raises, on that worker's thread, before it is queued for the
+/// Hears each event a worker raises, on that worker's thread, once it is queued for the
 /// application's next look; empty until the application sets it (#29).
-pub(crate) type EventWatch = Arc<Mutex<Option<Box<dyn Fn(&PluginEvent) + Send>>>>;
+pub(crate) type EventWatch = Arc<Mutex<Option<Watcher>>>;
+
+/// The one watcher a runtime has; see `OwnerRuntime::set_event_watch`.
+pub(crate) type Watcher = Arc<dyn Fn(&PluginEvent) + Send + Sync>;
 
 /// Where a plugin is in its life, as the owner is shown it.
 #[derive(Debug, Clone, PartialEq)]

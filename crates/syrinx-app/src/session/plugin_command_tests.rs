@@ -81,10 +81,14 @@ impl Route {
         }
     }
 
+    /// The next answer, passing over word that a plugin stopped, which its own tests check.
     fn answer(&mut self) -> PluginAnswer {
-        match self.next_event() {
-            SessionEvent::Plugin(answer) => answer,
-            event => panic!("a plugin answer, not {event:?}"),
+        loop {
+            match self.next_event() {
+                SessionEvent::Plugin(answer) => return answer,
+                SessionEvent::PluginStopped { .. } => continue,
+                event => panic!("a plugin answer, not {event:?}"),
+            }
         }
     }
 
@@ -360,6 +364,7 @@ fn an_answer_reaches_the_window_ahead_of_its_own_outcome() {
     let first = route.next_event();
     let second = route.next_event();
     let third = route.next_event();
+    let fourth = route.next_event();
     let SessionEvent::Plugin(pending) = first else {
         panic!("the submission's answer first, not {first:?}");
     };
@@ -368,8 +373,13 @@ fn an_answer_reaches_the_window_ahead_of_its_own_outcome() {
         SessionEvent::Plugin(PluginAnswer { token: 950, .. })
     ));
     let SessionEvent::PluginOutcome(late) = third else {
-        panic!("the settled write last, not {third:?}");
+        panic!("the settled write next, not {third:?}");
     };
+    // The plugin's stop comes only after the writes it settled.
+    let SessionEvent::PluginStopped { plugin } = fourth else {
+        panic!("the stop last, not {fourth:?}");
+    };
+    assert_eq!(plugin, "test");
     assert_eq!(route.commands.receive(pending), Some(Notice::Pending));
     let notice = route.commands.receive_outcome(late);
     let Some(Notice::Outcome(Outcome::Uncertain(_))) = notice else {
@@ -410,6 +420,10 @@ fn a_pending_outcome_after_another_command_was_chosen_reaches_only_the_status_li
         panic!("the closed submission is still told: {notice:?}");
     };
     assert!(route.commands.form().is_none());
+    assert!(matches!(
+        route.next_event(),
+        SessionEvent::PluginStopped { .. }
+    ));
     // The other command's own answer still counts: the plugin is gone, so it fails plainly.
     let failure = host_failure("That plugin is not available.");
     assert_eq!(
@@ -458,4 +472,29 @@ fn a_plugin_command_reaches_the_session_and_fails_plainly_when_its_plugin_is_not
     );
     stop(handle, &mut events);
     fixture.cleanup();
+}
+
+#[test]
+fn a_submission_closed_before_it_answered_pending_still_hears_its_settled_outcome() {
+    let mut route = Route::new();
+    let call = route.submit_named("later");
+    route.send(call);
+    // The owner closes the palette while the submission is on its way.
+    route.commands.abandon();
+    let answer = route.answer();
+    assert_eq!(
+        route.commands.receive(answer),
+        None,
+        "pending: nothing to tell yet"
+    );
+    route.runtime().remove("test").expect("removed");
+    let SessionEvent::PluginOutcome(late) = route.next_event() else {
+        panic!("the settled write");
+    };
+    let notice = route.commands.receive_outcome(late);
+    let Some(Notice::Outcome(Outcome::Uncertain(_))) = notice else {
+        panic!("the closed submission is told it may have happened: {notice:?}");
+    };
+    assert!(route.commands.form().is_none());
+    route.close();
 }

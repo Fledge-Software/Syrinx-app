@@ -363,6 +363,10 @@ pub enum SessionEvent {
     Plugin(PluginAnswer),
     /// A write the host settled after its submission answered pending (#29).
     PluginOutcome(LateOutcome),
+    /// A plugin's worker stopped, after the writes it settled were sent (#29).
+    PluginStopped {
+        plugin: String,
+    },
 }
 
 /// Saved zoom levels by host (#90). Hosts are browsing data, so `Debug` shows only a count.

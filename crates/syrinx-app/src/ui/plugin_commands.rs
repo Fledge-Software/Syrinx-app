@@ -11,7 +11,21 @@ impl BrowserView {
         // Today `PaletteEvent::Run` has already ended the entry, so a form cannot be shown.
         let in_palette = self.palette.is_some();
         let call = self.plugin_commands.choose(plugin, command, in_palette);
+        self.tell_plugin_notice();
         self.command(SessionCommand::Plugin(call));
+    }
+
+    /// The palette entry ended: its form is dropped, while a call that may write is kept.
+    pub(super) fn abandon_plugin_form(&mut self) {
+        self.plugin_commands.abandon();
+        self.tell_plugin_notice();
+    }
+
+    /// What the model has to say by itself, such as a forgotten call.
+    fn tell_plugin_notice(&mut self) {
+        if let Some(notice) = self.plugin_commands.take_notice() {
+            self.message = notice_text(notice);
+        }
     }
 
     /// The session's answer to a plugin call; one for an abandoned command changes nothing.
@@ -46,6 +60,9 @@ fn notice_text(notice: Notice) -> String {
         }
         Notice::Invalid(error) => format!("{}: {}", error.name, error.message),
         Notice::Pending => "Sent; waiting for the plugin to finish.".to_owned(),
+        Notice::Forgotten => {
+            "An earlier plugin command may have happened; check before trying again.".to_owned()
+        }
     }
 }
 
@@ -104,6 +121,10 @@ mod tests {
                 "New item has a form, which the palette cannot show yet.",
             ),
             (Notice::Pending, "Sent; waiting for the plugin to finish."),
+            (
+                Notice::Forgotten,
+                "An earlier plugin command may have happened; check before trying again.",
+            ),
             (
                 Notice::Invalid(FieldError {
                     name: "name".to_owned(),

@@ -2,6 +2,8 @@
 //! sends its own answer into the session's event stream from the plugin's thread, and writes
 //! the host settles itself arrive through the runtime's event watch, so nothing waits or polls.
 
+use std::sync::{Arc, Mutex, PoisonError};
+
 use futures::channel::mpsc::UnboundedSender;
 use syrinx_core::plugin_forms::{
     CallKind, ChoiceOption, Failure, FailureKind, Field, FieldError, FieldKind, FieldValue,
@@ -51,40 +53,60 @@ pub(super) fn start(
     let (Some(runtime), Some(_)) = (runtime, has_form) else {
         return reply.send(asked.failed(host_failure(NOT_AVAILABLE)));
     };
+    // The job and this thread share the reply: the job takes it when it runs, and if the job
+    // is dropped unrun the last holder's drop says so.
+    let reply = Arc::new(Mutex::new(Some(reply)));
+    let held = Arc::clone(&reply);
     let job = move |session: &mut Session<StoreServices>| {
-        let mut reply = reply;
-        let answered = answer(session, &command, kind, asked, &mut reply);
-        reply.send(answered);
+        if let Some(mut reply) = take(&held) {
+            reply.progress = Progress::Running;
+            let answered = answer(session, &command, kind, asked, &mut reply);
+            reply.send(answered);
+        }
         Ok(())
     };
-    // The answer travels through `events`, so the `Pending` is not kept; a job that could not
-    // be queued was dropped unrun, and its `Reply` has already said so.
     match runtime.call(&plugin, job) {
+        // The answer travels through `events`, so the `Pending` is not kept.
         Ok(pending) => drop(pending),
-        Err(refused) => drop(refused),
+        // Refused before it was queued: the host's reason is the answer.
+        Err(refused) => {
+            if let Some(reply) = take(&reply) {
+                reply.send(asked.failed(host_reason(&refused, false)));
+            }
+        }
     }
 }
 
+/// The reply, unless a job or this thread already took it.
+fn take(reply: &Mutex<Option<Reply>>) -> Option<Reply> {
+    reply.lock().unwrap_or_else(PoisonError::into_inner).take()
+}
+
 /// Let the window hear of each write the host settles itself (`uncertain` once its plugin
-/// stops) as it is settled. A job sends its answer from the plugin's thread before that thread
-/// settles the job's writes, so an answer always reaches the window ahead of its own outcome.
+/// stops) as it is settled, and then that the plugin stopped. A job sends its answer from the
+/// plugin's thread before that thread settles the job's writes, so an answer always reaches the
+/// window ahead of its own outcome.
 pub(super) fn watch_outcomes(runtime: &OwnerRuntime, events: &UnboundedSender<SessionEvent>) {
     let events = events.clone();
-    runtime.watch_events(move |event| {
-        let PluginEvent::Outcome {
-            plugin,
-            request,
-            outcome,
-        } = event
-        else {
-            return;
+    runtime.set_event_watch(move |event| {
+        let told = match event {
+            PluginEvent::Outcome {
+                plugin,
+                request,
+                outcome,
+            } => SessionEvent::PluginOutcome(LateOutcome {
+                plugin: plugin.clone(),
+                request: *request,
+                outcome: outcome_from(outcome.clone()),
+            }),
+            PluginEvent::Failed { plugin, .. } | PluginEvent::Deactivated { plugin, .. } => {
+                SessionEvent::PluginStopped {
+                    plugin: plugin.clone(),
+                }
+            }
+            PluginEvent::Cache { .. } | PluginEvent::PrepareFailed { .. } => return,
         };
-        let late = LateOutcome {
-            plugin: plugin.clone(),
-            request: *request,
-            outcome: outcome_from(outcome.clone()),
-        };
-        tell(&events, SessionEvent::PluginOutcome(late));
+        tell(&events, told);
     });
 }
 
@@ -118,16 +140,25 @@ impl Asked {
     }
 }
 
-/// One call's answer, sent once from whichever thread settles it. Dropped unsent, as when the
-/// worker stopped before running the job, it says the job never ran; or, once `forms.submit`
-/// had begun, that the write may have happened.
+/// One call's answer, sent once from whichever thread settles it. Dropped unsent, it says how
+/// far the job got (`Progress`).
 struct Reply {
     token: u64,
     asked: Asked,
     events: UnboundedSender<SessionEvent>,
-    /// Set just before `forms.submit` is called.
-    submitting: bool,
+    progress: Progress,
     sent: bool,
+}
+
+/// How far a job got, which decides what its reply says if it is dropped unsent.
+#[derive(Clone, Copy)]
+enum Progress {
+    /// Never ran, as when the worker stopped first: nothing was sent.
+    Queued,
+    /// Ran but never answered, which only unwinding can cause: no submission had begun.
+    Running,
+    /// `forms.submit` had begun, so the write may have happened.
+    Submitting,
 }
 
 impl Reply {
@@ -136,7 +167,7 @@ impl Reply {
             token,
             asked,
             events,
-            submitting: false,
+            progress: Progress::Queued,
             sent: false,
         }
     }
@@ -156,10 +187,12 @@ impl Drop for Reply {
         if self.sent {
             return;
         }
-        let reply = if self.submitting {
-            may_have_happened()
-        } else {
-            self.asked.failed(host_failure(NOT_SENT))
+        // `Running` and `Submitting` are reached only by unwinding out of the job, which no
+        // test can cause; they are an untested safety net.
+        let reply = match self.progress {
+            Progress::Queued => self.asked.failed(host_failure(NOT_SENT)),
+            Progress::Running => self.asked.failed(host_failure(STOPPED)),
+            Progress::Submitting => may_have_happened(),
         };
         let answer = PluginAnswer {
             token: self.token,
@@ -184,27 +217,39 @@ fn answer(
     asked: Asked,
     reply: &mut Reply,
 ) -> PluginReply {
-    match (asked, kind) {
-        (Asked::Form, _) => form(session, command),
-        (_, CallKind::Validate(values)) => validated(session, command, &values),
-        (_, CallKind::Submit(values)) => submitted(session, command, &values, reply),
-        (_, CallKind::Choose) => ran(session, command),
+    match asked {
+        Asked::Run => ran(session, command),
+        Asked::Form => form(session, command),
+        Asked::Validate => validated(session, command, &values_of(kind)),
+        Asked::Submit => submitted(session, command, &values_of(kind), reply),
     }
 }
+
+/// The values a validation or a submission carries.
+fn values_of(kind: CallKind) -> Vec<FieldValue> {
+    match kind {
+        CallKind::Validate(values) | CallKind::Submit(values) => values,
+        CallKind::Choose => Vec::new(),
+    }
+}
+
+/// `commands.run` for a command declared without a form.
 fn ran(session: &mut Session<StoreServices>, command: &str) -> PluginReply {
     match session.run_command(command) {
         Ok(ran) => PluginReply::Ran(ran.map_err(failure_from)),
-        Err(error) => PluginReply::Ran(Err(host_reason(session, &error))),
+        Err(error) => PluginReply::Ran(Err(host_reason(&error, session.is_discarded()))),
     }
 }
 
+/// `forms.form-for` for a command declared with a form.
 fn form(session: &mut Session<StoreServices>, command: &str) -> PluginReply {
     match session.form_for(command) {
         Ok(spec) => PluginReply::Form(spec.map(form_from).map_err(failure_from)),
-        Err(error) => PluginReply::Form(Err(host_reason(session, &error))),
+        Err(error) => PluginReply::Form(Err(host_reason(&error, session.is_discarded()))),
     }
 }
 
+/// `forms.validate`, as fields change.
 fn validated(
     session: &mut Session<StoreServices>,
     command: &str,
@@ -212,7 +257,7 @@ fn validated(
 ) -> PluginReply {
     match session.validate_form(command, &pairs(values)) {
         Ok(checked) => PluginReply::Validated(checked.map(errors_from).map_err(failure_from)),
-        Err(error) => PluginReply::Validated(Err(host_reason(session, &error))),
+        Err(error) => PluginReply::Validated(Err(host_reason(&error, session.is_discarded()))),
     }
 }
 
@@ -230,17 +275,17 @@ fn submitted(
     let errors = match session.validate_form(command, &pairs) {
         Ok(Ok(errors)) => errors,
         Ok(Err(error)) => return failed(failure_from(error)),
-        Err(error) => return failed(host_reason(session, &error)),
+        Err(error) => return failed(host_reason(&error, session.is_discarded())),
     };
     if !errors.is_empty() {
         return PluginReply::Submitted(Submitted::Invalid(errors_from(errors)));
     }
-    reply.submitting = true;
+    reply.progress = Progress::Submitting;
     match session.submit(command, &pairs) {
         Ok((request, result)) => PluginReply::Submitted(submitted_from(request, result)),
         Err(HostError::SubmitStopped { .. }) => may_have_happened(),
         // Refused before the request was armed: nothing reached the plugin.
-        Err(error) => failed(host_reason(session, &error)),
+        Err(error) => failed(host_reason(&error, session.is_discarded())),
     }
 }
 
@@ -250,11 +295,11 @@ fn may_have_happened() -> PluginReply {
 }
 
 /// Why the host got no answer from the plugin, in the owner's words. A refusal from an
-/// instance already discarded means the plugin stopped.
-fn host_reason(session: &Session<StoreServices>, error: &HostError) -> Failure {
+/// instance already `discarded` means the plugin stopped.
+fn host_reason(error: &HostError, discarded: bool) -> Failure {
     let message = match error {
         HostError::Trap { .. } | HostError::Discarded | HostError::SubmitStopped { .. } => STOPPED,
-        HostError::Refused(_) | HostError::Unavailable(_) if session.is_discarded() => STOPPED,
+        HostError::Refused(_) | HostError::Unavailable(_) if discarded => STOPPED,
         HostError::Refused(_) | HostError::Unavailable(_) | HostError::NotGranted(_) => REFUSED,
         HostError::Malformed(_)
         | HostError::Precompiled
@@ -373,5 +418,27 @@ fn text_from(options: wit::TextOptions) -> TextOptions {
         max_length: options.max_length,
         placeholder: options.placeholder,
         format,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn each_host_error_is_told_as_stopped_refused_or_could_not_start() {
+        let reason = |error: HostError, discarded| host_reason(&error, discarded).message;
+        let trap = HostError::Trap {
+            code: None,
+            message: "synthetic".to_owned(),
+        };
+        assert_eq!(reason(trap, false), STOPPED);
+        assert_eq!(reason(HostError::Discarded, false), STOPPED);
+        let refused = || HostError::Refused("synthetic".to_owned());
+        assert_eq!(reason(refused(), false), REFUSED);
+        assert_eq!(reason(refused(), true), STOPPED);
+        let full = HostError::Unavailable("synthetic".to_owned());
+        assert_eq!(reason(full, false), REFUSED);
+        assert_eq!(reason(HostError::Precompiled, false), CANNOT_START);
     }
 }

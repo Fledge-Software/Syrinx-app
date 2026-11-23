@@ -460,14 +460,15 @@ impl BrowserView {
     /// Ends the open entry on every path (#14): drops its queued replies and Home intent,
     /// takes the popup and puts back the status line it replaced. Returns the popup to hide.
     pub(super) fn end_palette_entry(&mut self) -> Option<PalettePopup> {
-        // A form and its submission belong to this entry; late answers then change nothing (#29).
-        self.plugin_commands.abandon();
-        end_entry(
+        let popup = end_entry(
             &mut self.palette,
             &mut self.pending_query,
             &mut self.home_palette,
             &mut self.message,
-        )
+        );
+        // A form belongs to this entry; late answers then change nothing (#29).
+        self.abandon_plugin_form();
+        popup
     }
 
     /// Removes the kept popup at shutdown.

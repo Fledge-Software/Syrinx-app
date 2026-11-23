@@ -710,7 +710,7 @@ fn a_watch_hears_each_worker_event_as_it_is_raised_and_the_queue_still_keeps_it(
     let store = temp.open();
     let mut runtime = start(&store);
     let (heard, hearing) = std::sync::mpsc::channel();
-    runtime.watch_events(move |event| {
+    runtime.set_event_watch(move |event| {
         heard.send(event.clone()).expect("the test is listening");
     });
     install(&mut runtime, "test", "");
@@ -730,5 +730,35 @@ fn a_watch_hears_each_worker_event_as_it_is_raised_and_the_queue_still_keeps_it(
         std::thread::sleep(std::time::Duration::from_millis(10));
         queued.extend(runtime.take_events());
     }
+    close(runtime, store);
+}
+
+#[test]
+fn a_watch_set_after_install_hears_a_settled_write_before_the_plugins_failure() {
+    let temp = TempStore::new();
+    let store = temp.open();
+    let mut runtime = start(&store);
+    install(&mut runtime, "test", "");
+    let (heard, hearing) = std::sync::mpsc::channel();
+    runtime.set_event_watch(move |event| {
+        heard.send(event.clone()).expect("the test is listening");
+    });
+    // A write left pending, then a trap: the host settles the write before reporting the stop.
+    let pending = call(&mut runtime, "test", |session| {
+        session.submit("test.new-item", &[("name", "later")])
+    });
+    let (request, _) = pending.expect("submitted");
+    let trapped = call(&mut runtime, "test", |session| {
+        session.run_command("test.panic")
+    });
+    assert!(trapped.is_err(), "{trapped:?}");
+    let wait = std::time::Duration::from_secs(60);
+    let first = hearing.recv_timeout(wait).expect("the settled write");
+    let second = hearing.recv_timeout(wait).expect("the failure");
+    assert!(
+        matches!(first, PluginEvent::Outcome { request: settled, .. } if settled == request),
+        "{first:?}"
+    );
+    assert!(matches!(second, PluginEvent::Failed { .. }), "{second:?}");
     close(runtime, store);
 }

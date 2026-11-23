@@ -171,7 +171,7 @@ pub struct OwnerRuntime {
     /// compiles' and the cache's; `report` is its sending end.
     events: Receiver<PluginEvent>,
     report: Sender<PluginEvent>,
-    /// Hears each event a plugin's worker raises as it is raised; see `watch_events`.
+    /// Hears each event a plugin's worker raises as it is raised; see `set_event_watch`.
     watch: EventWatch,
 }
 
@@ -383,14 +383,16 @@ impl OwnerRuntime {
     }
 
     /// Call `watch` on a plugin's worker thread with each event that worker raises (a write it
-    /// settled, a failure, a deactivation), as it is raised. Every event is still kept for
-    /// `take_events`; the watch only means the application need not wait for its next look.
-    pub fn watch_events(&self, watch: impl Fn(&PluginEvent) + Send + 'static) {
+    /// settled, then a failure or a deactivation), just after it is queued for `take_events`;
+    /// the watch only means the application need not wait for its next look. A runtime has one
+    /// watcher, owned by the session; setting another replaces it, for workers already running
+    /// too. It runs on a plugin's thread, so it must not block or take locks.
+    pub fn set_event_watch(&self, watch: impl Fn(&PluginEvent) + Send + Sync + 'static) {
         let mut kept = self
             .watch
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        *kept = Some(Box::new(watch));
+        *kept = Some(Arc::new(watch));
     }
 
     /// What the runtime, its workers, its background compiles and its compiled-code cache
