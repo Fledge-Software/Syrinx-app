@@ -255,7 +255,7 @@ from the shipping apps at all).
 None of this changes what Syrinx may contain: Syrinx takes none of these
 packages, because Syrinx takes nothing from the fork. It matters for what
 the fork's own builds carry and, if the owner ever bundles a build, for the
-licence notices Fledge would then redistribute.
+licence notices Fledge-Software would then redistribute.
 
 ### CKEditor 5's terms
 
@@ -322,7 +322,7 @@ GitHub's private security advisories, promises a first answer within 7 days
 and triage within 14, and publishes each advisory 2–4 weeks after the fixed
 release. It supports only the latest stable minor release. It lists as out of
 scope several things that matter for Syrinx's design: scripts a user puts in
-their own notes ("self-XSS"), the content of notes the owner publishes
+their own notes (self-XSS), the content of notes the owner publishes
 through sharing, and the server connecting to a local network address that a
 user configured as an AI provider. Its reporting link still points at
 `TriliumNext/Notes`, the project's former repository name.
@@ -333,8 +333,8 @@ list could not be read:
 
 - `v0.101.0` and `v0.101.1` each note a reported vulnerability fixed, with
   details withheld.
-- `v0.102.2` says it "contains important security fixes" for content
-  handling and the desktop app.
+- `v0.102.2` is described as an important security release, with fixes
+  in content handling and the desktop app.
 - `v0.103.0` names two low-severity advisories: an SQL injection through a
   URL parameter (GHSA-64fm-4j23-99j2) and a stored cross-site scripting flaw
   in the share index page (GHSA-97mx-2qjm-qhfx).
@@ -344,8 +344,8 @@ list could not be read:
   for the server that updates Node.js for a Brotli decoder out-of-bounds
   write which, the notes say, any client that could reach the server could
   trigger before authentication.
-- `v0.107.0` updates Node.js for the same issue and fixes "a few low and
-  medium-priority security reports regarding ETAPI", Trilium's external API.
+- `v0.107.0` updates Node.js for the same issue and fixes several low- and
+  medium-severity reports against ETAPI, Trilium's external API.
 
 The record shows an active project that fixes and discloses security
 problems, and also a large attack surface: a server that parses untrusted
@@ -434,9 +434,9 @@ Notes on the tables:
   recommendation for #281 is to initialise the database and set the
   Syrinx-issued credential before the listener opens, or to keep these routes
   closed until then.
-- **`/custom/*path`.** `server/routes/custom.ts` mounts it for every method,
-  "explicitly" without CSRF protection, and `core/routes/custom.ts` answers
-  from the first note labelled `#customRequestHandler` or
+- **`/custom/*path`.** `server/routes/custom.ts` mounts it for every method
+  and deliberately leaves out CSRF protection, and `core/routes/custom.ts`
+  answers from the first note labelled `#customRequestHandler` or
   `#customResourceProvider` whose pattern matches. A resource provider
   serves the note's content to anyone, with no login, and is not gated by
   `backendScriptingEnabled`; a request handler runs the note as a script,
@@ -508,30 +508,29 @@ bundling is chosen.
   program; the stricter constraint is Syrinx's own "no GPL code" rule in
   `AGENTS.md`.
 
-**Option 1: installed separately.** Syrinx's release contains no Trilium
-code. The fork publishes its own builds from its own repository, under the
-AGPL, with source on the same page, and the owner installs one; the Notes
-plugin finds it where the owner put it and Syrinx starts it (#279). Syrinx's
-MPL-2.0 release stays exactly what `AGENTS.md` says it is, Syrinx's weekly
-preview workflow is unchanged, and Fledge's AGPL duties are the ones any
-public fork already has. The costs are a second download, and a Syrinx
-version and a fork version that can drift apart, so the plugin has to check
-the fork's version when it connects. It also matches the owner's words in
-#277, "if the user has installed the notes app in syrinx plugins".
+**Option 1: installed separately.** Syrinx's release contains no Trilium code.
+The fork publishes its own builds from its own repository, under the AGPL,
+with source on the same page, and the owner installs one; the Notes plugin
+finds it where the owner put it and Syrinx starts it (#279). Syrinx's MPL-2.0
+release stays exactly what `AGENTS.md` says it is, Syrinx's weekly preview
+workflow is unchanged, and Fledge-Software's AGPL duties are the ones any
+public fork already has. The costs are a second download, and a Syrinx version
+and a fork version that can drift apart, so the plugin has to check the fork's
+version when it connects. It also matches the owner's words in #277, "if the
+user has installed the notes app in syrinx plugins".
 
 **Option 2: bundled in Syrinx's release.** The installer would carry the
 fork's build (Node.js 24.22.2 and the bundle, in its own folder with its
 `LICENSE`) beside Syrinx. Under §5 that is an aggregate, so Syrinx stays
 MPL-2.0, provided the two remain separate programs. But Fledge-Software then
 conveys an AGPL program in every Syrinx release, so §6 applies to each
-release: the
-exact fork commit of every build must stay published, the release must point
-to it, and the archive must carry the AGPL text and the notices of the
-packages inside it (including CKEditor's GPL and the Claude agent SDK's
-all-rights-reserved terms, whose redistribution this audit did not review).
-It would change the weekly release workflow, which `AGENTS.md` lists under
-"ask before proceeding", and it would make the "no GPL code" rule untrue of
-the release archive, if not of the repository. The gain is one download and
+release: the exact fork commit of every build must stay published, the release
+must point to it, and the archive must carry the AGPL text and the notices of
+the packages inside it (including CKEditor's GPL and the Claude agent SDK's
+all-rights-reserved terms, whose redistribution this audit did not review). It
+would change the weekly release workflow, which `AGENTS.md` lists under "ask
+before proceeding", and it would make the "no GPL code" rule untrue of the
+release archive, if not of the repository. The gain is one download and
 versions that always match.
 
 **Recommendation: install separately (option 1),** at least until #283
