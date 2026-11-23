@@ -31,16 +31,17 @@ impl BrowserView {
     /// A plugin's worker stopped; each submission still waiting on it is told so, on one line.
     pub(super) fn plugin_stopped(&mut self, plugin: &str) {
         let notices = self.plugin_commands.plugin_stopped(plugin);
-        if notices.is_empty() {
-            return;
-        }
-        let texts: Vec<String> = notices.into_iter().map(notice_text).collect();
-        self.message = texts.join(" ");
+        self.tell_plugin_notices(notices);
     }
 
     fn tell_plugin_notice(&mut self, notice: Option<Notice>) {
-        if let Some(notice) = notice {
-            self.message = notice_text(notice);
+        self.tell_plugin_notices(notice);
+    }
+
+    /// Show `notices` on the status line, joined in order; none leaves it as it is.
+    fn tell_plugin_notices(&mut self, notices: impl IntoIterator<Item = Notice>) {
+        if let Some(text) = notices_text(notices) {
+            self.message = text;
         }
     }
 
@@ -55,6 +56,12 @@ impl BrowserView {
         let notice = self.plugin_commands.receive_outcome(late);
         self.tell_plugin_notice(notice);
     }
+}
+
+/// Several notices on one status line, in order; `None` when there are none.
+fn notices_text(notices: impl IntoIterator<Item = Notice>) -> Option<String> {
+    let texts: Vec<String> = notices.into_iter().map(notice_text).collect();
+    (!texts.is_empty()).then(|| texts.join(" "))
 }
 
 /// The status line's one presentation of every plugin result.
@@ -173,5 +180,18 @@ mod tests {
         for (notice, expected) in cases {
             assert_eq!(notice_text(notice), expected);
         }
+    }
+
+    #[test]
+    fn several_notices_share_one_line_in_order_and_none_says_nothing() {
+        let named = |command: &str| Notice::SetAside {
+            command: command.to_owned(),
+            notice: Box::new(Notice::Outcome(Outcome::Done(None))),
+        };
+        assert_eq!(
+            notices_text([named("First"), named("Second")]),
+            Some("First: Done. Second: Done.".to_owned())
+        );
+        assert_eq!(notices_text(Vec::new()), None);
     }
 }

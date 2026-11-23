@@ -13,7 +13,7 @@ use syrinx_plugin_host::manifest::CapabilityKind;
 use syrinx_plugin_host::owner::OwnerRuntime;
 
 use super::plugin_tests::{
-    create_database, full_component, install_record, registered_fixture,
+    create_database, full_component, install_record, registered_fixture_declaring,
     registered_fixture_requiring_storage, started,
 };
 use super::*;
@@ -33,13 +33,18 @@ struct Route {
     receiver: UnboundedReceiver<SessionEvent>,
 }
 
+/// A command the fixture's code has but its manifest does not declare: it answers, then the
+/// views it opened outlast the job's budget.
+const SLOW_CHAIN: &str =
+    "\n[[contributes.commands]]\nid = \"test.slow-chain\"\ntitle = \"Synthetic test.slow-chain\"\n";
+
 impl Route {
     fn new() -> Self {
         let fixture = Fixture::new();
         create_database(&fixture);
         let (store, mut plugins) = started(&fixture);
         let mut registry = PluginRegistry::new();
-        let registered = registered_fixture(&mut registry);
+        let registered = registered_fixture_declaring(&mut registry, false, SLOW_CHAIN);
         plugins
             .runtime
             .install(registered, Arc::from(full_component()), install_record())
@@ -576,4 +581,22 @@ fn a_call_refused_before_it_was_queued_is_told_the_hosts_reason() {
     assert!(receiver.try_recv().is_err(), "told once");
     assert_eq!(plugins::close(Some(plugins), store), Ok(()));
     fixture.cleanup();
+}
+
+#[test]
+fn a_run_stopped_after_it_answered_may_have_happened() {
+    let mut route = Route::new();
+    // `test.slow-chain` answers, then the views it opened outlast the job's budget (`SLOW_CHAIN`).
+    let chain = PluginCall {
+        token: 970,
+        plugin: "test".to_owned(),
+        command: "test.slow-chain".to_owned(),
+        kind: CallKind::Choose,
+    };
+    route.send(chain);
+    let answered = route.answer();
+    assert_eq!(answered.token, 970);
+    let stopped = Outcome::Uncertain("the plugin stopped while running it".to_owned());
+    assert_eq!(answered.reply, PluginReply::Ran(stopped));
+    route.close();
 }

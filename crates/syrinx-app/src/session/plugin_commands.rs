@@ -248,14 +248,20 @@ fn answer(
 }
 
 /// `commands.run` for a command declared without a form. It can write, so a stop once it
-/// began leaves its effect unknown, as for a submission.
+/// began leaves its effect unknown, as for a submission: a trap inside it, or a stop while
+/// the calls it deferred were delivered after it answered.
 fn ran(session: &mut Session<StoreServices>, command: &str, reply: &mut Reply) -> PluginReply {
+    // An instance already stopped runs nothing.
+    if session.is_discarded() {
+        return PluginReply::Ran(Outcome::Failed(host_failure(STOPPED)));
+    }
     reply.progress = Progress::Writing;
     let outcome = match session.run_command(command) {
         Ok(Ok(())) => Outcome::Done(None),
         Ok(Err(error)) => Outcome::Failed(failure_from(error)),
         Err(HostError::Trap { .. }) => return run_may_have_happened(),
-        Err(error) => Outcome::Failed(host_reason(&error, session.is_discarded())),
+        Err(_) if session.is_discarded() => return run_may_have_happened(),
+        Err(error) => Outcome::Failed(host_reason(&error, false)),
     };
     PluginReply::Ran(outcome)
 }

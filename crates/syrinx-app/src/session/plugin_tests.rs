@@ -41,11 +41,21 @@ pub(super) fn registered_fixture_requiring_storage(
     registry: &mut PluginRegistry,
     required: bool,
 ) -> &syrinx_plugin_host::RegisteredPlugin {
+    registered_fixture_declaring(registry, required, "")
+}
+
+/// `registered_fixture_requiring_storage`, with `extra` manifest text appended.
+pub(super) fn registered_fixture_declaring<'registry>(
+    registry: &'registry mut PluginRegistry,
+    required: bool,
+    extra: &str,
+) -> &'registry syrinx_plugin_host::RegisteredPlugin {
     let mut text = fs::read_to_string(fixture_workspace().join("full").join(MANIFEST_FILE))
         .expect("the fixture's manifest");
     text.push_str(&format!(
         "\n[[capabilities]]\nkind = \"storage\"\nreason = \"Keeps synthetic settings.\"\nrequired = {required}\n",
     ));
+    text.push_str(extra);
     let manifest =
         PluginManifest::parse(text.as_bytes(), DiscoveryOptions::default()).expect("manifest");
     let lines = SignedIdentity::from_signed_lines(manifest.id(), manifest.version(), WORLD);
