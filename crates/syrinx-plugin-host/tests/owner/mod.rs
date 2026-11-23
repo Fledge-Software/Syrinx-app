@@ -686,3 +686,17 @@ fn an_index_grant_keeps_every_feed_a_valid_manifest_asks_for() {
     assert!(feeds.iter().all(|feed| scope.contains(feed.as_str())));
     close(runtime, store);
 }
+
+#[test]
+fn whether_a_command_has_a_form_comes_from_the_added_plugins_manifest() {
+    let temp = TempStore::new();
+    let store = temp.open();
+    let mut runtime = start(&store);
+    assert_eq!(runtime.command_has_form("test", "test.echo"), None);
+    install(&mut runtime, "test", "");
+    assert_eq!(runtime.command_has_form("test", "test.echo"), Some(false));
+    assert_eq!(runtime.command_has_form("test", "test.new-item"), Some(true));
+    assert_eq!(runtime.command_has_form("test", "test.missing"), None);
+    assert_eq!(runtime.command_has_form("other", "test.echo"), None);
+    close(runtime, store);
+}

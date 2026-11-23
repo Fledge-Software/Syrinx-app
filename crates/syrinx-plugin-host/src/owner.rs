@@ -366,6 +366,19 @@ impl OwnerRuntime {
         running.plugins.call(plugin, call)
     }
 
+    /// Whether an added plugin's manifest declares `command` with a form, which decides between
+    /// `commands.run` and `forms` (`wit/v0_1/README.md`, "Forms"); `None` for a plugin not
+    /// added this session or a command it does not declare.
+    pub fn command_has_form(&self, plugin: &str, command: &str) -> Option<bool> {
+        self.added
+            .get(plugin)?
+            .manifest
+            .commands()
+            .iter()
+            .find(|declared| declared.id.as_str() == command)
+            .map(|declared| declared.form)
+    }
+
     /// Where an added plugin is in its life; `None` for one not added this session.
     pub fn status(&self, plugin: &str) -> Option<PluginStatus> {
         self.running.as_ref()?.plugins.status(plugin)
