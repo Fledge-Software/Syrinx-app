@@ -185,6 +185,9 @@ impl PaletteView {
         self.context = entry.context;
         self.opening = Some(entry.opened);
         self.choices.reset();
+        // A registry problem stands for the whole entry, so the first height includes it.
+        self.choices
+            .show_registry_problem(self.command_problem.clone());
         self.chip = Chip::default();
         self.scopes_shown = false;
         self.view = View::Everything;
@@ -196,9 +199,6 @@ impl PaletteView {
         });
         // `set_value` does not emit a change event, so query explicitly.
         self.query(cx);
-        if let Some(problem) = &self.command_problem {
-            self.choices.status = problem.clone();
-        }
         // The browser shows the popup at this height, so only later changes are reported.
         self.fitted.reset(self.wanted_height());
     }
@@ -557,7 +557,7 @@ impl Render for PaletteView {
         let bar = render::bar(&self.input);
         let chips = self.scopes_shown.then(|| render::chips(self, cx));
         let list = render::list(self, cx);
-        let notice = render::notice(&self.choices.status);
+        let notice = render::notice(&self.choices.status_line());
         crate::controls::watch_pointer(div())
             .id("palette")
             .role(gpui::Role::Dialog)

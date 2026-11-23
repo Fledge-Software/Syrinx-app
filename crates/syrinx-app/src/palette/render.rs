@@ -54,7 +54,7 @@ pub(super) fn height(scopes_shown: bool, choices: &PaletteChoices, view: View) -
     if list > 0. {
         height += LIST_DIVIDER + list.min(LIST_MAX_HEIGHT);
     }
-    if !choices.status.is_empty() {
+    if !choices.status_line().is_empty() {
         height += NOTICE_HEIGHT;
     }
     height
@@ -555,6 +555,13 @@ mod tests {
             height(false, &choices, View::Everything),
             bar + NOTICE_HEIGHT,
             "a status line"
+        );
+        choices.status.clear();
+        choices.show_registry_problem(Some("Commands are unavailable: synthetic".to_owned()));
+        assert_eq!(
+            height(false, &choices, View::Everything),
+            bar + NOTICE_HEIGHT,
+            "a registry problem alone keeps the status line (#273)"
         );
     }
 

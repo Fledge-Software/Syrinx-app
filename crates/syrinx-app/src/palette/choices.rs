@@ -25,8 +25,10 @@ pub(super) struct PaletteChoices {
     pub(super) results: Vec<SearchHit>,
     pub(super) selected: Option<usize>,
     refresh_selection: Option<RefreshSelection>,
-    /// A problem or a wait worth one line under the rows; empty when there is nothing to say.
+    /// This query's or action's problem or wait; empty when there is nothing to say.
     pub(super) status: String,
+    /// Why some commands are missing for the whole entry; it leads the status line (#273).
+    registry_problem: Option<String>,
     /// Why the typed text was refused as an address, kept while that text stands.
     refusal: Option<String>,
     /// Locally matched commands for the current request; the first `staged_strong` lead pages.
@@ -64,6 +66,16 @@ impl PaletteChoices {
             request_id: self.request_id,
             ..Self::default()
         };
+    }
+
+    /// Keeps the command registry's problem on the status line until the next entry.
+    pub(super) fn show_registry_problem(&mut self, problem: Option<String>) {
+        self.registry_problem = problem;
+    }
+
+    /// The one line drawn under the rows; empty when there is nothing to say.
+    pub(super) fn status_line(&self) -> String {
+        status_line(self.registry_problem.as_deref(), &self.status)
     }
 
     fn begin_query(&mut self) -> u64 {
@@ -361,6 +373,19 @@ impl PaletteChoices {
             }
         }
         Some(PaletteEvent::Submit { text, force_search })
+    }
+}
+
+/// Joins the two problems a status line can hold.
+const STATUS_SEPARATOR: &str = " · ";
+
+/// The registry's problem first, since it explains every later "no such command", then this
+/// query's or action's (#273; the order awaits the owner).
+fn status_line(registry_problem: Option<&str>, per_query: &str) -> String {
+    match (registry_problem, per_query.is_empty()) {
+        (None, _) => per_query.to_owned(),
+        (Some(registry), true) => registry.to_owned(),
+        (Some(registry), false) => format!("{registry}{STATUS_SEPARATOR}{per_query}"),
     }
 }
 
@@ -1549,5 +1574,56 @@ mod tests {
         // Refused addresses only explain themselves where an address could be entered.
         choices.query_scoped("JAVASCRIPT:1", false);
         assert_eq!(choices.status, "");
+    }
+
+    #[test]
+    fn a_registry_problem_stays_on_the_status_line_through_replies_and_typing() {
+        let problem = "Commands are unavailable: synthetic registry failure";
+        let mut choices = PaletteChoices::default();
+        choices.reset();
+        choices.show_registry_problem(Some(problem.to_owned()));
+        let request = choices.query("");
+        assert_eq!(choices.status_line(), problem);
+        assert!(choices.receive(request, Ok(results(&targets()))));
+        assert_eq!(choices.status_line(), problem, "a search reply keeps it");
+
+        // A per-query problem joins it, after it, and leaves it behind when cleared.
+        let refused = choices.query("JAVASCRIPT:1");
+        let refusal = choices.status.clone();
+        assert!(!refusal.is_empty(), "the synthetic address is refused");
+        assert_eq!(choices.status_line(), status_line(Some(problem), &refusal));
+        assert!(choices.receive(
+            refused,
+            Err(SessionError::Search(SearchError::QueryTooLong))
+        ));
+        assert!(choices.status_line().starts_with(problem));
+        choices.query("synthetic");
+        assert_eq!(choices.status_line(), problem, "typing keeps it");
+    }
+
+    #[test]
+    fn a_healthy_reopen_clears_the_registry_problem() {
+        let mut choices = PaletteChoices::default();
+        choices.show_registry_problem(Some("Commands are unavailable: synthetic".to_owned()));
+        choices.query("");
+
+        choices.reset();
+        choices.show_registry_problem(None);
+        let request = choices.query("");
+        assert!(choices.receive(request, Ok(results(&targets()))));
+        assert_eq!(choices.status_line(), "");
+    }
+
+    #[test]
+    fn the_status_line_leads_with_the_registry_problem() {
+        let registry = "Commands are unavailable: synthetic";
+        let refusal = "Synthetic refusal";
+        assert_eq!(status_line(None, ""), "");
+        assert_eq!(status_line(Some(registry), ""), registry);
+        assert_eq!(status_line(None, refusal), refusal);
+        assert_eq!(
+            status_line(Some(registry), refusal),
+            format!("{registry}{STATUS_SEPARATOR}{refusal}")
+        );
     }
 }
