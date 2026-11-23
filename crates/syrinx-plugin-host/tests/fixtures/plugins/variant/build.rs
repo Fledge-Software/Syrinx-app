@@ -7,7 +7,11 @@ const WIT: &str = "../../../../../../wit/v0_1/plugin.wit";
 
 fn main() {
     println!("cargo::rerun-if-changed={WIT}");
-    let original = fs::read_to_string(WIT).expect("the contract's WIT is readable");
+    // Windows checkouts carry CRLF line endings (docs/dev/trapstoknow.md); every change below
+    // matches LF text.
+    let original = fs::read_to_string(WIT)
+        .expect("the contract's WIT is readable")
+        .replace("\r\n", "\n");
     let wit = change(&original);
     let features = if enabled("widgets") {
         "features: [\"home-widgets\"],"
