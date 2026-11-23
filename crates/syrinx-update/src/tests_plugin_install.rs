@@ -553,7 +553,10 @@ fn a_pending_update_and_an_uninstall_are_held_like_any_install_flow() -> Result<
         folders.remove_older_versions("sample", v(2)).err(),
         Some(PluginInstallError::InstallInProgress)
     );
-    assert!(folders.hold("sample").is_err(), "an uninstall cannot begin");
+    assert!(
+        folders.hold_for_uninstall("sample").is_err(),
+        "an uninstall cannot begin"
+    );
     assert_eq!(folders.versions("sample").expect("listed"), [v(1), v(2)]);
 
     // Declining removes the pending folder and ends the flow.

@@ -328,7 +328,7 @@ impl Installer {
     fn uninstall(&mut self, plugin: &str) -> Result<(), String> {
         let hold = self
             .folders
-            .hold(plugin)
+            .hold_for_uninstall(plugin)
             .map_err(|error| error.to_string())?;
         self.runtime
             .uninstall(plugin, &mut self.plugins, &mut self.commands)

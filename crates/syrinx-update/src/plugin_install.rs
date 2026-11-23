@@ -222,8 +222,8 @@ impl PluginFolders {
     /// Hold plugin `id` for an uninstall, which the app takes before telling the plugin host,
     /// so nothing of the uninstall runs while another flow (an install, an update, or a pending
     /// update awaiting the owner) holds the id. Refused with `InstallInProgress` meanwhile.
-    pub fn hold(&self, id: &str) -> Result<PluginHold, PluginInstallError> {
-        Ok(PluginHold {
+    pub fn hold_for_uninstall(&self, id: &str) -> Result<UninstallHold, PluginInstallError> {
+        Ok(UninstallHold {
             guard: self.guard(id)?,
             folders: self.clone(),
         })
@@ -246,10 +246,12 @@ impl PluginFolders {
         self.plugin_folder(id).join(version.to_string())
     }
 
-    /// Remove every installed version of plugin `id` under a hold of its own; refused while a
-    /// flow holds the id. An uninstall takes `hold` first and removes through it instead.
-    pub fn remove_plugin(&self, id: &str) -> Result<(), PluginInstallError> {
-        self.hold(id)?.remove_plugin()
+    /// Remove every installed version of plugin `id` under a hold of its own, for tests. The
+    /// one public way is `hold_for_uninstall`, then `UninstallHold::remove_plugin`, so an
+    /// uninstall cannot remove the folders without first holding the plugin.
+    #[cfg(test)]
+    pub(crate) fn remove_plugin(&self, id: &str) -> Result<(), PluginInstallError> {
+        self.hold_for_uninstall(id)?.remove_plugin()
     }
 
     /// Remove one version's folder, a version no longer needed; refused while a flow holds the
@@ -333,12 +335,12 @@ struct InstallGuard {
 
 /// An uninstall's hold on a plugin id, taken before the plugin host forgets the plugin and kept
 /// until its folders are removed.
-pub struct PluginHold {
+pub struct UninstallHold {
     guard: InstallGuard,
     folders: PluginFolders,
 }
 
-impl PluginHold {
+impl UninstallHold {
     /// Remove every installed version of the held plugin, as the last step of an uninstall.
     pub fn remove_plugin(self) -> Result<(), PluginInstallError> {
         self.folders.remove_plugin_folder(&self.guard.id)

@@ -57,7 +57,7 @@ pub use path::{MAX_COMPONENT_BYTES, MAX_COMPONENTS, MAX_PATH_BYTES, PackagePath}
 pub use payload::{Payload, VerifiedFile, VerifiedPayload, read_bounded};
 pub use plugin_install::{
     Basis, Installed, ListedFile, PLUGIN_STAGING_FOLDER, PLUGINS_FOLDER, PlacedPlugin,
-    PluginFolders, PluginHold, PluginInstallError, PluginOffer, Publisher, StagedPlugin,
+    PluginFolders, PluginInstallError, PluginOffer, Publisher, StagedPlugin, UninstallHold,
     open_installed, settle_pending_update, stage_plugin,
 };
 pub use plugin_package::{
