@@ -1008,6 +1008,19 @@ i5-4460 / HD 4600; no budget changed.
   and key events through XInput2, so the core masks `XGetWindowAttributes`
   reports never show them, and a filter must match XI2 `GenericEvent`s too.
   Source: the 2026-10-31 Linux QA under XWayland with fcitx5 (observed).
+- **A shortcut that works on `us,ru` does nothing on `ru,us`.** XKB group 0
+  (a keymap's first layout) is not always Latin, so reading a Cyrillic key in
+  group 0 finds Cyrillic again. And one key's value does not say whether the
+  layout is Latin: Hebrew's W key types an apostrophe, and so does Dvorak's Q.
+  `browser_gtk/page_shortcuts.rs` calls a layout Latin when some key types `a`
+  unshifted, never reads an active Latin layout as another, and reads other
+  layouts' Ctrl keys in the first Latin one. Testing for `a` at any level is
+  wrong: Burmese, `cz(rus)` and some Arabic-script Kurdish layouts carry it on
+  AltGr. Source: every layout and variant in `evdev.lst`, compiled with
+  libxkbcommon on 2026-11-23: 367 type `a` unshifted, and the other 230, each
+  followed by `us`, give `t` on the T key in the second group (measured); GDK
+  3.24's `gdkkeys-x11.c` (code-read). The owner's window check is pending
+  (#243).
 - **GPUI's X11 backend ignores `show: false` and keeps a stale window
   origin.** `Window::new` maps every window it opens, so the kept palette sat
   visible at the screen's corner from start-up; `open_owned_popup` hides such
