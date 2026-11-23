@@ -54,6 +54,15 @@ fn registered_fixture(registry: &mut PluginRegistry) -> &syrinx_plugin_host::Reg
         .expect("registers")
 }
 
+/// Install the full fixture's manifest with `component` under `record`.
+fn install_fixture(runtime: &mut OwnerRuntime, component: Arc<[u8]>, record: PluginInstall) {
+    let mut registry = PluginRegistry::new();
+    let registered = registered_fixture(&mut registry);
+    runtime
+        .install(registered, component, record)
+        .expect("installed");
+}
+
 fn install_record() -> PluginInstall {
     PluginInstall {
         plugin_id: "test".to_owned(),
@@ -106,11 +115,7 @@ fn the_test_plugin_runs_through_the_sessions_own_route() {
     create_database(&fixture);
     let (store, mut session_plugins) = started(&fixture);
     let runtime = &mut session_plugins.runtime;
-    let mut registry = PluginRegistry::new();
-    let registered = registered_fixture(&mut registry);
-    runtime
-        .install(registered, Arc::from(full_component()), install_record())
-        .expect("installed");
+    install_fixture(runtime, Arc::from(full_component()), install_record());
     runtime
         .grant("test", CapabilityKind::Storage, 20)
         .expect("granted");
@@ -152,11 +157,7 @@ fn installed(
     create_database(fixture);
     let (lease, store, mut session_plugins) = started_with_lease(fixture);
     let runtime = &mut session_plugins.runtime;
-    let mut registry = PluginRegistry::new();
-    let registered = registered_fixture(&mut registry);
-    runtime
-        .install(registered, Arc::from(full_component()), install_record())
-        .expect("installed");
+    install_fixture(runtime, Arc::from(full_component()), install_record());
     // Installing also starts a background compile, which reports nothing when it succeeds.
     // `test.echo` keeps a synthetic setting, so it needs storage.
     runtime
@@ -297,7 +298,10 @@ fn every_event_is_described_without_text_from_the_plugin_or_the_system() {
         refused_entry(Refusal::OtherBytes),
         cached(CacheError::File(std::io::ErrorKind::PermissionDenied)),
         cached(CacheError::NotAFile),
-        cached(CacheError::Unnamed),
+        PluginEvent::Cache {
+            plugin: Some(format!("../{SENTINEL}\nPlugin forged")),
+            error: CacheError::Unnamed,
+        },
         cached(CacheError::Store(SENTINEL.to_owned())),
         cached(CacheError::Hash(SENTINEL.to_owned())),
         PluginEvent::Cache {
@@ -333,7 +337,7 @@ fn every_event_is_described_without_text_from_the_plugin_or_the_system() {
             "Plugin test: its compiled code was not kept or used: an entry was refused (it was compiled from other bytes)",
             "Plugin test: its compiled code was not kept or used: a cache file failed (permission denied)",
             "Plugin test: its compiled code was not kept or used: something other than a file is in its folder",
-            "Plugin test: its compiled code was not kept or used: the plugin id cannot name a cache file",
+            "Plugin (an id that cannot be shown): its compiled code was not kept or used: the plugin id cannot name a cache file",
             "Plugin test: its compiled code was not kept or used: the store could not read or keep its record",
             "Plugin test: its compiled code was not kept or used: its SHA-256 could not be computed",
             "The compiled plugin code cache could not be used: the compiled code could not be written out",
@@ -341,6 +345,10 @@ fn every_event_is_described_without_text_from_the_plugin_or_the_system() {
         ]
     );
     assert!(lines.iter().all(|line| !line.contains("secret-7f3a")));
+    assert!(
+        lines.iter().all(|line| !line.contains('\n')),
+        "one line each"
+    );
 }
 
 #[test]
@@ -371,12 +379,7 @@ fn compiled_code_is_kept_under_its_sha256_and_loaded_after_a_restart() {
         ..install_record()
     };
     let (store, mut session_plugins) = started(&fixture);
-    let mut registry = PluginRegistry::new();
-    let registered = registered_fixture(&mut registry);
-    session_plugins
-        .runtime
-        .install(registered, Arc::from(component), record)
-        .expect("installed");
+    install_fixture(&mut session_plugins.runtime, Arc::from(component), record);
     activate(&mut session_plugins.runtime);
     let compiled = CompileCounts {
         compiled: 1,
@@ -424,12 +427,7 @@ fn warm_cache(fixture: &Fixture, component: &[u8]) {
         ..install_record()
     };
     let (store, mut session_plugins) = started(fixture);
-    let mut registry = PluginRegistry::new();
-    let registered = registered_fixture(&mut registry);
-    session_plugins
-        .runtime
-        .install(registered, Arc::from(component), record)
-        .expect("installed");
+    install_fixture(&mut session_plugins.runtime, Arc::from(component), record);
     activate(&mut session_plugins.runtime);
     assert!(plugins::drain(&session_plugins.runtime).is_empty());
     assert_eq!(plugins::close(Some(session_plugins), store), Ok(()));
@@ -459,6 +457,11 @@ fn a_damaged_cache_entry_is_reported_while_the_plugin_still_loads() {
         .load(registered, Arc::from(component))
         .expect("loaded");
     activate(&mut session_plugins.runtime);
+    let recompiled = CompileCounts {
+        compiled: 1,
+        loaded: 0,
+    };
+    assert_eq!(session_plugins.runtime.compile_counts(), recompiled);
     assert_eq!(
         plugins::drain(&session_plugins.runtime),
         vec![
@@ -483,17 +486,12 @@ fn a_failed_background_compile_is_reported() {
     let fixture = Fixture::new();
     create_database(&fixture);
     let (store, mut session_plugins) = started(&fixture);
-    let mut registry = PluginRegistry::new();
-    let registered = registered_fixture(&mut registry);
     // Bytes no compiler accepts, under the fixture's real manifest.
-    session_plugins
-        .runtime
-        .install(
-            registered,
-            Arc::from(&b"not a component"[..]),
-            install_record(),
-        )
-        .expect("installed");
+    install_fixture(
+        &mut session_plugins.runtime,
+        Arc::from(&b"not a component"[..]),
+        install_record(),
+    );
     let deadline = Instant::now() + Duration::from_secs(60);
     let mut lines = Vec::new();
     while !lines.iter().any(|line| line == PREPARE_FAILED) {

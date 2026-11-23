@@ -136,9 +136,9 @@ fn log_lines(lines: Vec<String>) {
     }
 }
 
-/// The plugin's id and what happened, in the host's own words. Plugin ids are one checked
-/// segment; text a plugin or the system wrote (an activation refusal, a load error, a write's
-/// outcome) is left out, because it may hold the owner's data or a path.
+/// The plugin's id and what happened, in the host's own words. Text a plugin or the system
+/// wrote (an activation refusal, a load error, a write's outcome) is left out, because it may
+/// hold the owner's data or a path; an id is shown only through `shown`.
 fn describe(event: &PluginEvent) -> String {
     match event {
         PluginEvent::Outcome {
@@ -146,20 +146,30 @@ fn describe(event: &PluginEvent) -> String {
             request,
             outcome,
         } => format!(
-            "Plugin {plugin}: write {request} was settled by the host as {}",
+            "Plugin {}: write {request} was settled by the host as {}",
+            shown(plugin),
             outcome_kind(outcome)
         ),
         PluginEvent::Failed { plugin, failure } => {
-            format!("Plugin {plugin} stopped: {}", failure_kind(failure))
+            format!(
+                "Plugin {} stopped: {}",
+                shown(plugin),
+                failure_kind(failure)
+            )
         }
         PluginEvent::Deactivated { plugin, reason } => {
-            format!("Plugin {plugin} was deactivated: {}", stop_kind(reason))
+            format!(
+                "Plugin {} was deactivated: {}",
+                shown(plugin),
+                stop_kind(reason)
+            )
         }
         PluginEvent::Cache {
             plugin: Some(plugin),
             error,
         } => format!(
-            "Plugin {plugin}: its compiled code was not kept or used: {}",
+            "Plugin {}: its compiled code was not kept or used: {}",
+            shown(plugin),
             cache_kind(error)
         ),
         PluginEvent::Cache {
@@ -170,9 +180,21 @@ fn describe(event: &PluginEvent) -> String {
             cache_kind(error)
         ),
         PluginEvent::PrepareFailed { plugin, .. } => format!(
-            "Plugin {plugin} could not be compiled in the background; its first use tries again"
+            "Plugin {} could not be compiled in the background; its first use tries again",
+            shown(plugin)
         ),
     }
+}
+
+/// The plugin's id when it is one plain segment, as a manifest's is; an id the cache read
+/// back from a damaged store row may not be, and is then replaced.
+fn shown(plugin: &str) -> &str {
+    let plain =
+        |byte: u8| byte.is_ascii_lowercase() || byte.is_ascii_digit() || b"-_".contains(&byte);
+    if !plugin.is_empty() && plugin.len() <= 64 && plugin.bytes().all(plain) {
+        return plugin;
+    }
+    "(an id that cannot be shown)"
 }
 
 /// How the host settled a write, without the plugin's or service's text.

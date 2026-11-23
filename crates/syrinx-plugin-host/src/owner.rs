@@ -389,6 +389,7 @@ impl OwnerRuntime {
 
     /// Stop every plugin, so nothing but the caller holds the store any more, and hand back
     /// what the workers reported, including what stopping them raised.
+    #[must_use = "events still queued at shutdown are lost unless reported"]
     pub fn shutdown(mut self) -> Vec<PluginEvent> {
         if let Some(running) = self.running.take() {
             running.plugins.shutdown();

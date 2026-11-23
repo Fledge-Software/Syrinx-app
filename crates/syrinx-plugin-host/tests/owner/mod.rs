@@ -144,7 +144,8 @@ fn logged(runtime: &mut OwnerRuntime, plugin: &str) -> Vec<String> {
 
 /// Close the runtime, then the store, as Syrinx does when it exits.
 fn close(runtime: OwnerRuntime, store: Arc<Store>) {
-    runtime.shutdown();
+    // The events are checked by the tests that look for them.
+    drop(runtime.shutdown());
     let store = Arc::try_unwrap(store).expect("nothing else holds the store");
     store.shutdown().expect("the store closes");
 }
