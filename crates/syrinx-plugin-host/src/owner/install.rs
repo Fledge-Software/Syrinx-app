@@ -309,7 +309,8 @@ impl OwnerRuntime {
     }
 
     /// Install a reviewed new plugin with the capabilities the owner granted on the sheet,
-    /// every required one among them. A failure leaves no record, grant or registration.
+    /// every required one among them. Its id is checked again, so an install recorded since the
+    /// review is never overwritten. A failure leaves no record, grant or registration.
     pub fn install_reviewed(
         &mut self,
         reviewed: Reviewed,
@@ -324,6 +325,8 @@ impl OwnerRuntime {
         check_required(reviewed.manifest(), granted, |_| true)?;
         let Reviewed { signed, offer, .. } = reviewed;
         let id = signed.manifest().id().to_owned();
+        // Another install of this id may have been recorded since the review.
+        self.check_new_id(&id)?;
         let registered = registry.register(signed, commands)?;
         let record = install_record(&id, &offer, registered.manifest(), now, now);
         let installed = self

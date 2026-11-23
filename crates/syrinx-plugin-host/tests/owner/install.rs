@@ -213,6 +213,74 @@ fn a_new_id_is_checked_against_syrinx_the_built_ins_and_every_install_record() {
 }
 
 #[test]
+fn a_new_install_reviewed_before_another_was_recorded_is_refused() {
+    let temp = TempStore::new();
+    let store = temp.open();
+    let mut installer = Installer::start(&store);
+    let first = installer
+        .runtime
+        .review_new(offer("test", "0.1.0", STORAGE))
+        .expect("reviewed");
+    let second = installer
+        .runtime
+        .review_new(offer_of(
+            "test",
+            "0.1.0",
+            STORAGE,
+            "another-publisher",
+            FULL,
+        ))
+        .expect("reviewed while the id was still free");
+    let Installer {
+        runtime,
+        plugins,
+        commands,
+    } = &mut installer;
+    runtime
+        .install_reviewed(first, &[CapabilityKind::Storage], plugins, commands, 20)
+        .expect("installed");
+    let before = record(&store);
+
+    assert_eq!(
+        runtime.install_reviewed(second, &[CapabilityKind::Storage], plugins, commands, 25),
+        Err(InstallRefusal::IdTaken("test".to_owned()))
+    );
+    assert_eq!(
+        record(&store),
+        before,
+        "the first install's publisher stays"
+    );
+    assert_eq!(echo(&mut installer.runtime, "test"), Ok(Ok(())));
+    installer.runtime.shutdown();
+
+    // After a restart the first plugin is recorded but not registered or loaded, and a review
+    // made elsewhere while the id was free is still refused rather than written over it.
+    let elsewhere = TempStore::new();
+    let elsewhere_store = elsewhere.open();
+    let other = Installer::start(&elsewhere_store);
+    let stale = offer_of("test", "0.1.0", STORAGE, "another-publisher", FULL);
+    let reviewed = other.runtime.review_new(stale).expect("reviewed");
+    close(other.runtime, elsewhere_store);
+    let Installer {
+        mut runtime,
+        mut plugins,
+        mut commands,
+    } = Installer::start(&store);
+    assert_eq!(
+        runtime.install_reviewed(
+            reviewed,
+            &[CapabilityKind::Storage],
+            &mut plugins,
+            &mut commands,
+            30
+        ),
+        Err(InstallRefusal::IdTaken("test".to_owned()))
+    );
+    assert_eq!(record(&store), before);
+    close(runtime, store);
+}
+
+#[test]
 fn full_trust_a_newer_syrinx_and_a_declined_required_capability_install_nothing() {
     let temp = TempStore::new();
     let store = temp.open();
