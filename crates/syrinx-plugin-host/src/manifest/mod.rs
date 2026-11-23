@@ -447,7 +447,7 @@ fn is_module_name(module: &str) -> bool {
 }
 
 /// A relative folder of plain names, ending with `/`.
-fn is_ui_folder(ui: &str) -> bool {
+pub(crate) fn is_ui_folder(ui: &str) -> bool {
     let Some(folder) = ui.strip_suffix('/') else {
         return false;
     };

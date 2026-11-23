@@ -22,6 +22,8 @@ use webkit2gtk::{
 };
 use x11_dl::xlib;
 
+#[path = "page_find.rs"]
+mod page_find;
 #[path = "page_permissions.rs"]
 mod page_permissions;
 
@@ -47,6 +49,8 @@ use super::{
     page_text::{PageText, TextContext},
     validate_url,
 };
+
+use page_find::FindState;
 
 /// Permission prompts waiting on the owner, by request number.
 type Prompts = Rc<RefCell<HashMap<u64, PermissionRequest>>>;
@@ -103,7 +107,7 @@ impl Page {
             shared,
             life,
             prompts: Rc::default(),
-            find: Rc::default(),
+            find: Rc::new(FindState::new(page_find::steps_count_matches())),
             load: Rc::default(),
             text,
         };
@@ -274,6 +278,8 @@ impl Page {
         if !case_sensitive {
             options |= FindOptions::CASE_INSENSITIVE;
         }
+        // Recorded before the call, in case WebKit answers synchronously.
+        self.find.sending_search();
         controller.search(text, options.bits(), u32::MAX);
     }
 
@@ -281,7 +287,7 @@ impl Page {
         let Some(controller) = self.view.find_controller() else {
             return;
         };
-        if !self.find.step(forward) {
+        if !self.find.sending_step(forward) {
             return;
         }
         if forward {
@@ -289,11 +295,10 @@ impl Page {
         } else {
             controller.search_previous();
         }
-        // The native found/failed signal acknowledges this step before its result is sent.
     }
 
     fn stop_find(&self) {
-        self.find.request.set(None);
+        self.find.stop();
         if let Some(controller) = self.view.find_controller() {
             controller.search_finish();
         }
@@ -470,16 +475,10 @@ impl Page {
             return;
         };
         let (id, shared, find) = (self.id, self.shared.clone(), self.find.clone());
-        // Found-text carries the total count after search, next and previous complete.
-        controller.connect_found_text(move |_, count| {
-            find.count.set(count);
-            find.report(id, &shared);
-        });
+        // Each found or failed signal answers the oldest operation still in flight.
+        controller.connect_found_text(move |_, count| find.answered(count, id, &shared));
         let (id, shared, find) = (self.id, self.shared.clone(), self.find.clone());
-        controller.connect_failed_to_find_text(move |_| {
-            find.count.set(0);
-            find.report(id, &shared);
-        });
+        controller.connect_failed_to_find_text(move |_| find.answered(0, id, &shared));
     }
 
     fn watch_popups(&self) {
@@ -693,61 +692,6 @@ fn virtual_key(keyval: u32) -> Option<u32> {
         _ if lower == key::KP_Subtract => Some(0x6D),
         _ if lower == key::KP_0 => Some(0x60),
         _ => None,
-    }
-}
-
-/// The current find request, its match count and which match Syrinx last stepped to.
-#[derive(Default)]
-struct FindState {
-    request: Cell<Option<u64>>,
-    count: Cell<u32>,
-    active: Cell<u32>,
-}
-
-impl FindState {
-    fn begin(&self, request: u64, text: &str, id: u64, shared: &Shared) -> bool {
-        self.request.set(Some(request));
-        self.active.set(0);
-        if text.is_empty() {
-            self.count.set(0);
-            self.report(id, shared);
-            self.request.set(None);
-            return false;
-        }
-        true
-    }
-
-    fn step(&self, forward: bool) -> bool {
-        let count = self.count.get();
-        if count == 0 || self.request.get().is_none() {
-            return false;
-        }
-        let active = self.active.get();
-        let next = if forward {
-            (active + 1) % count
-        } else {
-            (active + count - 1) % count
-        };
-        self.active.set(next);
-        true
-    }
-
-    fn report(&self, id: u64, shared: &Shared) {
-        let Some(request) = self.request.get() else {
-            return;
-        };
-        let count = self.count.get();
-        let active = if count == 0 {
-            -1
-        } else {
-            i32::try_from(self.active.get().saturating_add(1)).unwrap_or(i32::MAX)
-        };
-        shared.events.emit(BrowserEvent::FindResult {
-            id,
-            request,
-            count: i32::try_from(count).unwrap_or(i32::MAX),
-            active,
-        });
     }
 }
 

@@ -666,11 +666,45 @@ i5-4460 / HD 4600; no budget changed.
   The shared label is one-based and empty Find must complete with `0/-1`.
   Require native found/failed completion plus independent authored selected-span
   evidence for sequential direction and wrap checks. GTK drops the returned
-  query and native index, so this does not prove overlapping-operation
-  correlation; that pre-existing gap is #245. Source: `browser_gtk/page.rs`,
+  query and native index; overlapping operations are paired with their
+  requests separately (the next trap, #245). Source: `browser_gtk/page.rs`,
   `examples/linux/controls/find_observation.rs` and their RED/GREEN regressions
   (source-confirmed, 2026-11-05; native baseline, reversed-direction mutation
   and real Find-label inspection passed in the `a01b28d` receipt).
+- **The Find label can name the wrong match when the owner types or steps
+  faster than WebKit answers.** WebKitGTK answers `search`, `search_next` and
+  `search_previous` later, through `found-text` or `failed-to-find-text`, and
+  drops the string and match index at that signal (`WebKitFindController.cpp`,
+  line 129). Reading the current request when a reply arrived reported an
+  older query's count under the newer request, and a Next sent before a new
+  search answered stepped modulo the old count (old count 1, new count 3:
+  "1 of 3" on 2.54.1, "1 of 1" on 2.52.6, while the selection was on the
+  second match). `browser_gtk/page_find.rs` records each operation before
+  sending it and lets each reply retire the oldest; keep that order, and
+  never clear the record, since a reply still owed would then pair with a
+  later operation. Next and Previous are refused while 64 operations are
+  unanswered; searches never are. It rests on WebKit answering one page's
+  operations once each, in send order, which held natively for overlapping
+  searches and steps (three runs of 1,032 in an uncommitted probe) and
+  through a killed web process (3/3, the same probe), whose pending
+  searches came back as failures before the crash signal. A cross-site
+  process swap with replies in flight could not be staged in the sandbox
+  and is assumed, not observed. Source:
+  `examples/linux/controls.rs`'s `overlapping_find`, run on its own under
+  Xvfb because the full controls suite needs a window manager (the old
+  state failed with request 55 reporting "o"'s six matches; the fix passed
+  5/5), and WebKitGTK 2.52.6 and 2.54.1's `FindController.cpp` and
+  `WebPageProxy.cpp` (observed 2026-11-20; the owner's Hyprland run is
+  pending).
+- **Before WebKitGTK 2.54, every Find step reports one match.** A Next or
+  Previous's `found-text` count is 1 whatever the page holds, so taking it as
+  the total made the label read "2 of 1". Only 2.54's
+  `webKitFindControllerPerform` (`WebKitFindController.cpp`) adds
+  `DetermineMatchIndex` to steps; without it `FindController.cpp` sets the
+  count to 1. `page_find::steps_count_matches` reads the runtime version and,
+  before 2.54, keeps the search's total, taking a step's count only when it
+  finds nothing. Source: the same probe's 362 step replies, every one a
+  count of 1 (observed on 2.52.6, 2026-11-20), and both versions' source.
 - **Native X11 focus alone does not establish window-manager activation.**
   At `cb44257`, three permissions runs failed the native-focus guard before
   Enter, and one earlier X11 probe failed popup-to-chrome transfer. Fixtures
@@ -1115,6 +1149,19 @@ uses its own tree. Still use a private target directory for each worktree.
 
 ## Storage
 
+- **A schema bump passes the store's own tests and still breaks the
+  recovery tests in `syrinx-platform`.** `storage/recovery/tests.rs`
+  hard-codes the current schema version (`mark_newer_schema` writes "one past
+  current" into the header's bytes 60 to 64, and the flat-schema test asserts
+  the migrated `user_version`) and lists every table to drop in
+  `downgrade_to_flat_schema`, newest first because later tables reference
+  earlier ones. After a bump, update all three and run
+  `cargo test -p syrinx-platform recovery`, not only `-p syrinx-store`.
+  Schema version 9 (#137) reached Windows CI with the old values: the
+  newer-schema backup was offered, and the flat backup was refused as
+  `NoValidBackup`. The same tests also fail on Linux; they were simply not
+  run there. Source: #137's CI run on 83c48a5 and a Linux rerun of the old
+  file (observed 2026-11-20).
 - **A new deletion-journal category makes a build that predates it refuse
   the journal and offer the clear-all-history repair.** D47's codec fails
   closed on a category byte it does not know, by design. A build between

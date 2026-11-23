@@ -17,6 +17,45 @@ Since 2026-10-16 open deferred work is tracked by GitHub issue number
 instead (`docs/dev/deferred-work.md`); where an item became an issue, the
 entry names it.
 
+## 2026-11-20
+
+- **The palette is a slim bar with suggestions under it, in the theme's own
+  colour (owner's own request, 2026-11-20; #265).** The owner opened the
+  palette on Linux (#265 records two open tabs) and wrote: "I dont want the
+  search to look this bulky. Its sloppy and distracts. I want the bar to
+  show up in a neutral color that matches the theme the user makes/uses.
+  Just a bar for the search and then recommendations, past searches etc".
+  Only the quoted words are the owner's; the rest is recorded by the agent
+  that built it, and the owner may correct it.
+  - **What changes, as recorded.** The palette opens as one query bar, 640
+    wide, and the popup is only as tall as the bar and the rows under it, up
+    to a maximum past which the rows scroll; a "⌕" search mark sits at the
+    bar's left end. The bordered field, the Esc hint, the preview pane and
+    the footer are gone. A problem or a wait (a refused address, a failed
+    search, "Waiting for local results…") shows in one line under the rows;
+    "Searching locally…" and the tab and saved-page counts are no longer
+    shown. A saved see-through theme's panel now takes the theme's hue like
+    every other surface, keeping its opacity: the Glass template's panel is
+    94 % opaque, and the recolouring used to skip any colour that was not
+    fully opaque, so the panel stayed the canvas's navy over a warm theme.
+  - **What it supersedes, as recorded.** The spec's section 3 layout ("a
+    split layout: results on the left, a preview on the right") and the
+    design canvas's 880 by 560 Palette board. The footer hint that
+    2026-10-25's entry says still names Alt Enter is gone; Alt Enter itself
+    still searches the web.
+  - **What it does not change.** The typed text is the first row and
+    Enter's choice (2026-10-25); nothing is fetched while typing (D9); the
+    accent marks the selected row; the Glass preset keeps the canvas's
+    colours (2026-10-21); the popup is the kept, owned window of DW-90.
+  - **Kept for now, and the owner's to decide (#265's questions).** The
+    scope chips are hidden until Tab is pressed in the query, not removed,
+    because 2026-10-21 gives each installed plugin's feeds a chip and
+    Bookmarks and History have no prefix. "Past searches" would store what
+    the owner types, a new kind of the owner's data, so nothing is stored
+    until the owner says yes. What an empty bar recommends beyond the open
+    tabs, and where a plugin command's form is drawn now that the preview
+    pane is gone (#29), are also open.
+
 ## 2026-11-03
 
 - **Linux-only licences (owner, 2026-11-03).** The owner's choice, given in

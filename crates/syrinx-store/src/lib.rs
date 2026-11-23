@@ -31,9 +31,9 @@ pub use location::{
 };
 pub use permissions::{PermissionKind, RememberedPermission};
 pub use plugins::{
-    FolderAccess, MAX_PLUGIN_SCOPE_BYTES, MAX_PLUGIN_SETTING_KEY_BYTES,
-    MAX_PLUGIN_SETTING_VALUE_BYTES, MAX_PLUGIN_SETTINGS, PluginFolder, PluginGrant, PluginInstall,
-    PluginState, StoredGrant,
+    FolderAccess, MAX_PLUGIN_COMPILED_BYTES, MAX_PLUGIN_SCOPE_BYTES, MAX_PLUGIN_SETTING_KEY_BYTES,
+    MAX_PLUGIN_SETTING_VALUE_BYTES, MAX_PLUGIN_SETTINGS, PluginCompiled, PluginFolder, PluginGrant,
+    PluginInstall, PluginState, StoredGrant,
 };
 pub use preferences::{MAX_SETTING_KEY_BYTES, MAX_SETTING_VALUE_BYTES, StoredPreferences};
 pub use replay::{AppliedDeletions, replay_deletions};

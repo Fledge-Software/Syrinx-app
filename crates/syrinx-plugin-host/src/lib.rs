@@ -1,6 +1,7 @@
 //! Syrinx's plugin host: loads, links and runs WebAssembly plugins; the only crate that links wasmtime.
 
 pub mod bindings;
+mod cache;
 mod checks;
 pub mod deadline;
 mod engine;
@@ -17,12 +18,14 @@ pub mod session;
 pub mod test_host;
 mod ticker;
 mod validate;
+pub mod view_bridge;
 pub mod views;
 mod wasi;
 pub mod worker;
 
+pub use cache::{CacheError, Refusal};
 pub use checks::{CONTRACT_TRACK, CONTRACT_VERSION};
-pub use engine::Runtime;
+pub use engine::{CompileCounts, Runtime};
 pub use error::{Failure, HostError};
 pub use identity::{IdentityMismatch, SignedIdentity, SignedManifest, check_signed};
 pub use instance::{LoadedPlugin, PluginHost, PreparedPlugin, StoreData};

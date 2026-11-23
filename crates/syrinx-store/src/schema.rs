@@ -10,7 +10,7 @@ use crate::error::{StoreError, StoreOperation, database_error, with_cleanup};
 
 pub(crate) const APPLICATION_ID: i64 = 0x5359_5258;
 /// The schema version this build writes; a database with a higher `user_version` is refused.
-pub const SCHEMA_VERSION: i64 = 8;
+pub const SCHEMA_VERSION: i64 = 9;
 
 /// The record layout of a recognized Syrinx database, by `user_version`.
 /// Declared in version order, so later generations compare greater.
@@ -32,9 +32,11 @@ pub(crate) enum SchemaGeneration {
     SiteZoom,
     /// Version 8 (#136): adds installed plugins, their grants, folders and settings.
     Plugins,
+    /// Version 9 (#137): adds the compiled-code cache's record of each plugin's native code.
+    PluginCache,
 }
 
-pub(crate) const CURRENT_GENERATION: SchemaGeneration = SchemaGeneration::Plugins;
+pub(crate) const CURRENT_GENERATION: SchemaGeneration = SchemaGeneration::PluginCache;
 
 impl SchemaGeneration {
     /// Whether this generation (version 2 or later) stores saved pages as a folder tree.
@@ -70,6 +72,11 @@ impl SchemaGeneration {
     /// Whether this generation (version 8 or later) stores plugin installs and grants.
     fn has_plugins(self) -> bool {
         self >= Self::Plugins
+    }
+
+    /// Whether this generation (version 9 or later) records compiled plugin code.
+    fn has_plugin_cache(self) -> bool {
+        self >= Self::PluginCache
     }
 }
 
@@ -348,6 +355,7 @@ fn inspect_identity(connection: &Connection) -> Result<Identity, StoreError> {
         6 => Ok(Identity::Syrinx(SchemaGeneration::Permissions)),
         7 => Ok(Identity::Syrinx(SchemaGeneration::SiteZoom)),
         8 => Ok(Identity::Syrinx(SchemaGeneration::Plugins)),
+        9 => Ok(Identity::Syrinx(SchemaGeneration::PluginCache)),
         version if version > SCHEMA_VERSION => Err(StoreError::FutureSchema { version }),
         _ => Err(StoreError::SchemaMismatch),
     }
@@ -413,6 +421,11 @@ pub(crate) fn plugins_migration() -> String {
     )
 }
 
+/// Version 9: adds the empty compiled-code record table; every plugin compiles once afresh.
+pub(crate) fn plugin_cache_migration() -> String {
+    format!("{};", crate::plugins::COMPILED_TABLE)
+}
+
 /// Owns the migration SQL that `rusqlite_migration` borrows, numbered by position.
 pub(crate) struct MigrationScripts {
     initial: String,
@@ -423,6 +436,7 @@ pub(crate) struct MigrationScripts {
     permissions: String,
     site_zoom: String,
     plugins: String,
+    plugin_cache: String,
 }
 
 impl MigrationScripts {
@@ -436,6 +450,7 @@ impl MigrationScripts {
             permissions: permissions_migration(),
             site_zoom: site_zoom_migration(),
             plugins: plugins_migration(),
+            plugin_cache: plugin_cache_migration(),
         }
     }
 
@@ -449,6 +464,7 @@ impl MigrationScripts {
             M::up_with_hook(&self.permissions, check_migrated_permissions),
             M::up_with_hook(&self.site_zoom, check_migrated_site_zoom),
             M::up_with_hook(&self.plugins, check_migrated_plugins).foreign_key_check(),
+            M::up_with_hook(&self.plugin_cache, check_migrated_plugin_cache).foreign_key_check(),
         ])
     }
 }
@@ -501,6 +517,15 @@ pub(crate) fn check_migrated_plugins(transaction: &Transaction<'_>) -> HookResul
     match crate::plugins::count(transaction) {
         Ok(0) => Ok(()),
         Ok(_) => Err(HookError::Hook("unexpected plugin rows".to_owned())),
+        Err(error) => Err(HookError::Hook(error.to_string())),
+    }
+}
+
+pub(crate) fn check_migrated_plugin_cache(transaction: &Transaction<'_>) -> HookResult {
+    // The new table must start empty: no native code is trusted before Syrinx compiles it.
+    match crate::plugins::compiled_count(transaction) {
+        Ok(0) => Ok(()),
+        Ok(_) => Err(HookError::Hook("unexpected compiled-code rows".to_owned())),
         Err(error) => Err(HookError::Hook(error.to_string())),
     }
 }
@@ -616,8 +641,12 @@ const PLUGIN_ADDED_OBJECTS: &[SchemaObject] = &[
     table("plugin_setting", crate::plugins::SETTING_TABLE),
 ];
 
+/// Version 9 adds the compiled-code record table to version 8.
+const PLUGIN_CACHE_ADDED_OBJECTS: &[SchemaObject] =
+    &[table("plugin_compiled", crate::plugins::COMPILED_TABLE)];
+
 /// Objects of each generation, sorted by name as `sqlite_schema` lists them.
-/// Versions 5 to 8 each add their objects on top of every earlier version's.
+/// Versions 5 to 9 each add their objects on top of every earlier version's.
 fn expected_objects(generation: SchemaGeneration) -> Vec<&'static SchemaObject> {
     let base = match generation {
         SchemaGeneration::FlatSaved => FLAT_OBJECTS,
@@ -627,13 +656,15 @@ fn expected_objects(generation: SchemaGeneration) -> Vec<&'static SchemaObject> 
         | SchemaGeneration::Deletions
         | SchemaGeneration::Permissions
         | SchemaGeneration::SiteZoom
-        | SchemaGeneration::Plugins => HISTORY_OBJECTS,
+        | SchemaGeneration::Plugins
+        | SchemaGeneration::PluginCache => HISTORY_OBJECTS,
     };
     let additions = [
         (generation.has_deletion_state(), DELETION_ADDED_OBJECTS),
         (generation.has_permissions(), PERMISSION_ADDED_OBJECTS),
         (generation.has_site_zoom(), SITE_ZOOM_ADDED_OBJECTS),
         (generation.has_plugins(), PLUGIN_ADDED_OBJECTS),
+        (generation.has_plugin_cache(), PLUGIN_CACHE_ADDED_OBJECTS),
     ];
     let added = additions
         .into_iter()

@@ -618,6 +618,7 @@ mod history;
 mod import;
 mod lifecycle;
 mod permissions;
+mod plugin_cache;
 mod plugins;
 mod preferences;
 mod site_zoom;
