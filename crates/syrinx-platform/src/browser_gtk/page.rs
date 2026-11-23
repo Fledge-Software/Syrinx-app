@@ -26,6 +26,8 @@ use x11_dl::xlib;
 mod page_find;
 #[path = "page_permissions.rs"]
 mod page_permissions;
+#[path = "page_shortcuts.rs"]
+mod page_shortcuts;
 
 #[cfg(test)]
 #[path = "permission_tests.rs"]
@@ -35,14 +37,12 @@ mod permission_tests;
 mod tests;
 
 use super::{
-    BrowserCommand, BrowserError, BrowserEvent, BrowserShortcut, CallbackLife, ConnectionScheme,
-    ConnectionState, ConnectionStatus, PageAction, PageBounds, RENDER_PROCESS_EXITED,
-    RENDER_PROCESS_UNRESPONSIVE,
+    BrowserCommand, BrowserError, BrowserEvent, CallbackLife, ConnectionScheme, ConnectionState,
+    ConnectionStatus, PageAction, PageBounds, RENDER_PROCESS_EXITED, RENDER_PROCESS_UNRESPONSIVE,
     engine::{PendingPopup, Shared},
     history_delivery::HistoryDelivery,
     history_intent::HistoryIntent,
     history_state::{Pending, Started},
-    keys::{peek_escape, shortcut_for_modifiers},
     next_zoom,
     page_keys::KeyRouting,
     page_placement::PagePlacement,
@@ -51,6 +51,7 @@ use super::{
 };
 
 use page_find::FindState;
+use page_shortcuts::shortcut_for_key;
 
 /// Permission prompts waiting on the owner, by request number.
 type Prompts = Rc<RefCell<HashMap<u64, PermissionRequest>>>;
@@ -652,45 +653,6 @@ fn media_permission_kind(video: bool, audio: bool) -> Option<PermissionKind> {
     match (video, audio) {
         (true, false) => Some(PermissionKind::Camera),
         (false, true) => Some(PermissionKind::Microphone),
-        _ => None,
-    }
-}
-
-/// The shared Windows table decides; GDK keys are translated to its virtual-key codes first.
-fn shortcut_for_key(key: &gdk::EventKey, peek_generation: u64) -> Option<BrowserShortcut> {
-    let state = key.state();
-    let control = state.contains(gdk::ModifierType::CONTROL_MASK);
-    let shift = state.contains(gdk::ModifierType::SHIFT_MASK);
-    let alt = state.contains(gdk::ModifierType::MOD1_MASK);
-    // AltGr arrives as Mod5 (ISO Level 3), which the Windows table calls the right Alt.
-    let right_alt = state.contains(gdk::ModifierType::MOD5_MASK);
-    let code = virtual_key(*key.keyval())?;
-    peek_escape(code, control, shift, alt, peek_generation)
-        .or_else(|| shortcut_for_modifiers(code, control, shift, alt, right_alt))
-}
-
-/// The Windows virtual-key code for a GDK key value, for the keys Syrinx's table names.
-fn virtual_key(keyval: u32) -> Option<u32> {
-    use gdk::keys::constants as key;
-    let lower = gdk::keys::Key::from(keyval).to_lower();
-    let value = *lower;
-    match value {
-        letter @ 0x61..=0x7a => Some(letter - 0x20),
-        digit @ 0x30..=0x39 => Some(digit),
-        _ if lower == key::Tab || lower == key::ISO_Left_Tab => Some(0x09),
-        _ if lower == key::Escape => Some(0x1B),
-        _ if lower == key::Left => Some(0x25),
-        _ if lower == key::Right => Some(0x27),
-        _ if lower == key::F3 => Some(0x72),
-        _ if lower == key::F5 => Some(0x74),
-        _ if lower == key::F6 => Some(0x75),
-        _ if lower == key::F11 => Some(0x7A),
-        _ if lower == key::comma => Some(0xBC),
-        _ if lower == key::equal || lower == key::plus => Some(0xBB),
-        _ if lower == key::minus || lower == key::underscore => Some(0xBD),
-        _ if lower == key::KP_Add => Some(0x6B),
-        _ if lower == key::KP_Subtract => Some(0x6D),
-        _ if lower == key::KP_0 => Some(0x60),
         _ => None,
     }
 }
