@@ -338,12 +338,12 @@ list could not be read:
 - `v0.103.0` names two low-severity advisories: an SQL injection through a
   URL parameter (GHSA-64fm-4j23-99j2) and a stored cross-site scripting flaw
   in the share index page (GHSA-97mx-2qjm-qhfx).
-- `v0.104.0` lists sixteen security fixes and turned backend scripting and
-  the SQL console off by default.
-- `v0.106.0` has a security fixes section; `v0.106.1` is a security release
-  for the server that updates Node.js for a Brotli decoder out-of-bounds
-  write which, the notes say, any client that could reach the server could
-  trigger before authentication.
+- `v0.104.0` lists sixteen security fixes and made the SQL console and
+  backend scripting opt-in.
+- `v0.106.0` has a security fixes section; `v0.106.1` is a server security
+  release that moves Node.js to a version fixing an out-of-bounds write in
+  its Brotli decoder. Per the notes, an unauthenticated client able to reach
+  the server could set the flaw off.
 - `v0.107.0` updates Node.js for the same issue and fixes several low- and
   medium-severity reports against ETAPI, Trilium's external API.
 
