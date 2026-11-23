@@ -468,6 +468,47 @@ fn a_folder_left_without_a_record_never_blocks_a_new_install() -> Result<(), Upd
 }
 
 #[test]
+fn a_new_install_that_is_refused_puts_the_folder_it_moved_aside_back() -> Result<(), UpdateError> {
+    let scratch = Scratch::new();
+    let signer = TestKeyPair::generate()?;
+    let folders = scratch.folders();
+    // Another install of the same id won the race and placed version 1.
+    place_new(&scratch, &folders, v(1), &signer)?;
+
+    let source = scratch.0.join("loser");
+    write_package(&source, "sample", v(2), Some(&signer))?;
+    let placed = stage_plugin(&folders, &first_install(&source, key(&signer)?))
+        .expect("staged")
+        .place_unrecorded(&folders)
+        .expect("placed");
+    assert_eq!(folders.versions("sample").expect("listed"), [v(2)]);
+    // The host refused the install, so the placed copy is dropped without `keep`.
+    drop(placed);
+    assert_eq!(folders.versions("sample").expect("listed"), [v(1)]);
+    assert!(
+        folders
+            .version_folder("sample", v(1))
+            .join(MODULE)
+            .is_file()
+    );
+
+    // An update's copy is never placed as a new plugin.
+    let update_source = scratch.0.join("update");
+    write_package(&update_source, "sample", v(3), Some(&signer))?;
+    let installed = Installed {
+        id: "sample",
+        version: v(1),
+        publisher: Publisher::Key(key(&signer)?),
+    };
+    let staged = stage_plugin(&folders, &update(&update_source, installed)).expect("staged");
+    assert_eq!(
+        staged.place_unrecorded(&folders).err(),
+        Some(PluginInstallError::NotANewPlugin)
+    );
+    Ok(())
+}
+
+#[test]
 fn of_two_waiting_updates_the_newer_is_offered_and_the_older_removed() -> Result<(), UpdateError> {
     let scratch = Scratch::new();
     let signer = TestKeyPair::generate()?;

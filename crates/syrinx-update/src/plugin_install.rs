@@ -15,7 +15,8 @@ use crate::error::UpdateError;
 use crate::install::InstallError;
 use crate::install::error::io_error;
 use crate::install::files::{
-    copy_exact, ensure_plain_directory, prepare_destination, remove_update_folder, write_new,
+    copy_exact, ensure_plain_directory, entry_present, prepare_destination, remove_update_folder,
+    write_new,
 };
 use crate::keys::{KeySet, PinnedKey};
 use crate::manifest::{FileEntry, MAX_MANIFEST_BYTES};
@@ -88,6 +89,8 @@ pub enum PluginInstallError {
     AlreadyInstalled,
     /// An update would replace the installed version's own folder.
     InstalledVersion,
+    /// An update's copy was handed to the new-plugin path.
+    NotANewPlugin,
     /// An installed version's folder holds another version than its record names.
     NotRecordedVersion { recorded: Version, found: Version },
 }
@@ -107,6 +110,7 @@ impl fmt::Display for PluginInstallError {
             Self::RecordedPublisher => formatter.write_str("the recorded publisher is damaged"),
             Self::AlreadyInstalled => formatter.write_str("this plugin is already installed"),
             Self::InstalledVersion => formatter.write_str("this version is the installed one"),
+            Self::NotANewPlugin => formatter.write_str("this package updates an installed plugin"),
             Self::NotRecordedVersion { recorded, found } => write!(
                 formatter,
                 "the folder for version {recorded} holds version {found}"
@@ -298,22 +302,36 @@ impl StagedPlugin {
         read_listed(&self.folder, &self.list, path, limit)
     }
 
-    /// A new plugin's copy, placed once the plugin host found no install record for its id
-    /// (`OwnerRuntime::review_new`): any `Plugins/<id>/` left without a record, as by a crash
-    /// between placing and recording, is cleared first, so it never blocks the install.
+    /// Place a new plugin's copy once the plugin host found no install record for its id
+    /// (`OwnerRuntime::review_new`). Any `Plugins/<id>/` already there, as a crash between
+    /// placing and recording leaves, is moved aside into `PluginStaging` rather than deleted:
+    /// `keep` deletes it once the install is committed, and dropping the placed copy without
+    /// `keep` puts it back, so an install that loses a race never destroys the winner's folder.
     pub fn place_unrecorded(
         self,
         folders: &PluginFolders,
     ) -> Result<PlacedPlugin, PluginInstallError> {
         if self.installed.is_some() {
-            return Err(PluginInstallError::InstalledVersion);
+            return Err(PluginInstallError::NotANewPlugin);
         }
-        folders.remove_plugin(self.list.id())?;
-        self.place(folders)
+        let displaced = displace(folders, self.list.id())?;
+        let placed = self.place(folders);
+        match placed {
+            Ok(mut placed) => {
+                placed.displaced = displaced;
+                Ok(placed)
+            }
+            Err(error) => {
+                if let Some(displaced) = displaced {
+                    displaced.put_back();
+                }
+                Err(error)
+            }
+        }
     }
 
-    /// Move the staged copy to `Plugins/<id>/<version>/`, replacing a folder an earlier offer of
-    /// this same update left there. It never touches the installed version's folder: a new
+    /// Move an update's staged copy to `Plugins/<id>/<version>/` (a new plugin goes through
+    /// `place_unrecorded`), replacing a folder an earlier offer of this same update left there. It never touches the installed version's folder: a new
     /// plugin whose id already has a version folder is refused, and so is an update whose
     /// destination is the installed version's. A failure leaves no folder there.
     pub fn place(mut self, folders: &PluginFolders) -> Result<PlacedPlugin, PluginInstallError> {
@@ -339,6 +357,7 @@ impl StagedPlugin {
             list: self.list.clone(),
             publisher: self.publisher,
             kept: false,
+            displaced: None,
         })
     }
 }
@@ -362,6 +381,48 @@ pub struct PlacedPlugin {
     list: PluginPackageList,
     publisher: Publisher,
     kept: bool,
+    /// A plugin folder `place_unrecorded` moved aside, deleted on `keep` and otherwise put back.
+    displaced: Option<Displaced>,
+}
+
+/// A `Plugins/<id>/` folder moved aside into `PluginStaging` while a new install is placed.
+struct Displaced {
+    aside: PathBuf,
+    home: PathBuf,
+}
+
+impl Displaced {
+    /// The install was committed: the folder moved aside is no longer anyone's.
+    fn discard(self) {
+        if let Err(error) = remove_update_folder(&self.aside, "a displaced plugin folder") {
+            eprintln!("a displaced plugin folder could not be removed: {error}");
+        }
+    }
+
+    /// The install did not happen: the folder goes back where it was.
+    fn put_back(self) {
+        let restored =
+            remove_update_folder(&self.home, "a rolled-back plugin folder").and_then(|()| {
+                fs::rename(&self.aside, &self.home).map_err(io_error("restoring a plugin folder"))
+            });
+        if let Err(error) = restored {
+            eprintln!("a displaced plugin folder could not be put back: {error}");
+        }
+    }
+}
+
+/// Move any `Plugins/<id>/` aside into `PluginStaging`, so a new install can be placed and the
+/// folder still restored if that install is refused.
+fn displace(folders: &PluginFolders, id: &str) -> Result<Option<Displaced>, PluginInstallError> {
+    let home = folders.plugin_folder(id);
+    if !entry_present(&home, "inspecting a plugin's folder")? {
+        return Ok(None);
+    }
+    ensure_plain_directory(&folders.staging(), "the plugin staging folder")?;
+    let aside = folders.staging().join(format!("{id}.displaced"));
+    remove_update_folder(&aside, "a leftover displaced plugin folder")?;
+    fs::rename(&home, &aside).map_err(io_error("moving a plugin folder aside"))?;
+    Ok(Some(Displaced { aside, home }))
 }
 
 impl PlacedPlugin {
@@ -378,9 +439,13 @@ impl PlacedPlugin {
         read_listed(&self.folder, &self.list, path, limit)
     }
 
-    /// The install succeeded, or the update is held for the owner: keep the folder.
+    /// The install succeeded, or the update is held for the owner: keep the folder, and delete
+    /// any folder `place_unrecorded` moved aside.
     pub fn keep(mut self) {
         self.kept = true;
+        if let Some(displaced) = self.displaced.take() {
+            displaced.discard();
+        }
     }
 }
 
@@ -391,6 +456,9 @@ impl Drop for PlacedPlugin {
         }
         if let Err(error) = remove_update_folder(&self.folder, "a placed plugin") {
             eprintln!("a plugin version folder could not be rolled back: {error}");
+        }
+        if let Some(displaced) = self.displaced.take() {
+            displaced.put_back();
         }
     }
 }
@@ -479,7 +547,7 @@ pub fn settle_pending_update(
 /// for a failure to read it.
 fn is_content_refusal(error: &PluginInstallError) -> bool {
     match error {
-        PluginInstallError::Package(error) => is_refused_content(error),
+        PluginInstallError::Package(error) => verifier_refused(error),
         PluginInstallError::DifferentPublisher | PluginInstallError::NotRecordedVersion { .. } => {
             true
         }
@@ -488,14 +556,15 @@ fn is_content_refusal(error: &PluginInstallError) -> bool {
         | PluginInstallError::NoPublisherKey
         | PluginInstallError::RecordedPublisher
         | PluginInstallError::AlreadyInstalled
-        | PluginInstallError::InstalledVersion => false,
+        | PluginInstallError::InstalledVersion
+        | PluginInstallError::NotANewPlugin => false,
     }
 }
 
 /// Whether the verifier refused what a folder holds (its signature, list, files, slot or
 /// version) rather than failing to read or check it. Every variant is named, so a new one is
 /// classified before it compiles.
-fn is_refused_content(error: &UpdateError) -> bool {
+fn verifier_refused(error: &UpdateError) -> bool {
     match error {
         UpdateError::TooLarge { .. }
         | UpdateError::SignatureLength { .. }
@@ -543,6 +612,7 @@ fn verify_placed(
         list: files.list,
         publisher: files.publisher,
         kept: true,
+        displaced: None,
     })
 }
 
@@ -766,4 +836,42 @@ fn unhex(text: &str) -> Option<[u8; 64]> {
         *byte = u8::from_str_radix(pair, 16).ok()?;
     }
     Some(point)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::io;
+
+    use super::*;
+
+    #[test]
+    fn only_refused_contents_remove_a_waiting_folder() {
+        let kept = [
+            UpdateError::Read {
+                what: "synthetic".into(),
+                kind: io::ErrorKind::PermissionDenied,
+            },
+            UpdateError::Crypto {
+                operation: "synthetic",
+                status: -1,
+            },
+            UpdateError::InvalidKey { status: -1 },
+        ];
+        for error in kept {
+            let refusal = PluginInstallError::Package(error);
+            assert!(!is_content_refusal(&refusal), "{refusal:?}");
+        }
+        let removed = [
+            UpdateError::HashMismatch {
+                path: "plugin.wasm".into(),
+            },
+            UpdateError::BadSignature,
+        ];
+        for error in removed {
+            let refusal = PluginInstallError::Package(error);
+            assert!(is_content_refusal(&refusal), "{refusal:?}");
+        }
+        assert!(is_content_refusal(&PluginInstallError::DifferentPublisher));
+        assert!(!is_content_refusal(&PluginInstallError::Unsigned));
+    }
 }
