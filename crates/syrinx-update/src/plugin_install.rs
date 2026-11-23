@@ -94,7 +94,7 @@ pub enum PluginInstallError {
     NotANewPlugin,
     /// Another install or update of this plugin is still under way.
     InstallInProgress,
-    /// An installed version's folder holds another version than its record names.
+    /// A version folder holds another version than its name and record say.
     NotRecordedVersion { recorded: Version, found: Version },
 }
 
@@ -549,7 +549,7 @@ pub fn open_installed(
 /// version folder newer than the record that still verifies against the recorded publisher.
 /// It survives a restart because it is its own signed folder; nothing about it is recorded
 /// until the owner accepts. A newer folder whose contents are refused (signature, hash, slot,
-/// version or publisher) is removed, and so is every older waiting folder once a newer one is
+/// version, publisher, or a version other than the folder's name) is removed, and so is every older waiting folder once a newer one is
 /// offered, so none is left stuck. An unsigned folder while developer mode is off is kept and
 /// skipped: an older waiting folder may then be offered instead. A failure to read or check a
 /// folder is returned and removes nothing. The update offered holds the id until it is
@@ -571,8 +571,7 @@ pub fn settle_pending_update(
             folders.remove_version_folder(installed.id, version)?;
             continue;
         }
-        let folder = folders.version_folder(installed.id, version);
-        match verify_placed(folder, Expect::Newer(installed), developer_mode) {
+        match verify_waiting(folders, installed, version, developer_mode) {
             Ok(placed) => pending = Some(placed),
             Err(PluginInstallError::Unsigned) => {}
             Err(error) if is_content_refusal(&error) => {
@@ -585,6 +584,26 @@ pub fn settle_pending_update(
         placed.guard = Some(guard);
         placed
     }))
+}
+
+/// The waiting folder named for `version`, which must hold exactly that version: a folder
+/// renamed to look newer is refused like any other content.
+fn verify_waiting(
+    folders: &PluginFolders,
+    installed: Installed<'_>,
+    version: Version,
+    developer_mode: bool,
+) -> Result<PlacedPlugin, PluginInstallError> {
+    let folder = folders.version_folder(installed.id, version);
+    let placed = verify_placed(folder, Expect::Newer(installed), developer_mode)?;
+    let found = placed.list.version();
+    if found != version {
+        return Err(PluginInstallError::NotRecordedVersion {
+            recorded: version,
+            found,
+        });
+    }
+    Ok(placed)
 }
 
 /// Whether a folder was refused for what it holds, so it can never be offered, rather than

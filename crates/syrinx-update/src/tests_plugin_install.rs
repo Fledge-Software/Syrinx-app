@@ -598,6 +598,31 @@ fn of_two_waiting_updates_the_newer_is_offered_and_the_older_removed() -> Result
 }
 
 #[test]
+fn a_waiting_folder_named_for_another_version_is_removed() -> Result<(), UpdateError> {
+    let scratch = Scratch::new();
+    let signer = TestKeyPair::generate()?;
+    let folders = scratch.folders();
+    place_new(&scratch, &folders, v(1), &signer)?;
+    place_update(&scratch, &folders, v(2), &signer)?;
+    place_update(&scratch, &folders, v(3), &signer)?;
+    // Version 2's signed folder, renamed so it looks like the newest waiting version.
+    std::fs::rename(
+        folders.version_folder("sample", v(2)),
+        folders.version_folder("sample", v(4)),
+    )
+    .expect("renamed");
+    let installed = Installed {
+        id: "sample",
+        version: v(1),
+        publisher: Publisher::Key(key(&signer)?),
+    };
+    let pending = settle_pending_update(&folders, installed, false).expect("settled");
+    assert_eq!(pending.map(|placed| placed.list().version()), Some(v(3)));
+    assert_eq!(folders.versions("sample").expect("listed"), [v(1), v(3)]);
+    Ok(())
+}
+
+#[test]
 fn an_unsigned_waiting_update_is_kept_but_not_offered_without_developer_mode()
 -> Result<(), UpdateError> {
     let scratch = Scratch::new();
