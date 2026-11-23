@@ -86,8 +86,9 @@ fn reach(old: &Scope, new: &Scope) -> Reach {
         (Scope::Index { feeds: old_feeds }, Scope::Index { feeds }) => {
             vec![feed_reach(old_feeds, feeds)]
         }
-        // Each kind has one scope shape, so anything else is `None` against `None`.
-        _ => vec![Reach::Same],
+        (Scope::None, Scope::None) => vec![Reach::Same],
+        // Each kind has one scope shape, so a changed shape is unknown ground: ask the owner.
+        (Scope::None | Scope::Folder { .. } | Scope::Index { .. }, _) => vec![Reach::Wider],
     };
     if respects.contains(&Reach::Wider) {
         return Reach::Wider;
@@ -103,7 +104,7 @@ fn flag(old: bool, new: bool) -> Reach {
     match (old, new) {
         (false, true) => Reach::Wider,
         (true, false) => Reach::Narrower,
-        _ => Reach::Same,
+        (false, false) | (true, true) => Reach::Same,
     }
 }
 
@@ -240,6 +241,19 @@ tiers = ["catalogue"]
         let old = manifest(&[("index", "feeds = [\"notes.notes\"]", "Search.")]);
         let new = manifest(&[("index", "feeds = [\"notes.tags\"]", "Search.")]);
         assert_eq!(compare(&old, &new).widened, [CapabilityKind::Index]);
+    }
+
+    #[test]
+    fn a_changed_scope_shape_counts_as_wider() {
+        let none = Scope::None;
+        let folder = Scope::Folder {
+            writable: false,
+            count: FolderCount::Limited(1),
+            watch: false,
+        };
+        assert_eq!(reach(&none, &folder), Reach::Wider);
+        assert_eq!(reach(&folder, &none), Reach::Wider);
+        assert_eq!(reach(&none, &none), Reach::Same);
     }
 
     #[test]
