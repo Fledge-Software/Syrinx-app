@@ -29,7 +29,7 @@ impl PluginFeeds {
     /// Drops a plugin's queued and running pulls, what they remembered, and its catalogue rows.
     fn forget_rows(&mut self, plugin: &str, catalogue: &mut Catalogue) -> Result<(), FeedError> {
         self.waiting.retain(|name| name.plugin != plugin);
-        self.carried.retain(|name, _| name.plugin != plugin);
+        self.history.forget_plugin(plugin);
         if self
             .pull
             .as_ref()

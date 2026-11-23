@@ -36,8 +36,6 @@ fn an_announced_feed_reaches_both_tiers_and_a_replay_changes_nothing() {
         name,
         from_start: false,
         answer: Box::new(Ready(first_batch())),
-        asked: Vec::new(),
-        earlier: Vec::new(),
         batches: 0,
     });
     let mut replay = Scripted::default();
@@ -106,6 +104,7 @@ fn a_failed_index_commit_keeps_the_old_cursor_and_the_next_pull_completes_both_t
         index: &mut index,
         passes: 0,
         failures: 1,
+        remove_failures: 0,
     };
     let failed = settle_with(
         &mut feeds,
@@ -387,7 +386,12 @@ fn a_feed_with_more_that_does_not_move_its_cursor_waits_for_its_next_announcemen
         .answer(Some("c1"), batch(Vec::new(), "c1", true));
     announce(&mut feeds);
     let stalled = settle_with(&mut feeds, &mut plugin, &store, &mut index, &mut catalogue);
-    assert_eq!(stalled, Err(FeedError::Stalled));
+    assert_eq!(
+        stalled,
+        Err(FeedError::Stalled {
+            plugin: PLUGIN.to_owned()
+        })
+    );
     assert_eq!(plugin.requests, [None, Some("c1".to_owned())]);
     assert!(
         !feeds.busy(true),
@@ -410,6 +414,7 @@ fn a_failed_fed_marker_still_shows_the_rows_the_store_kept() {
         index: &mut index,
         passes: 1,
         failures: 1,
+        remove_failures: 0,
     };
     let failed = settle_with(
         &mut feeds,
@@ -445,7 +450,12 @@ fn a_feed_that_goes_round_between_cursors_stalls_and_its_repeat_is_only_logged()
         .answer(Some("B"), batch(Vec::new(), "A", true));
     announce(&mut feeds);
     let stalled = settle_with(&mut feeds, &mut plugin, &store, &mut index, &mut catalogue);
-    assert_eq!(stalled, Err(FeedError::Stalled));
+    assert_eq!(
+        stalled,
+        Err(FeedError::Stalled {
+            plugin: PLUGIN.to_owned()
+        })
+    );
     assert_eq!(
         plugin.requests,
         [None, Some("A".to_owned()), Some("B".to_owned())]
@@ -476,6 +486,67 @@ fn a_feed_that_returns_to_a_cursor_of_its_previous_announcement_stalls() {
     announce(&mut feeds);
     // One turn spends the budget, the next (the feed waits behind no other) goes round.
     let stalled = settle_with(&mut feeds, &mut plugin, &store, &mut index, &mut catalogue);
-    assert_eq!(stalled, Err(FeedError::Stalled));
+    assert_eq!(
+        stalled,
+        Err(FeedError::Stalled {
+            plugin: PLUGIN.to_owned()
+        })
+    );
     assert_eq!(plugin.requests.len(), budget + 1);
+}
+
+#[test]
+fn a_feed_pulled_again_from_its_start_part_way_through_is_not_taken_for_going_round() {
+    let folder = Folder::new();
+    let store = folder.store();
+    let mut index = folder.index("fulltext");
+    let mut catalogue = Catalogue::new();
+    let mut feeds = PluginFeeds::default();
+    // Offset-style cursors: a feed pulled again from its start sends the same ones again.
+    let last = BATCHES_PER_TRIGGER as usize + 3;
+    let page = |offset: usize| {
+        let changes = vec![entry(
+            &format!("p{offset}"),
+            1,
+            &format!("Synthetic page {offset}"),
+        )];
+        batch(changes, &format!("{}", (offset + 1) * 256), offset < last)
+    };
+    let mut plugin = Scripted::default().answer(None, page(0));
+    for offset in 1..=last {
+        plugin = plugin.answer(Some(&format!("{}", offset * 256)), page(offset));
+    }
+    announce(&mut feeds);
+    let mut sinks = Sinks {
+        store: &store,
+        index: Some(&mut index),
+        catalogue: &mut catalogue,
+        now: NOW,
+        at: Instant::now(),
+    };
+    // One pump starts the pull, then one applies each batch, until the budget is spent.
+    for _ in 0..=BATCHES_PER_TRIGGER {
+        feeds.pump(&mut plugin, &mut sinks).expect("a pull");
+    }
+    assert_eq!(
+        feeds.waiting.len(),
+        1,
+        "the feed waits with its cursors carried"
+    );
+
+    // A history repair empties the index part-way: the feed is pulled again from its start,
+    // sending cursors its previous announcement carried, and completes without a stall.
+    let mut emptied = folder.index("fulltext-emptied");
+    settle(
+        &mut feeds,
+        &mut plugin,
+        &store,
+        &mut emptied,
+        &mut catalogue,
+    );
+    assert_eq!(titles(&mut catalogue, "synthetic").len(), last + 1);
+    assert_eq!(
+        store.plugin_feed_cursor(PLUGIN, FEED),
+        Ok(Some(format!("{}", (last + 1) * 256)))
+    );
 }

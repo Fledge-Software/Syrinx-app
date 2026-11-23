@@ -6,9 +6,10 @@ mod batch;
 mod keys;
 mod removal;
 pub(super) mod sinks;
+mod stall;
 mod worker;
 
-use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::collections::VecDeque;
 use std::fmt;
 use std::time::{Duration, Instant};
 
@@ -27,6 +28,7 @@ use syrinx_store::{
 
 use keys::FeedKeys;
 use sinks::{FeedIndex, FeedStore, committed};
+use stall::CursorHistory;
 use worker::IdleClock;
 pub(super) use worker::is_typing;
 
@@ -48,15 +50,22 @@ pub enum FeedError {
     Store(StoreError),
     Index(FullTextError),
     Search(SearchError),
-    /// The plugin said it had more but sent a cursor it had already sent; the feed waits for
-    /// its next announcement instead of going round again.
-    Stalled,
+    /// The plugin, by id, said it had more but sent a cursor it had already sent; the feed
+    /// waits for its next announcement instead of going round again.
+    Stalled {
+        plugin: String,
+    },
 }
 
 impl fmt::Display for FeedError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Stalled => formatter.write_str("the plugin's feed did not move on"),
+            Self::Stalled { plugin } => {
+                write!(
+                    formatter,
+                    "plugin {plugin}'s feed went round and was stopped"
+                )
+            }
             Self::Name => formatter.write_str("a plugin feed's name cannot be indexed"),
             Self::KeysExhausted => formatter.write_str("too many plugin feed rows this session"),
             Self::Host(error) => write!(formatter, "{error}"),
@@ -131,11 +140,6 @@ struct Pull {
     /// Pulled from the feed's start, so both tiers drop what they held of it first.
     from_start: bool,
     answer: Box<dyn BatchAnswer>,
-    /// Every cursor this announcement asked after, the current one last; a batch with more
-    /// must not send one of them, or one `earlier` holds, again.
-    asked: Vec<String>,
-    /// The cursors the feed's previous announcement asked after, when it spent its budget.
-    earlier: Vec<String>,
     /// Batches applied for this announcement so far.
     batches: u32,
 }
@@ -155,11 +159,10 @@ pub(super) struct PluginFeeds {
     /// Whether the next turn with the index open may try `unremoved` again: after a fresh
     /// removal, and at each idle tick, so a failing index is not asked at every wake-up.
     retry_due: bool,
-    /// The cursors of each feed whose last announcement spent its budget, for `Pull::earlier`.
-    carried: BTreeMap<FeedName, Vec<String>>,
-    /// Feeds whose stall the owner has already been shown this session; repeats are logged.
-    stalled: BTreeSet<FeedName>,
-    /// How long pulling has held the session's idle work off.
+    /// The cursors the pull in flight must not see again, and the stalls already shown.
+    history: CursorHistory,
+    /// How long pulling has held the session's idle work off; kept here, beside the pulls
+    /// it measures, so the session worker in session.rs needs no field of its own.
     pub(super) idle_clock: IdleClock,
     /// Whether this session has looked for text a removed plugin left in the index.
     swept: bool,
@@ -277,67 +280,48 @@ impl PluginFeeds {
         let answer = source
             .request(&name.plugin, &name.feed, after.clone())
             .map_err(FeedError::Host)?;
-        let earlier = self.carried.remove(&name).unwrap_or_default();
+        self.history.start(&name, after.as_deref());
         self.pull = Some(Pull {
             name,
             from_start,
             answer,
-            asked: after.into_iter().collect(),
-            earlier,
             batches: 0,
         });
         Ok(())
     }
 
     /// Asks for the next batch while the plugin has more and this announcement's budget
-    /// lasts; past it, the feed waits behind every other one, remembering its cursors. A
-    /// plugin that has more but sends a cursor this or its previous announcement already
-    /// asked after would go round for ever, so its feed waits for its next announcement.
+    /// lasts; past it, the feed waits behind every other one, carrying its cursors. A plugin
+    /// that has more but sends a cursor already asked after would go round for ever, so its
+    /// feed waits for its next announcement.
     fn follow(
         &mut self,
-        mut pull: Pull,
+        pull: Pull,
         batch: Batch,
         source: &mut dyn FeedSource,
     ) -> Result<(), FeedError> {
         if !batch.more {
             return Ok(());
         }
-        let repeated = |cursors: &[String]| cursors.contains(&batch.next_cursor);
-        if repeated(&pull.asked) || repeated(&pull.earlier) {
-            return self.stall(pull.name);
-        }
         let batches = pull.batches + 1;
         if batches >= BATCHES_PER_TRIGGER {
-            pull.asked.push(batch.next_cursor);
-            self.carried.insert(pull.name.clone(), pull.asked);
+            self.history.carry(&pull.name, &batch.next_cursor);
             self.announce(pull.name);
             return Ok(());
         }
+        if self.history.seen(&batch.next_cursor) {
+            return self.history.report_stall(pull.name);
+        }
+        self.history.ask(&batch.next_cursor);
         let answer = source
-            .request(
-                &pull.name.plugin,
-                &pull.name.feed,
-                Some(batch.next_cursor.clone()),
-            )
+            .request(&pull.name.plugin, &pull.name.feed, Some(batch.next_cursor))
             .map_err(FeedError::Host)?;
-        pull.asked.push(batch.next_cursor);
         self.pull = Some(Pull {
             from_start: false,
             answer,
             batches,
             ..pull
         });
-        Ok(())
-    }
-
-    /// Stops a stalled feed: the owner is shown its first stall this session, and the rest
-    /// are only logged, by plugin, so a plugin announcing a looping feed does not flood them.
-    fn stall(&mut self, name: FeedName) -> Result<(), FeedError> {
-        let plugin = name.plugin.clone();
-        if self.stalled.insert(name) {
-            return Err(FeedError::Stalled);
-        }
-        eprintln!("Syrinx: plugin {plugin}: a search feed went round again and was stopped");
         Ok(())
     }
 
@@ -365,6 +349,10 @@ impl PluginFeeds {
             next_cursor: batch.next_cursor.clone(),
         };
         batch::check(&commit, &namespace, kept.changes)?;
+        // A batch from the feed's start, or holding a reset, starts the feed again.
+        if kept.clear_first {
+            self.history.clear();
+        }
         let index = sinks
             .index
             .as_deref_mut()

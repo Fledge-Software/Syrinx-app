@@ -156,6 +156,13 @@ fn a_never_ending_feed_does_not_stop_page_text_expiry() {
     assert!(worker.plugin_feeds.busy(true), "the feed never ends");
     assert_eq!(pages_with(&worker, "marrowbell").len(), 1);
 
+    // A moment short of the bound, it still waits.
+    let almost = start + BACKUP_CHECK_INTERVAL - Duration::from_millis(1);
+    worker
+        .pull_while_busy_from(&mut plugin, &store, &sender, almost)
+        .expect("a pull");
+    assert_eq!(pages_with(&worker, "marrowbell").len(), 1);
+
     // Once the idle work has waited its delay behind pulling, it runs.
     worker
         .pull_while_busy_from(&mut plugin, &store, &sender, start + BACKUP_CHECK_INTERVAL)

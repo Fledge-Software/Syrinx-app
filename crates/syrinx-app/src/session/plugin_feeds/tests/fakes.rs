@@ -104,6 +104,8 @@ pub(super) struct FailingIndex<'a> {
     /// Commits that succeed before the failures begin.
     pub(super) passes: u32,
     pub(super) failures: u32,
+    /// Plugin removals that fail, as a failing disk would, before they work again.
+    pub(super) remove_failures: u32,
 }
 
 impl FeedIndex for FailingIndex<'_> {
@@ -150,6 +152,10 @@ impl FeedIndex for FailingIndex<'_> {
     }
 
     fn remove_plugin(&mut self, plugin: &str) -> Result<(), FullTextError> {
+        if self.remove_failures > 0 {
+            self.remove_failures -= 1;
+            return Err(FullTextError::Io);
+        }
         FeedIndex::remove_plugin(&mut *self.index, plugin)
     }
 }

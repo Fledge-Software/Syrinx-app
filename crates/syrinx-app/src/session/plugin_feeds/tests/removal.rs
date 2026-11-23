@@ -178,3 +178,58 @@ fn text_a_closed_index_kept_goes_once_it_reopens_even_under_a_never_ending_pull(
     assert!(feeds.busy(true), "the endless pull is under way");
     assert!(documents(&index, "quillmark").is_empty());
 }
+
+#[test]
+fn a_removal_the_open_index_refused_is_tried_again_only_at_the_next_idle_tick() {
+    let folder = Folder::new();
+    let store = folder.store();
+    let mut index = folder.index("fulltext");
+    let mut catalogue = Catalogue::new();
+    let mut feeds = PluginFeeds::default();
+    let mut plugin = Scripted::default().answer(None, first_batch());
+    announce(&mut feeds);
+    settle(&mut feeds, &mut plugin, &store, &mut index, &mut catalogue);
+    assert_eq!(store.remove_plugin(PLUGIN.to_owned()), Ok(true));
+    let removed = PluginEvent::Removed {
+        plugin: PLUGIN.to_owned(),
+    };
+    assert!(feeds.notice([removed]).is_empty());
+
+    // The open index refuses the removal once.
+    let mut failing = FailingIndex {
+        index: &mut index,
+        passes: 0,
+        failures: 0,
+        remove_failures: 1,
+    };
+    let mut sinks = Sinks {
+        store: &store,
+        index: Some(&mut failing),
+        catalogue: &mut catalogue,
+        now: NOW,
+        at: Instant::now(),
+    };
+    let refused = feeds.pump(&mut plugin, &mut sinks);
+    assert_eq!(refused, Err(FeedError::Index(FullTextError::Io)));
+    // The next turn does not ask the index again.
+    assert_eq!(feeds.pump(&mut plugin, &mut sinks), Ok(()));
+    drop(sinks);
+    assert!(
+        titles(&mut catalogue, "synthetic").is_empty(),
+        "the rows went at once"
+    );
+    assert_eq!(documents(&index, "quillmark"), ["a"]);
+
+    // The idle tick makes a retry due, and the next turn removes the text.
+    feeds.retry_removals();
+    let mut sinks = Sinks {
+        store: &store,
+        index: Some(&mut index),
+        catalogue: &mut catalogue,
+        now: NOW,
+        at: Instant::now(),
+    };
+    feeds.pump(&mut plugin, &mut sinks).expect("the retry");
+    drop(sinks);
+    assert!(documents(&index, "quillmark").is_empty());
+}
