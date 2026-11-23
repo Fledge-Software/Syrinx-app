@@ -16,6 +16,7 @@ pub(super) const SAVED: usize = 20_000;
 pub(super) const COMMANDS: usize = 64;
 pub(super) const HISTORY: usize = ROWS - TABS - SAVED - COMMANDS;
 /// D48's rows once more as one synthetic plugin search feed (#141), found under Everything only.
+/// Measured as a second, reported set; D48's gate runs without it.
 pub(super) const PLUGIN_ROWS: usize = ROWS;
 pub(super) const NOW: i64 = 1_800_000_000;
 pub(super) const LIMIT: usize = 50;
@@ -44,7 +45,8 @@ pub(super) struct Case {
     pub(super) scope: Scope,
 }
 
-pub(super) fn build_catalogue() -> Result<Catalogue, String> {
+/// D48's rows, then `plugin_rows` rows of one synthetic plugin feed (none for D48's gate).
+pub(super) fn build_catalogue(plugin_rows: usize) -> Result<Catalogue, String> {
     // This permutation puts each identity into the catalogue once, across all four kinds.
     let mut catalogue = Catalogue::new();
     for position in 0..ROWS {
@@ -54,13 +56,13 @@ pub(super) fn build_catalogue() -> Result<Catalogue, String> {
             .map_err(|error| format!("Synthetic catalogue insertion failed: {error:?}"))?;
     }
     // The plugin feed's rows go in the same permuted order, after every other row.
-    for position in 0..PLUGIN_ROWS {
-        let index = (position * 7_919) % PLUGIN_ROWS;
+    for position in 0..plugin_rows {
+        let index = (position * 7_919) % plugin_rows;
         catalogue
             .upsert(plugin_entry(index)?)
             .map_err(|error| format!("Synthetic plugin row insertion failed: {error:?}"))?;
     }
-    if catalogue.len() != ROWS + PLUGIN_ROWS {
+    if catalogue.len() != ROWS + plugin_rows {
         return Err("Synthetic catalogue has the wrong row count.".to_owned());
     }
     Ok(catalogue)

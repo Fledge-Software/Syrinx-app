@@ -33,28 +33,22 @@ struct Distribution {
     worst_ns: u64,
 }
 
+/// One set of cases measured over one corpus: every timed sample, and the corpus's build time.
+struct Measured {
+    samples: Vec<Vec<Sample>>,
+    build_ns: u64,
+}
+
 pub fn run() -> Result<(), String> {
     // AN-01's usage recorder first: it needs no catalogue.
     let usage_passed = usage_overhead::run()?;
-    // Construct all inputs before timing any complete query.
-    let build_started = Instant::now();
-    let mut catalogue = build_catalogue()?;
-    let build_ns = nanoseconds(build_started)?;
     let cases = cases();
-    let mut revision = 0;
-    for pass in 0..WARMUPS {
-        run_pass(&mut catalogue, &cases, pass, &mut revision)?;
-    }
-
-    // Retain every sample; printing and validation never enter the timed interval.
-    let mut samples: Vec<Vec<Sample>> = (0..cases.len()).map(|_| Vec::new()).collect();
-    for pass in 0..PASSES {
-        let measured = run_pass(&mut catalogue, &cases, pass, &mut revision)?;
-        for (case_index, sample) in measured {
-            samples[case_index].push(sample);
-        }
-    }
-    let (report, passed) = report(&cases, &samples, build_ns)?;
+    // D48's gate: its 100,000 rows alone, as before plugin feeds.
+    let base = measure(&cases, 0)?;
+    // The same cases with a same-size plugin feed (#141): reported, never failing the run,
+    // until the owner decides what D48 covers.
+    let with_plugin_feed = measure(&cases, PLUGIN_ROWS)?;
+    let (report, passed) = report(&cases, &base, &with_plugin_feed)?;
     let mut output = io::stdout().lock();
     serde_json::to_writer_pretty(&mut output, &report)
         .map_err(|error| format!("Could not write the synthetic benchmark report: {error}"))?;
@@ -72,11 +66,34 @@ pub fn run() -> Result<(), String> {
     Ok(())
 }
 
+/// Builds the corpus with `plugin_rows` plugin rows, warms up, then times every case.
+fn measure(cases: &[Case], plugin_rows: usize) -> Result<Measured, String> {
+    // Construct all inputs before timing any complete query.
+    let build_started = Instant::now();
+    let mut catalogue = build_catalogue(plugin_rows)?;
+    let build_ns = nanoseconds(build_started)?;
+    let mut revision = 0;
+    for pass in 0..WARMUPS {
+        run_pass(&mut catalogue, cases, pass, &mut revision, plugin_rows)?;
+    }
+
+    // Retain every sample; printing and validation never enter the timed interval.
+    let mut samples: Vec<Vec<Sample>> = (0..cases.len()).map(|_| Vec::new()).collect();
+    for pass in 0..PASSES {
+        let measured = run_pass(&mut catalogue, cases, pass, &mut revision, plugin_rows)?;
+        for (case_index, sample) in measured {
+            samples[case_index].push(sample);
+        }
+    }
+    Ok(Measured { samples, build_ns })
+}
+
 fn run_pass(
     catalogue: &mut Catalogue,
     cases: &[Case],
     pass: usize,
     revision: &mut u64,
+    plugin_rows: usize,
 ) -> Result<Vec<(usize, Sample)>, String> {
     let mut samples = Vec::with_capacity(cases.len());
     for offset in 0..cases.len() {
@@ -90,7 +107,7 @@ fn run_pass(
         let result = black_box(catalogue.query(black_box(&case.text), case.scope, NOW, policy));
         let elapsed_ns = nanoseconds(started)?;
         let result = result.map_err(|error| invalid(case, &format!("query returned {error:?}")))?;
-        validate_result(catalogue, case, &result)?;
+        validate_result(catalogue, case, &result, plugin_rows)?;
         samples.push((
             case_index,
             Sample {
@@ -108,6 +125,7 @@ fn validate_result(
     catalogue: &Catalogue,
     case: &Case,
     result: &SearchResults,
+    plugin_rows: usize,
 ) -> Result<(), String> {
     let scoped_count = match case.scope {
         Scope::Everything => result.counts.total(),
@@ -136,7 +154,7 @@ fn validate_result(
         || result.counts.saved > SAVED
         || result.counts.history > HISTORY
         || result.counts.commands > COMMANDS
-        || result.counts.plugins > PLUGIN_ROWS
+        || result.counts.plugins > plugin_rows
     {
         return Err(invalid(
             case,
@@ -158,7 +176,7 @@ fn validate_result(
             || result.counts.saved != SAVED
             || result.counts.history != HISTORY
             || result.counts.commands != COMMANDS
-            || result.counts.plugins != PLUGIN_ROWS
+            || result.counts.plugins != plugin_rows
             || result.hits.len() != LIMIT)
     {
         return Err(invalid(
@@ -302,7 +320,60 @@ fn distribution(samples: &[Sample]) -> Result<Distribution, String> {
     })
 }
 
-fn report(cases: &[Case], samples: &[Vec<Sample>], build_ns: u64) -> Result<(Value, bool), String> {
+/// The report: D48's gate from `base`, which alone decides whether the run passes, and the
+/// same cases over `with_plugin_feed` as a separate set that never fails it.
+fn report(
+    cases: &[Case],
+    base: &Measured,
+    with_plugin_feed: &Measured,
+) -> Result<(Value, bool), String> {
+    let (reports, passed, worst_ns) = case_reports(cases, &base.samples)?;
+    let (feed_reports, feed_within_budget, feed_worst_ns) =
+        case_reports(cases, &with_plugin_feed.samples)?;
+    Ok((
+        json!({
+            "protocol": "syrinx-tier-one-v1",
+            "required_profile": "local",
+            "architecture": std::env::consts::ARCH,
+            "operating_system": std::env::consts::OS,
+            "rows": ROWS,
+            "kinds": {"tabs": TABS, "saved": SAVED, "history": HISTORY, "commands": COMMANDS},
+            "unicode_rows": ROWS / 5,
+            "long_title_rows": ROWS / 10,
+            "uppercase_title_rows": ROWS.div_ceil(101),
+            "corpus_build_ns": base.build_ns,
+            "reference_time": NOW,
+            "top_k": LIMIT,
+            "max_typos": "one from four Unicode scalar values; otherwise zero",
+            "blank_query": "all",
+            "boosts": {"open": 120, "frequency": 30, "recency": 30, "window_seconds": 7 * 86_400},
+            "warmup_passes": WARMUPS,
+            "measured_passes": PASSES,
+            "acceptance": "nearest-rank p95 < 5000000 ns for every case; worst samples retained",
+            "passed": passed,
+            "worst_ns": worst_ns,
+            "cases": reports,
+            "with_plugin_feed": {
+                "plugin_feed_rows": PLUGIN_ROWS,
+                "rows": ROWS + PLUGIN_ROWS,
+                "corpus_build_ns": with_plugin_feed.build_ns,
+                "gates_the_run": false,
+                "acceptance": "reported only, until the owner decides whether D48 covers plugin feeds (#141)",
+                "within_budget": feed_within_budget,
+                "worst_ns": feed_worst_ns,
+                "cases": feed_reports,
+            },
+        }),
+        passed,
+    ))
+}
+
+/// Each case's distribution and samples, whether every case's p95 is within the budget, and
+/// the slowest sample of all.
+fn case_reports(
+    cases: &[Case],
+    samples: &[Vec<Sample>],
+) -> Result<(Vec<Value>, bool, u64), String> {
     if cases.len() != samples.len() || samples.iter().any(|samples| samples.len() != PASSES) {
         return Err("Benchmark report is missing a case or measured sample.".to_owned());
     }
@@ -330,33 +401,7 @@ fn report(cases: &[Case], samples: &[Vec<Sample>], build_ns: u64) -> Result<(Val
             })).collect::<Vec<_>>(),
         }));
     }
-    Ok((
-        json!({
-            "protocol": "syrinx-tier-one-v1",
-            "required_profile": "local",
-            "architecture": std::env::consts::ARCH,
-            "operating_system": std::env::consts::OS,
-            "rows": ROWS,
-            "kinds": {"tabs": TABS, "saved": SAVED, "history": HISTORY, "commands": COMMANDS},
-            "plugin_feed_rows": PLUGIN_ROWS,
-            "unicode_rows": ROWS / 5,
-            "long_title_rows": ROWS / 10,
-            "uppercase_title_rows": ROWS.div_ceil(101),
-            "corpus_build_ns": build_ns,
-            "reference_time": NOW,
-            "top_k": LIMIT,
-            "max_typos": "one from four Unicode scalar values; otherwise zero",
-            "blank_query": "all",
-            "boosts": {"open": 120, "frequency": 30, "recency": 30, "window_seconds": 7 * 86_400},
-            "warmup_passes": WARMUPS,
-            "measured_passes": PASSES,
-            "acceptance": "nearest-rank p95 < 5000000 ns for every case; worst samples retained",
-            "passed": passed,
-            "worst_ns": worst_ns,
-            "cases": reports,
-        }),
-        passed,
-    ))
+    Ok((reports, passed, worst_ns))
 }
 
 fn nanoseconds(started: Instant) -> Result<u64, String> {
@@ -430,6 +475,26 @@ mod tests {
         assert!(!valid_ranges("café🧭", std::slice::from_ref(&(3..3))));
     }
 
+    /// One case's samples: 1 ms each, but `slow_ns` from pass `slow_from` on.
+    fn timed(slow_from: usize, slow_ns: u64) -> Measured {
+        let samples = (0..PASSES)
+            .map(|index| Sample {
+                elapsed_ns: if index >= slow_from {
+                    slow_ns
+                } else {
+                    1_000_000
+                },
+                matches: ROWS,
+                hits: LIMIT,
+                checksum: 0,
+            })
+            .collect();
+        Measured {
+            samples: vec![samples],
+            build_ns: 0,
+        }
+    }
+
     #[test]
     fn acceptance_checks_each_case_p95_and_keeps_worst_samples() -> Result<(), String> {
         let cases = vec![Case {
@@ -437,15 +502,8 @@ mod tests {
             text: String::new(),
             scope: Scope::Everything,
         }];
-        let mut samples: Vec<_> = (0..PASSES)
-            .map(|index| Sample {
-                elapsed_ns: if index >= 38 { 9_000_000 } else { 1_000_000 },
-                matches: ROWS,
-                hits: LIMIT,
-                checksum: 0,
-            })
-            .collect();
-        let (passing, passed) = report(&cases, &[samples], 0)?;
+        let within = timed(38, 9_000_000);
+        let (passing, passed) = report(&cases, &within, &within)?;
         assert!(passed);
         assert_eq!(passing["worst_ns"], 9_000_000);
         assert_eq!(
@@ -453,16 +511,33 @@ mod tests {
             Some(PASSES)
         );
 
-        samples = (0..PASSES)
-            .map(|index| Sample {
-                elapsed_ns: if index >= 37 { BUDGET_NS } else { 1_000_000 },
-                matches: ROWS,
-                hits: LIMIT,
-                checksum: 0,
-            })
-            .collect();
-        assert!(!report(&cases, &[samples], 0)?.1);
-        assert!(report(&cases, &[], 0).is_err());
+        let over = timed(37, BUDGET_NS);
+        assert!(!report(&cases, &over, &within)?.1);
+        let missing = Measured {
+            samples: Vec::new(),
+            build_ns: 0,
+        };
+        assert!(report(&cases, &missing, &within).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn a_slow_plugin_feed_set_is_reported_but_never_fails_the_run() -> Result<(), String> {
+        let cases = vec![Case {
+            label: "synthetic-plugin-feed",
+            text: String::new(),
+            scope: Scope::Everything,
+        }];
+        let (report, passed) = report(&cases, &timed(PASSES, 0), &timed(0, BUDGET_NS))?;
+        assert!(passed, "D48's gate reads only the base set");
+        assert_eq!(report["passed"], true);
+        assert_eq!(report["with_plugin_feed"]["within_budget"], false);
+        assert_eq!(report["with_plugin_feed"]["gates_the_run"], false);
+        assert_eq!(report["with_plugin_feed"]["plugin_feed_rows"], PLUGIN_ROWS);
+        assert!(
+            report.get("plugin_feed_rows").is_none(),
+            "the base keys as on main"
+        );
         Ok(())
     }
 
@@ -505,38 +580,46 @@ mod tests {
         let original = catalogue
             .query(&case.text, case.scope, NOW, policy(&case.text)?)
             .map_err(|error| format!("Synthetic query failed: {error:?}"))?;
-        validate_result(&catalogue, &case, &original)?;
+        validate_result(&catalogue, &case, &original, 0)?;
 
         let mut changed = original.clone();
         changed.hits[0].target = target(1)?;
-        assert!(validate_result(&catalogue, &case, &changed).is_err());
+        assert!(validate_result(&catalogue, &case, &changed, 0).is_err());
         changed = original.clone();
         changed.hits[0].title.push_str(" stale");
-        assert!(validate_result(&catalogue, &case, &changed).is_err());
+        assert!(validate_result(&catalogue, &case, &changed, 0).is_err());
         changed = original.clone();
         changed.hits[0].address.push_str("/stale");
-        assert!(validate_result(&catalogue, &case, &changed).is_err());
+        assert!(validate_result(&catalogue, &case, &changed, 0).is_err());
 
         // Changing an unselected scope isolates the count bound from top-K checks.
         changed = original.clone();
         changed.counts.history = HISTORY + 1;
-        assert!(validate_result(&catalogue, &case, &changed).is_err());
+        assert!(validate_result(&catalogue, &case, &changed, 0).is_err());
         changed = original.clone();
         changed.counts.saved = SAVED + 1;
-        assert!(validate_result(&catalogue, &case, &changed).is_err());
+        assert!(validate_result(&catalogue, &case, &changed, 0).is_err());
         changed = original;
         changed.counts.commands = COMMANDS + 1;
-        assert!(validate_result(&catalogue, &case, &changed).is_err());
+        assert!(validate_result(&catalogue, &case, &changed, 0).is_err());
         Ok(())
     }
 
     #[test]
     fn no_typo_unicode_counts_match_the_independently_inspected_corpus() -> Result<(), String> {
-        let mut catalogue = build_catalogue()?;
+        // D48's corpus alone, then with the plugin feed, which repeats every title.
+        for plugin_rows in [0, PLUGIN_ROWS] {
+            unicode_counts_match(plugin_rows)?;
+        }
+        Ok(())
+    }
+
+    fn unicode_counts_match(plugin_rows: usize) -> Result<(), String> {
+        let mut catalogue = build_catalogue(plugin_rows)?;
         for query in ["東京", "🧭"] {
             let mut expected = syrinx_search::ScopeCounts::default();
             let base = (0..ROWS).map(entry);
-            for row in base.chain((0..PLUGIN_ROWS).map(plugin_entry)) {
+            for row in base.chain((0..plugin_rows).map(plugin_entry)) {
                 let row = row?;
                 if !row.title.contains(query) {
                     continue;
@@ -549,11 +632,9 @@ mod tests {
                     Target::Plugin { .. } => expected.plugins += 1,
                 }
             }
-            assert_eq!(expected.total(), 8_000);
-            assert_eq!(
-                expected.plugins, 4_000,
-                "the plugin feed repeats every title"
-            );
+            let repeated = if plugin_rows == 0 { 0 } else { 4_000 };
+            assert_eq!(expected.plugins, repeated);
+            assert_eq!(expected.total(), 4_000 + repeated);
             let mut policy = policy(query)?;
             policy.max_typos = 0;
             let result = catalogue
@@ -568,6 +649,7 @@ mod tests {
                     scope: Scope::Everything,
                 },
                 &result,
+                plugin_rows,
             )?;
         }
         Ok(())
