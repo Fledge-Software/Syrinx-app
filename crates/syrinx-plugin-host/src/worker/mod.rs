@@ -77,6 +77,13 @@ pub enum PluginEvent {
         plugin: String,
         error: HostError,
     },
+    /// A declared search feed may have changed (#141): the plugin called `feed-changed` under
+    /// a current `index` grant, or it activated with `index` granted, once per declared feed.
+    /// Nothing is pulled here; the application pulls when it is ready.
+    FeedChanged {
+        plugin: String,
+        feed: String,
+    },
 }
 
 /// The answer to one queued call, collected without blocking the caller.

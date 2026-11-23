@@ -22,6 +22,8 @@ use wasmtime::Engine;
 pub use cache::{CacheSetup, Sha256};
 pub use services::StoreServices;
 
+use crate::bindings::exports::syrinx::plugin::search_feed::Batch;
+use crate::bindings::syrinx::plugin::types::PluginError;
 use crate::grants::{DenyList, FolderRefusal, GrantSet};
 use crate::manifest::{CapabilityKind, FolderCount, PluginManifest, Scope};
 use crate::registry::RegisteredPlugin;
@@ -35,6 +37,10 @@ const _: () = assert!(limits::MAX_SETTINGS_KEY_BYTES == syrinx_store::MAX_PLUGIN
 const _: () =
     assert!(limits::MAX_SETTINGS_VALUE_BYTES == syrinx_store::MAX_PLUGIN_SETTING_VALUE_BYTES);
 const _: () = assert!(limits::MAX_SETTINGS_KEYS == syrinx_store::MAX_PLUGIN_SETTINGS);
+// A search batch the host accepted always fits the store's feed tables (#141).
+const _: () = assert!(limits::MAX_CURSOR_BYTES == syrinx_store::MAX_PLUGIN_FEED_CURSOR_BYTES);
+const _: () = assert!(limits::MAX_ENTRY_ID_BYTES == syrinx_store::MAX_PLUGIN_FEED_ENTRY_ID_BYTES);
+const _: () = assert!(limits::MAX_KEYWORDS == syrinx_store::MAX_PLUGIN_FEED_KEYWORDS);
 // A scope lists only what its manifest names, so any accepted manifest's scope fits the store.
 const _: () = assert!(crate::manifest::MAX_MANIFEST_BYTES <= syrinx_store::MAX_PLUGIN_SCOPE_BYTES);
 
@@ -366,6 +372,34 @@ impl OwnerRuntime {
         running.plugins.call(plugin, call)
     }
 
+    /// Queue `search-feed.changes(feed, after, max)` (#141). Refused unless the plugin is
+    /// loaded and holds `index`; the session refuses an undeclared feed, and bounds the batch.
+    pub fn pull_feed(
+        &mut self,
+        plugin: &str,
+        feed: &str,
+        after: Option<String>,
+        max: u32,
+    ) -> CallResult<Pending<Result<Batch, PluginError>>> {
+        self.require_index(plugin)?;
+        let feed = feed.to_owned();
+        self.call(plugin, move |session| {
+            session.changes(&feed, after.as_deref(), max)
+        })
+    }
+
+    /// Queue `search-feed.resolve(feed, id)`: the address a chosen palette row opens (#141).
+    pub fn resolve_feed_entry(
+        &mut self,
+        plugin: &str,
+        feed: &str,
+        id: &str,
+    ) -> CallResult<Pending<Result<String, PluginError>>> {
+        self.require_index(plugin)?;
+        let (feed, id) = (feed.to_owned(), id.to_owned());
+        self.call(plugin, move |session| session.resolve(&feed, &id))
+    }
+
     /// Where an added plugin is in its life; `None` for one not added this session.
     pub fn status(&self, plugin: &str) -> Option<PluginStatus> {
         self.running.as_ref()?.plugins.status(plugin)
@@ -409,6 +443,16 @@ impl OwnerRuntime {
         Ok(installs
             .into_iter()
             .find(|install| install.plugin_id == plugin))
+    }
+
+    /// A feed is read only while the owner grants `index`, as `feed-changed` is heard.
+    fn require_index(&self, plugin: &str) -> CallResult<()> {
+        if self.grants.is_granted(plugin, CapabilityKind::Index) {
+            return Ok(());
+        }
+        Err(HostError::Refused(format!(
+            "{plugin} does not hold the index capability"
+        )))
     }
 
     fn require_record(&self, plugin: &str) -> Result<(), OwnerError> {
@@ -463,8 +507,10 @@ impl OwnerRuntime {
 
     fn start_running(&self) -> Result<Running, OwnerError> {
         let store = Arc::clone(&self.store);
-        let factory =
-            move |manifest: &PluginManifest| StoreServices::new(manifest.id(), Arc::clone(&store));
+        let report = self.report.clone();
+        let factory = move |manifest: &PluginManifest| {
+            StoreServices::new(manifest.id(), Arc::clone(&store)).with_events(report.clone())
+        };
         let mut runtime = Runtime::on(self.engine.clone())?;
         if let Some(cache) = self.cache.as_ref() {
             runtime = runtime.with_cache(Arc::clone(cache) as Arc<dyn crate::cache::CompiledCache>);

@@ -9,7 +9,7 @@ use std::time::Instant;
 
 use crate::bindings::syrinx::plugin::types::Outcome;
 use crate::grants::GrantSet;
-use crate::manifest::PluginManifest;
+use crate::manifest::{CapabilityKind, PluginManifest};
 use crate::session::{JobLimits, Mediator, RequestIds, Session};
 use crate::{Failure, HostError, LoadedPlugin, PluginHost, PreparedPlugin, Runtime, limits};
 
@@ -131,6 +131,7 @@ impl<S: PluginHost> Worker<S> {
         if let Err(failure) = self.activate(&mut session) {
             return self.fail(Some(session), failure);
         }
+        self.announce_feeds();
         while let Some(call) = self.next_job() {
             session.begin_job(self.job_limits());
             // Revocations take effect before the plugin runs again. One that stops the
@@ -196,6 +197,21 @@ impl<S: PluginHost> Worker<S> {
     fn activate(&self, session: &mut Session<S>) -> Result<(), Failure> {
         session.begin_job(self.job_limits());
         session.activate()?.map_err(Failure::ActivationRefused)
+    }
+
+    /// Once activated with `index` granted, each declared feed may hold changes the
+    /// application has not pulled, so each is announced as changed (#141).
+    fn announce_feeds(&self) {
+        let plugin = self.manifest.id();
+        if !self.grants.is_granted(plugin, CapabilityKind::Index) {
+            return;
+        }
+        for feed in self.manifest.search_feeds() {
+            self.send(PluginEvent::FeedChanged {
+                plugin: plugin.to_owned(),
+                feed: feed.id.clone(),
+            });
+        }
     }
 
     /// The prepared component, compiling and linking it on the plugin's first activation
