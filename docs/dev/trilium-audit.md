@@ -373,7 +373,7 @@ for `apps/client/src/`. #281 is the slice proposed to change these defaults.
 | Listening address | `0.0.0.0` (all interfaces), port 8080 | ini `[Network] host`, `port`; env `TRILIUM_NETWORK_HOST`, `TRILIUM_HOST`, `TRILIUM_NETWORK_PORT`, `TRILIUM_PORT` | `server/services/config.ts`, `server/services/host.ts`, `server/services/port.ts`, `server/www.ts` |
 | Login check | on | ini `[General] noAuthentication` (default false); env `TRILIUM_GENERAL_NOAUTHENTICATION` | `server/services/auth.ts` |
 | CORS headers | no `Access-Control-*` headers; CORP `same-origin` | ini `[Network] corsAllowOrigin`, `corsAllowMethods`, `corsAllowHeaders` (empty), `corsResourcePolicy` | `server/services/config.ts`, `server/app.ts` |
-| First-run setup routes | the `/api/setup/*` routes, including backup restore, open before the database is initialised; `/set-password` open after it until a password is set | no setting; turning it off needs a fork change | `server/routes/routes.ts`, `core/routes/index.ts`, `server/services/auth.ts` |
+| First-run setup routes | the `/api/setup/*` routes, including backup restore, open before the database is initialised; `/set-password` open whenever no password is set | no setting; turning it off needs a fork change | `server/routes/routes.ts`, `core/routes/index.ts`, `server/services/auth.ts` |
 | ETAPI, `/etapi/*` | mounted; needs a user-created token | no setting; turning it off needs a fork change | `server/etapi/`, `server/routes/routes.ts` |
 | `/custom/*path` | mounted; no login, no CSRF (cross-site request forgery) check | no setting for the route; handlers need `backendScriptingEnabled`, resource providers do not | `server/routes/custom.ts`, `core/routes/custom.ts` |
 | MCP (Model Context Protocol, an endpoint AI agents call) server, `/mcp` | off | option `mcpEnabled` (false); needs an ETAPI token | `server/routes/mcp.ts` |
@@ -421,11 +421,12 @@ Notes on the tables:
   (`core/routes/index.ts`), and the backup-restore routes
   `/api/setup/restore/upload/*` and `POST /api/setup/restore/start`
   (`server/routes/routes.ts`), answer before the database is initialised;
-  `GET` and `POST /set-password` (`server/routes/routes.ts`) answer after it,
-  until a password is set. Two read-only status routes, `GET
-  /api/setup/status` (`core/routes/index.ts`) and `GET
-  /api/setup/restore/status` (`server/routes/routes.ts`), have no guard and
-  answer in every state. None needs a login: `checkSetupAuth` in
+  `GET` and `POST /set-password` (`server/routes/routes.ts`) answer whenever
+  no password is set, whatever the database state, since their
+  `checkAppInitialized` guard is a no-op (`server/services/auth.ts`). Two
+  read-only status routes, `GET /api/setup/status` (`core/routes/index.ts`)
+  and `GET /api/setup/restore/status` (`server/routes/routes.ts`), have no
+  guard and answer in every state. None needs a login: `checkSetupAuth` in
   `server/services/auth.ts` applies only once data exists and a password is
   set (`isSetupAuthRequired` in `core/services/setup_auth.ts`). Whoever
   reaches the port first can set the password, restore a backup of their own
