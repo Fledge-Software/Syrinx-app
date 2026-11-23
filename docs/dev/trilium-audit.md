@@ -12,8 +12,16 @@ the boundary is written down and the fork's contents are known before anyone
 builds on it. This file is that record. It covers where the fork starts and
 how it follows upstream, what a Trilium build is made of (Node.js and its npm
 packages, CKEditor 5's terms included), how Trilium is maintained and what its
-security record looks like, every feature that reaches the network, and the
-owner's bundling decision.
+security record looks like, every feature that listens or reaches the
+network, and the bundling choice the owner has to make.
+
+Two later slices of #277 are named throughout: #279, the slice that starts
+the fork (Syrinx launching a program a plugin names), and #281, the slice
+that hardens the fork's defaults (loopback only, Syrinx-issued credentials,
+and a changes endpoint, an HTTP route that tells the Notes plugin which notes
+changed since it last asked). Where this file says what those slices should
+do, it is a recommendation; their scope is the owner's, and the proposals are
+gathered under "Needs the owner".
 
 **Where the decision is recorded.** Epic #277 says the owner's decision is
 recorded in `docs/decisions.md` under 2026-11-23. On `main` at the time of
@@ -46,12 +54,14 @@ The alternative was the default branch's head on the day of this audit,
 `598e1446946bc78ebb6d02417490c7beea340c14` (2026-11-23, version string
 `0.108.0-rc.1` in its root `package.json`). It was rejected for two reasons.
 It is a release candidate: `v0.108.0-rc.1` was tagged at `a0757f43` on
-2026-11-21, and `main` has moved on since. And Trilium's `SECURITY.md` says
-that "only the latest stable minor release receives security fixes", so a
-fork based on a stable tag can take upstream's patch releases as they come,
-while a fork based on an arbitrary `main` commit sits between releases with no
-fix line of its own. Every finding below was read at `v0.107.0` unless it says
-otherwise.
+2026-11-21, and `main` has moved on since. And Trilium fixes security
+problems only in its latest stable minor release (`SECURITY.md`, see
+"Security policy" below), so a fork based on a stable tag can take upstream's
+patch releases as they come, while a fork based on an arbitrary `main` commit
+sits between releases with no fix line of its own. The same rule means the
+fork must merge every upstream minor release, not just patch releases: a fork
+that falls a minor version behind receives no upstream security fixes. Every
+finding below was read at `v0.107.0` unless it says otherwise.
 
 Trilium's tags are lightweight (they carry no tagger date), so the dates in
 this file are the tagged commits' commit dates, read with git. The GitHub
@@ -73,25 +83,23 @@ merge, never by rebasing or copying patches:
   tests before Syrinx uses the result. Release candidates are not merged.
 - The fork's changes are kept few, small and separate so these merges stay
   clean: configuration defaults, the loopback-only listener and Syrinx-issued
-  credentials of #281, the changes endpoint, and the source link discussed
-  under "§13" below. Each is its own commit with a message saying why, and
-  new behaviour goes in new files where Trilium's structure allows it,
-  rather than in edits spread through upstream's files.
+  credentials, the changes endpoint, and the source link discussed under
+  "Bundling" below (AGPL §13). Each is its own commit with a message saying
+  why, and new behaviour goes in new files where Trilium's structure allows
+  it, rather than in edits spread through upstream's files.
 - Rebasing the fork's branch onto upstream was rejected: it rewrites a
-  public branch's history, which `AGENTS.md` forbids for shared branches, and
-  it loses the record of which upstream release each fork build contains.
-
-Because `SECURITY.md` supports only the latest stable minor release, the fork
-has to follow every upstream minor release, not just patch releases; a fork
-that falls a minor version behind receives no upstream security fixes.
+  public branch's history, which `AGENTS.md` allows on a shared branch only
+  with the owner's say-so, and it loses the record of which upstream release
+  each fork build contains.
 
 ## What a Trilium build is made of
 
 Trilium is a pnpm workspace (pnpm is an npm-compatible package manager)
-with 25 member packages, its `apps/` and `packages/` folders. Three of them
-are the program Syrinx would run: `apps/server` (the HTTP server),
-`apps/client` (the web application it serves) and, for the desktop build,
-`apps/desktop` (an Electron wrapper). Root `package.json` declares
+with 24 member packages, 13 in `apps/` and 11 in `packages/`; the lockfile
+lists 25 importers, the root included. Three of them are the program Syrinx
+would run: `apps/server` (the HTTP server), `apps/client` (the web
+application it serves) and, for the desktop build, `apps/desktop` (an
+Electron wrapper). Root `package.json` declares
 `"license": "AGPL-3.0-or-later"`, as do `apps/client` and `apps/desktop`; the
 repository's `LICENSE` is the GNU Affero General Public License, version 3.
 
@@ -132,15 +140,17 @@ checked against the binary itself.
 
 ### npm packages
 
-`pnpm-lock.yaml` at `v0.107.0` (lockfile format 9.0, `packageManager`
-`pnpm@12.18.0`) resolves **2,364 packages**, every one from the npm registry
-(no git or tarball sources). A pnpm lockfile does not record licences, so
-each package's `license` field was read from the registry
-(`https://registry.npmjs.org/<name>/<version>`), one request per exact
-version, six at a time, with every answer cached; all 2,364 answered. These
-are the licences the authors declare in their published metadata, not the
-result of reading every package's licence files; the exceptions below were
-checked further where it matters.
+`pnpm-lock.yaml` at `v0.107.0` (SHA-256
+`5363b2a22aeb1010b6882af2a7bc97d7db0d229b671f3a0032c3ec50b7e27825`; lockfile
+format 9.0, `packageManager` `pnpm@12.18.0`) resolves **2,364 packages**,
+every one from the npm registry (no git or tarball sources). A pnpm lockfile
+does not record licences, so each package's `license` field was read from the
+registry, one request per exact version, six at a time, with every answer
+cached; all 2,364 answered. These are the licences the authors declare in
+their published metadata, not the result of reading every package's licence
+files; the exceptions below were checked further where it matters. The
+per-package list is not committed: it is 2,364 rows that the method under
+"Reproducing this audit" regenerates from the lockfile.
 
 **What ships and what is tooling.** The lockfile cannot say exactly which
 packages end up in a build, because the server's esbuild step bundles
@@ -165,8 +175,7 @@ The remaining 552 packages belong only to the website, documentation
 builders, the web clipper browser extension, the mobile and standalone apps,
 and the repository's own tooling. Determining exactly what a build ships
 means building it and listing the bundle's inputs, which this audit did not
-do; #283 (packaging) should, if the fork's build is ever distributed by
-Fledge.
+do.
 
 **Licences across the whole lockfile (2,364 packages),** as declared on the
 registry:
@@ -208,14 +217,16 @@ from the shipping apps at all).
   LICENSE.md"; plus `@ckeditor/ckeditor5-inspector@5.0.4` (build only, a
   development tool). Set out in full below.
 - **`@anthropic-ai/claude-agent-sdk@0.3.318` (ships):** declares "SEE
-  LICENSE IN README.md". Its README places use under Anthropic's Commercial
-  Terms of Service and describes the data it collects; it is not an open
-  source licence. The server loads it on demand for its AI chat feature
+  LICENSE IN README.md". The package's `LICENSE.md` reads "All rights
+  reserved" and makes use subject to Anthropic's Legal Agreements; it is not
+  an open source licence. (Its README separately describes the usage data
+  the SDK collects.) The server loads it on demand for its AI chat feature
   (`apps/server/src/services/llm/providers/claude_agent.ts`), and it is
   inside what a server build ships.
 - **`elkjs@0.12.1`, EPL-2.0 OR GPL-3.0-or-later (ships):** a graph-layout
-  library pulled in by `mermaid@12.3.0`, the diagram renderer. Either licence is copyleft; the
-  Eclipse Public License is the weaker, file-level one.
+  library pulled in by `mermaid@12.3.0`, the diagram renderer. Either
+  licence is copyleft; the Eclipse Public License is the weaker, file-level
+  one.
 - **`lightningcss@1.33.0` and its eleven platform binaries, MPL-2.0
   (build):** a CSS compiler used while building. MPL-2.0 is Syrinx's own
   licence and file-level; it matters only if it ships, which a build tool
@@ -223,21 +234,23 @@ from the shipping apps at all).
 - **No licence in the registry metadata:** `buffers@0.1.1` and
   `khroma@2.1.0` (ships), `color-convert@0.5.3` and `exif-parser@0.1.12`
   (build), `union@0.5.0` (outside). Their repositories were not checked.
-- **`@img/sharp-*@0.35.5` and `@img/sharp-libvips-*@1.3.4`, LGPL-3.0-or-later
-  alone or with Apache-2.0 and MIT (14 packages, outside):** the libvips
-  image library's prebuilt binaries for the sharp image package, used only
-  outside the shipping apps.
+- **`@img/sharp-*@0.35.5` and `@img/sharp-libvips-*@1.3.4`,
+  LGPL-3.0-or-later alone or with Apache-2.0 and MIT (14 packages,
+  outside):** the libvips image library's prebuilt binaries for the sharp
+  image package, used only outside the shipping apps.
 - **MPL-2.0 tooling for the web clipper (outside):** `addons-linter@10.14.0`,
   `addons-moz-compare@1.4.0`, `addons-scanner-utils@16.0.0`,
   `eslint-plugin-no-unsanitized@4.1.5`, `fx-runner@1.7.0`, `web-ext@10.8.0`.
-- **Fonts and data under Creative Commons or OFL:** `caniuse-lite`
-  (CC-BY-4.0, build data), `@fontsource/arimo@5.3.0` (OFL-1.1, outside), and
-  `boxicons@2.1.4` (CC-BY-4.0 OR OFL-1.1 OR MIT, ships; MIT may be chosen).
-- **Dual licences where a permissive choice exists:** `jszip@3.10.2`
-  (MIT OR GPL-3.0-or-later), `node-forge@1.4.2` (BSD-3-Clause OR GPL-2.0),
-  `dompurify@3.4.17` (MPL-2.0 OR Apache-2.0), `unorm@1.6.0` (MIT or
-  GPL-2.0), `json-schema@0.4.0` (AFL-2.1 OR BSD-3-Clause). A distributor
-  takes the permissive option.
+- **Creative Commons and OFL:** `caniuse-lite` (CC-BY-4.0, build data) and
+  `@fontsource/arimo@5.3.0` (OFL-1.1, outside).
+- **The 13 dual licences with a permissive choice,** which a distributor
+  takes:
+
+  | Sits | Packages |
+  |---|---|
+  | ships | `jszip@3.10.2` (MIT OR GPL-3.0-or-later), `dompurify@3.4.17` (MPL-2.0 OR Apache-2.0), `json-schema@0.4.0` (AFL-2.1 OR BSD-3-Clause), `boxicons@2.1.4` (CC-BY-4.0 OR OFL-1.1 OR MIT), `@maplibre/mlt@1.3.0` (MIT OR Apache-2.0) |
+  | build | `unorm@1.6.0` (MIT or GPL-2.0), `sanitize-filename@1.6.4` (WTFPL OR ISC), `utf8-byte-length@1.0.5` (WTFPL OR MIT), `type-fest@5.10.0` (MIT OR CC0-1.0) |
+  | outside | `node-forge@1.4.2` (BSD-3-Clause OR GPL-2.0), `opener@1.5.2` (WTFPL OR MIT), `rc@1.2.8` (BSD-2-Clause OR MIT OR Apache-2.0), `type-fest@4.41.0` (MIT OR CC0-1.0) |
 
 None of this changes what Syrinx may contain: Syrinx takes none of these
 packages, because Syrinx takes nothing from the fork. It matters for what
@@ -259,15 +272,16 @@ z o.o.
 asks every application to pass a `licenseKey`; the value `"GPL"` selects the
 open source licence. Trilium passes exactly that: `OPEN_SOURCE_LICENSE_KEY =
 "GPL"` in `apps/client/src/widgets/type_widgets/text/config.ts`, and the
-literal `"GPL"` in `apps/client/src/widgets/attribute_widgets/AttributeEditor.tsx`,
+literal `"GPL"` in
+`apps/client/src/widgets/attribute_widgets/AttributeEditor.tsx`,
 `apps/client/src/widgets/type_widgets/llm_chat/ChatInputBar.tsx` and
 `apps/client/src/widgets/type_widgets/mind_map/NodeMemo.tsx`. No other key
 appears in the client.
 
-**No premium packages.** The lockfile contains no `ckeditor5-premium-features`
-package and none of CKEditor's commercial-only plugins (real-time
-collaboration, track changes, comments, revision history, export and import,
-AI). It does contain `@ckeditor/ckeditor5-ckbox`,
+**No premium packages.** The lockfile contains no
+`ckeditor5-premium-features` package and none of CKEditor's commercial-only
+plugins (real-time collaboration, track changes, comments, revision history,
+export and import, AI). It does contain `@ckeditor/ckeditor5-ckbox`,
 `@ckeditor/ckeditor5-cloud-services` and `@ckeditor/ckeditor5-easy-image`,
 which come with the open source `ckeditor5` package; they are clients for
 CKSource's paid cloud services and do nothing without that service's token.
@@ -285,12 +299,14 @@ Trilium's own code is counted.
 
 **Who maintains it.** Trilium lives in the `TriliumNext` organisation on
 GitHub, which took over the project after its original author stopped
-developing it. Contributor statistics were read from git, not the API: in the
-twelve months to 2026-11-23, `main` received 17,712 non-merge commits from
-267 author names. The two most active authors are Elian Doran (10,466
-commits) and Adorian Doran (2,366); the dependency bot `renovate[bot]` made
-1,841 and the translation service `Hosted Weblate` 230. Most of the work, and
-so the project's continuity, rests on one or two people.
+developing it. Contributor statistics were read from git, not the API, in a
+clone that fetched only commits (no file contents) back to 2025-11-23, and
+names were merged by Trilium's `.mailmap`. In the twelve months to
+2026-11-23, `main` received 17,712 non-merge commits from 267 author names.
+The two most active authors are Elian Doran (10,466 commits) and Adorian
+Doran (2,366); the dependency bot `renovate[bot]` made 1,841 and the
+translation service `Hosted Weblate` 230. Most of the work, and so the
+project's continuity, rests on one or two people.
 
 **Release cadence.** Fifteen stable releases were tagged in those twelve
 months, eight minor and seven patch releases: `v0.100.0` (2025-12-05),
@@ -299,7 +315,7 @@ months, eight minor and seven patch releases: `v0.100.0` (2025-12-05),
 and `v0.104.1` (2026-07-18 and 07-25), `v0.105.0` (2026-08-19), `v0.106.0`
 and `v0.106.1` (2026-09-25 and 10-23) and `v0.107.0` (2026-11-08), with
 `v0.108.0-rc.1` on 2026-11-21. That is a minor release roughly every six
-weeks, which the fork must merge to stay supported.
+weeks for the fork to merge.
 
 **Security policy.** `SECURITY.md` (at `v0.107.0`) asks for reports through
 GitHub's private security advisories, promises a first answer within 7 days
@@ -334,128 +350,117 @@ list could not be read:
 The record shows an active project that fixes and discloses security
 problems, and also a large attack surface: a server that parses untrusted
 HTML, imports, uploads and requests from any client that can reach it. That
-is why #277 keeps the fork on loopback with a Syrinx-issued credential, and
-why the fork must keep up with upstream's minor releases.
+is why #277 keeps the fork on loopback with a Syrinx-issued credential.
 
-## Features that reach the network
+## Features that listen or reach the network
 
-Each item below was read in the source at `v0.107.0`. "Option" means a row in
+Each row was read in the source at `v0.107.0`. "Option" means a row in
 Trilium's own `options` table, set in its Options screen and stored in its
-database; defaults are in `packages/trilium-core/src/services/options_init.ts`.
-"config.ini" means a key in the data directory's `config.ini`, whose
-template is `apps/server/src/assets/config-sample.ini`; every such key can
-also be set by an environment variable named `TRILIUM_<SECTION>_<KEY>`
-(`apps/server/src/services/config.ts`). #281 is the slice that turns these
-off by default in the fork; the list says where each one is switched.
+database, with defaults in
+`packages/trilium-core/src/services/options_init.ts`. "ini" means a key in
+the data directory's `config.ini` (template
+`apps/server/src/assets/config-sample.ini`); each ini key can also be set by
+an environment variable `TRILIUM_<SECTION>_<KEY>`, and an environment
+variable wins over the file (`apps/server/src/services/config.ts`). Paths
+are relative to the Trilium repository; `server/` stands for `apps/server/src/`,
+`core/` for `packages/trilium-core/src/` and `client/` for
+`apps/client/src/`. #281 is the slice proposed to change these defaults.
 
 **Who listens.**
 
-1. **The listening address.** The server listens on **all interfaces by
-   default**: `Network.host` defaults to `0.0.0.0` in
-   `apps/server/src/services/config.ts`, overridable by `config.ini`
-   `[Network] host`, `TRILIUM_NETWORK_HOST`, or `TRILIUM_HOST`, which
-   `apps/server/src/services/host.ts` checks first. The port defaults to
-   8080 (`DEFAULT_NETWORK_PORT`), set by `[Network] port`,
-   `TRILIUM_NETWORK_PORT` or `TRILIUM_PORT` (`services/port.ts`).
-   `apps/server/src/www.ts` also accepts a Unix socket path as the host.
-   Only the Electron desktop build binds `127.0.0.1` unless its
-   `allowLanAccess` setting is on. #281 must pin `127.0.0.1`.
-2. **Authentication can be switched off.** `config.ini` `[General]
-   noAuthentication` (`TRILIUM_GENERAL_NOAUTHENTICATION`) skips the login
-   check (`apps/server/src/services/auth.ts`). It defaults to false and must
-   stay so.
-3. **ETAPI**, the external REST API under `/etapi/*`
-   (`apps/server/src/etapi/`, registered in
-   `apps/server/src/routes/routes.ts`), is always mounted and accepts
-   requests carrying a token the user created. The Notes plugin's feed will
-   use it or #281's changes endpoint; it is the surface the security fixes of
-   `v0.107.0` touched.
-4. **MCP server**, an AI-agent endpoint at `/mcp`
-   (`apps/server/src/routes/mcp.ts`), answers only when the option
-   `mcpEnabled` is true (default false) and the request carries an ETAPI
-   token.
-5. **Web clipper endpoints** under `/api/clipper/*`
-   (`apps/server/src/routes/routes.ts`) receive pages from Trilium's browser
-   extension; on the server they require an ETAPI token.
-6. **Sync target.** The server accepts sync connections from other Trilium
-   instances under `/api/sync/*` (`packages/trilium-core/src/routes/api/sync.ts`),
-   behind the user's password.
-7. **Public sharing.** Notes placed under the `_share` root
-   (`packages/trilium-core/src/share/share_root.ts`) are served to anyone,
-   without login, under `/share/` (`apps/server/src/share/routes.ts`,
-   registered in `routes.ts`). The options `redirectBareDomain` and
-   `showLoginInShareTheme` (both default false) shape it; the route itself is
-   always mounted. On loopback only the machine can reach it, but every web
-   page the owner opens can.
+| Feature | Default | Where switched | Source |
+|---|---|---|---|
+| Listening address | `0.0.0.0` (all interfaces), port 8080 | ini `[Network] host`, `port`; env `TRILIUM_NETWORK_HOST`, `TRILIUM_HOST`, `TRILIUM_NETWORK_PORT`, `TRILIUM_PORT` | `server/services/config.ts`, `host.ts`, `port.ts`, `server/www.ts` |
+| Login check | on | ini `[General] noAuthentication` (default false); env `TRILIUM_GENERAL_NOAUTHENTICATION` | `server/services/auth.ts` |
+| CORS headers | none sent | ini `[Network] corsAllowOrigin`, `corsAllowMethods`, `corsAllowHeaders` (empty) | `server/services/config.ts`, `server/app.ts` |
+| First-run setup routes | open, without login, until a password is set | no setting; turning it off needs a fork change | `server/routes/routes.ts`, `core/routes/index.ts`, `server/services/auth.ts` |
+| ETAPI, `/etapi/*` | mounted; needs a user-created token | no setting; turning it off needs a fork change | `server/etapi/`, `server/routes/routes.ts` |
+| `/custom/*path` | mounted; no login, no CSRF check | no setting for the route; handlers need `backendScriptingEnabled`, resource providers do not | `server/routes/custom.ts`, `core/routes/custom.ts` |
+| MCP server, `/mcp` | off | option `mcpEnabled` (false); needs an ETAPI token | `server/routes/mcp.ts` |
+| ACP agents' MCP listener | off (only while an ACP agent runs) | follows the AI chat options | `server/services/llm/providers/acp_mcp_endpoint.ts` |
+| Web clipper, `/api/clipper/*` | mounted; needs an ETAPI token | no setting; turning it off needs a fork change | `server/routes/routes.ts` |
+| Sync target, `/api/sync/*` | mounted; needs the password | no setting; turning it off needs a fork change | `core/routes/api/sync.ts` |
+| Public sharing, `/share/` | mounted; notes under `_share` served without login | no setting for the route; options `redirectBareDomain`, `showLoginInShareTheme` (false) | `server/share/routes.ts`, `core/share/share_root.ts` |
 
 **What reaches out.**
 
-8. **Update check.** The option `checkForUpdates` defaults to **true**. The
-   web application, not the server, asks
-   `https://api.github.com/repos/TriliumNext/Trilium/releases/latest`
-   (`RELEASES_API_URL` in `apps/client/src/widgets/buttons/global_menu.tsx`).
-   Inside Syrinx this request comes from a page tab.
-9. **Sync to another Trilium.** Off until a sync server is named: the option
-   `syncServerHost`, or `config.ini` `[Sync] syncServerHost`
-   (`TRILIUM_SYNC_SYNCSERVERHOST`, alias `TRILIUM_SYNC_SERVER_HOST`), with
-   `syncProxy` and `syncServerTimeout` beside it. `isSyncSetup` in
-   `packages/trilium-core/src/services/sync_options.ts` treats an empty value
-   or the literal `disabled` as off; once set, `sync.ts` syncs every 60
-   seconds.
-10. **Automatic image download.** The option `downloadImagesAutomatically`
-    defaults to **true**: when a note contains a remote image, the server
-    fetches it and stores a copy
-    (`packages/trilium-core/src/services/image_download.ts`).
-11. **Link previews.** Pasting a link into a note makes the server fetch the
-    page, its oEmbed data and thumbnails (YouTube's included), with its own
-    `User-Agent` (`packages/trilium-core/src/routes/api/link_embed.ts`). No
-    option switches this off; `SECURITY.md` says such fetches are limited to
-    public addresses.
-12. **AI chat and its providers.** The option `aiEnabled` (default false
-    unless the old `llm` experimental feature was on) gates the chat. With it
-    on, the server calls whichever providers are configured in `llmProviders`
-    (Anthropic, OpenAI, Google, DeepSeek, OpenRouter or a local model;
-    `packages/trilium-core/src/services/llm/providers/`), a web-search
-    provider named in `llmWebSearchProvider` (Brave, Tavily, Exa, Serper,
-    Perplexity or DeepSeek; `services/llm/web_search.ts`), and it can start
-    agent programs: Claude's agent SDK, Codex, Copilot and Google's
-    Antigravity (`apps/server/src/services/llm/providers/`). The Options
-    screen looks up an Antigravity download from `dl.google.com`
-    (`apps/client/src/widgets/type_widgets/options/llm/antigravity_download.ts`).
-13. **Text recognition (OCR).** Trilium runs Tesseract
-    (`apps/server/src/services/ocr/tesseract_recognizer.ts`) without setting
-    a language-data path. In `tesseract.js@7.0.0`, the version the lockfile
-    pins, an unset path makes the worker download language data from
-    `cdn.jsdelivr.net` (`src/worker-script/index.js` of the published
-    package), cached under Trilium's data directory. Automatic OCR of images
-    is off by default (option `ocrAutoProcessImages`, false); a user-started
-    OCR still downloads.
-14. **OpenID Connect login.** Off until `config.ini` `[MultiFactorAuthentication]`
-    `oauthBaseUrl`, `oauthClientId`, `oauthClientSecret` and
-    `oauthIssuerBaseUrl` are set (or `TRILIUM_OAUTH_*`); then login goes
-    through that provider (`apps/server/src/services/open_id.ts`).
-15. **OneNote import.** Signs in to Microsoft
-    (`login.microsoftonline.com`) and reads from `graph.microsoft.com`
-    (`apps/server/src/services/import/onenote/`) when the user starts it.
-16. **Map notes.** The geo map view loads tiles from OpenStreetMap,
-    VersaTiles or MapGenie and searches places through
-    `nominatim.openstreetmap.org`
-    (`apps/client/src/widgets/collections/geomap/`), from the page, when a
-    map note is opened.
-17. **Backend scripts.** Scripts in notes that run on the server have full
-    access, network included. Off by default: `config.ini` `[Security]
-    backendScriptingEnabled` (`TRILIUM_SECURITY_BACKEND_SCRIPTING_ENABLED`),
-    false since `v0.104.0`. Frontend scripts run in the page and can make any
-    request a page can; there is no switch for them.
-18. **Links to upstream in the interface.** The About dialog
-    (`apps/client/src/widgets/dialogs/about.tsx`) and global menu link to
-    `github.com/TriliumNext/Trilium`; these open only when clicked.
+| Feature | Default | Where switched | Source |
+|---|---|---|---|
+| Update check (from the page) to `api.github.com` | **on** | option `checkForUpdates` (true) | `client/widgets/buttons/global_menu.tsx` |
+| Sync to another Trilium, every 60 s | off | option or ini `[Sync] syncServerHost` (empty or `disabled` is off), `syncProxy`, `syncServerTimeout`; env `TRILIUM_SYNC_SYNCSERVERHOST` | `core/services/sync_options.ts`, `sync.ts` |
+| Download of remote images in notes | **on** | option `downloadImagesAutomatically` (true) | `core/services/image_download.ts` |
+| Link previews (page, oEmbed, thumbnails) | on when a link is pasted | no setting; turning it off needs a fork change | `core/routes/api/link_embed.ts` |
+| AI chat, providers and web search | off | option `aiEnabled` (false), `llmProviders`, `llmWebSearchProvider` | `core/services/llm/`, `server/services/llm/providers/` |
+| OCR language data from `cdn.jsdelivr.net` | on a user-started OCR | option `ocrAutoProcessImages` (false) covers automatic OCR only | `server/services/ocr/tesseract_recognizer.ts` |
+| OpenID Connect login | off | ini `[MultiFactorAuthentication] oauth*`; env `TRILIUM_OAUTH_*` | `server/services/open_id.ts` |
+| OneNote import (Microsoft sign-in and Graph) | on when the user starts it | no setting; turning it off needs a fork change | `server/services/import/onenote/` |
+| Map notes: tiles and place search | on when a map note opens | no setting; turning it off needs a fork change | `client/widgets/collections/geomap/` |
+| Web View notes embed any address | on when such a note opens | label `webViewSrc` on the note; no global setting | `client/widgets/type_widgets/WebView.tsx` |
+| Backend scripts (full server access) | off | ini `[Security] backendScriptingEnabled`; env `TRILIUM_SECURITY_BACKEND_SCRIPTING_ENABLED` | `server/services/scripting_guard.ts` |
+| Frontend scripts (any request a page can make) | on | no setting; turning it off needs a fork change | `client/` |
+| Links to upstream's repository | open only when clicked | no setting | `client/widgets/dialogs/about.tsx` |
 
-A search of the server, core and client sources for telemetry, analytics or
-crash-reporting services (Sentry, PostHog, Plausible, Umami, Google
-Analytics) found none. The Claude agent SDK's README says the SDK itself
-collects usage feedback, which applies only once AI chat is on and that
-agent is chosen.
+Notes on the tables:
+
+- **A loopback recipe for #281.** Three things together, not one:
+  (a) `127.0.0.1` must be set where nothing can override it. Environment
+  variables win over `config.ini`, and `host.ts` reads `TRILIUM_HOST` before
+  either, so the launcher (#279) must set or clear every `TRILIUM_*`
+  variable it passes on, or the fork must change the default in code.
+  (b) Loopback alone is no boundary against a web page that uses DNS
+  rebinding (a name that first resolves to a public server and then to
+  `127.0.0.1`, so the page's script reaches the local port as its own
+  origin). The server checks no `Host` header, and `/mcp` creates its
+  transport with `enableDnsRebindingProtection: false`
+  (`server/routes/mcp.ts`). A `Host` allow-list (`127.0.0.1:<port>` only)
+  is a recommended #281 change. (c) The three CORS keys stay empty, so no
+  other origin is invited to read responses.
+- **First-run setup routes.** On a fresh data directory, `GET` and `POST
+  /set-password` (`server/routes/routes.ts`) and `POST
+  /api/setup/new-document`, `POST /api/setup/sync-from-server` and
+  `POST /api/setup/sync-seed` (`core/routes/index.ts`) answer without login:
+  `checkSetupAuth` in `server/services/auth.ts` asks for nothing until data
+  exists and a password is set (`isSetupAuthRequired` in
+  `core/services/setup_auth.ts`). Whoever reaches the port first can set the
+  password or seed the database from a sync server of their choosing. The
+  recommendation for #281 is to initialise the database and set the
+  Syrinx-issued credential before the listener opens, or to keep these
+  routes closed until then.
+- **`/custom/*path`.** `server/routes/custom.ts` mounts it for every method,
+  "explicitly" without CSRF protection, and `core/routes/custom.ts` answers
+  from the first note labelled `#customRequestHandler` or
+  `#customResourceProvider` whose pattern matches. A resource provider
+  serves the note's content to anyone, with no login, and is not gated by
+  `backendScriptingEnabled`; a request handler runs the note as a script,
+  as a public endpoint, once backend scripting is on. #281 should unmount
+  the route or put it behind authentication.
+- **ACP agents' listener.** When the AI chat runs one of the ACP agents
+  (GitHub Copilot or Google Antigravity), the server opens a second HTTP
+  listener on `127.0.0.1` at a random port, under an unguessable path, and
+  checks its `Host` header. It exists only while AI chat is on, which it is
+  not by default upstream; keeping AI chat off is recommended for #281.
+- **AI providers and agents.** With `aiEnabled` on, the server calls the
+  providers in `llmProviders` (Anthropic, OpenAI, Google, DeepSeek,
+  OpenRouter or a local model), a web-search provider (Brave, Tavily, Exa,
+  Serper, Perplexity or DeepSeek; `core/services/llm/web_search.ts`), and
+  can start agent programs (Claude's agent SDK, Codex, Copilot,
+  Antigravity). The Options screen looks up an Antigravity download from
+  `dl.google.com`.
+- **OCR.** Trilium starts Tesseract without a language-data path; in
+  `tesseract.js@7.0.0`, the version the lockfile pins, that makes the worker
+  download language data from `cdn.jsdelivr.net`
+  (`src/worker-script/index.js` of the published package).
+- **The Trilium tab inside Syrinx (for #279 and #281).** If the fork's web
+  application is shown in an ordinary page tab, D35's page-text capture and
+  Syrinx's history would record note text and addresses unless the fork's
+  loopback origin is excluded. Requests the page itself makes (update check,
+  map tiles, frontend scripts) leave from that tab. The Notes plugin's own
+  HTTP goes only through the host-owned, owner-granted capability of #280,
+  limited to the fork's address.
+- **Telemetry.** A search of the server, core and client sources for
+  telemetry, analytics or crash-reporting services (Sentry, PostHog,
+  Plausible, Umami, Google Analytics) found none. The Claude agent SDK's
+  README says the SDK itself collects usage feedback once it is used.
 
 ## Bundling: installed separately, or shipped in Syrinx's release
 
@@ -483,9 +488,9 @@ bundling is chosen.
   the chance to get its source. The fork is modified, and the owner reaches
   it over HTTP, even if only on loopback. Trilium's interface links to
   upstream's repository and commit (`about.tsx`), not to the fork's, so
-  whichever option is chosen the fork should point those links at its own
-  public repository and exact commit. This costs one small fork commit and
-  should be part of #281.
+  whichever option is chosen, the recommendation is that the fork points
+  those links at its own public repository and exact commit, one small fork
+  commit (proposed for #281 under "Needs the owner").
 - **MPL-2.0 §3.3, Larger Work.** Syrinx's licence lets Syrinx be distributed
   inside a larger work "under terms of Your choice", provided Syrinx's own
   files stay under MPL-2.0 and their source stays available. MPL-2.0 even
@@ -513,7 +518,7 @@ an AGPL program in every Syrinx release, so §6 applies to each release: the
 exact fork commit of every build must stay published, the release must point
 to it, and the archive must carry the AGPL text and the notices of the
 packages inside it (including CKEditor's GPL and the Claude agent SDK's
-proprietary terms, whose redistribution terms this audit did not review).
+all-rights-reserved terms, whose redistribution this audit did not review).
 It would change the weekly release workflow, which `AGENTS.md` lists under
 "ask before proceeding", and it would make the "no GPL code" rule untrue of
 the release archive, if not of the repository. The gain is one download and
@@ -535,13 +540,12 @@ should link to that commit's source (§13).
    `Fledge-Software`; name it `Syrinx-Trilium` (suggested, in the pattern of
    `Syrinx-app` and `Syrinx-Notes-Plugin`, and plain that it is Syrinx's
    fork rather than upstream); leave it public, which a fork of a public
-   repository always is; and untick "Copy the `main` branch only". Check that tag `v0.107.0`
-   exists in the fork afterwards; if it does not, push it there from a
-   clone of upstream. Keep upstream's
-   `LICENSE` untouched. Then create the branch `syrinx` from tag `v0.107.0`
+   repository always is; and untick "Copy the `main` branch only". Check
+   that tag `v0.107.0` exists in the fork afterwards; if it does not, push
+   it there from a clone of upstream. Keep upstream's `LICENSE` untouched.
+   Then create the branch `syrinx` from tag `v0.107.0`
    (`d83d7151f1c6d4292be88d8d34008f409b252f7f`), make it the default
-   branch, and leave `main` mirroring upstream. Recommended as described;
-   #281 can start once it exists.
+   branch, and leave `main` mirroring upstream. Recommended as described.
 2. **Decide bundling.** Installed separately, or bundled in Syrinx's release
    (section above). Recommendation: installed separately until #283 and a
    licence review.
@@ -550,21 +554,48 @@ should link to that commit's source (§13).
    `main`, and #278's definition of done asks for the bundling decision to be
    recorded there. Agents do not write decisions; the owner (or an agent at
    the owner's request) adds the entry.
-4. **The Claude agent SDK inside Trilium's server build.** It ships under
-   Anthropic's commercial terms, not an open source licence. Recommendation:
-   leave AI chat off by default in the fork (#281 does), and if the owner
-   chooses to bundle, have the licence review cover whether that package may
-   be redistributed, or build the fork without it.
+4. **Reconcile `AGENTS.md` in that entry.** These passages still describe
+   the halted Notes plugin and now contradict the Trilium direction: in
+   "Layout", the bullet saying the built-in plugins, "Notes and later
+   Forge", each live in their own repository as signed packages, and the
+   bullet on Notes and Forge editing in one CodeMirror 6 component (D28);
+   and in "Work order", "Plugins go runtime, template, Notes, Forge", with
+   Notes as #35. This audit leaves them as they are.
+5. **The Claude agent SDK inside Trilium's server build.** Its `LICENSE.md`
+   reserves all rights and makes use subject to Anthropic's Legal
+   Agreements. Recommendation: keep AI chat off by default in the fork, and
+   if the owner chooses to bundle, have the licence review cover whether
+   that package may be redistributed, or build the fork without it.
+6. **Proposed additions to #281's scope,** each a recommendation from this
+   audit, not yet in the issue: the loopback recipe (pinned `127.0.0.1`,
+   cleared `TRILIUM_*` variables, a `Host` allow-list, empty CORS keys);
+   closing the first-run setup routes until the credential is set;
+   unmounting or authenticating `/custom/*path`; turning
+   `checkForUpdates` and `downloadImagesAutomatically` off and keeping
+   `aiEnabled` off; and pointing the interface's source links at the fork
+   (AGPL §13). For #279: the launcher sets or clears the `TRILIUM_*`
+   variables. For #279 and #281: exclude the fork's origin from D35's
+   page-text capture and from history.
 
 ## Reproducing this audit
 
-The audit read Trilium from a shallow, blob-filtered git clone kept outside
-the repository, checked out at `v0.107.0`; it ran no npm install and no
-build. The licence lookup is one GET per lockfile entry to
-`https://registry.npmjs.org/<name>/<version>`, reading `license` (or the old
-`licenses` array), with scoped names written `@scope%2Fname`. The shipping
-bounds come from walking `pnpm-lock.yaml`'s `importers` and `snapshots`
-sections from `apps/server`, `apps/client` and `apps/desktop`, following
-`link:` entries to workspace packages, once with `devDependencies` and once
-without. Rerun it against each upstream release the fork merges, and update
-this file where the answers change.
+The audit read Trilium from a shallow git clone without file contents
+(`--filter=tree:0`), kept outside the repository and checked out at
+`v0.107.0`; it ran no npm install and no build. The licence lookup and the
+graph walk are, in outline:
+
+```sh
+# 1. One registry lookup per lockfile entry ("name@version" under packages:)
+#    scoped names are written @scope%2Fname; read .license (or .licenses[])
+curl -s "https://registry.npmjs.org/$name/$version" | jq -r '.license'
+
+# 2. Shipping bounds: from importers apps/server, apps/client, apps/desktop,
+#    follow "link:" versions to workspace importers, then each snapshot's
+#    dependencies and optionalDependencies, transitively.
+#    Upper bound: importers' dependencies + optionalDependencies
+#                 + devDependencies.  Lower bound: without devDependencies.
+```
+
+Check the lockfile's SHA-256 against the one above first. Rerun the audit
+against each upstream release the fork merges, and update this file where
+the answers change.
