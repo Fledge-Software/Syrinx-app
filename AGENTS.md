@@ -274,6 +274,11 @@ style problem.
 - **Syrinx fetches no plugin over the network in v1.** Built-ins are bundled
   in its signed release; any other plugin is installed from a folder the
   owner picks, and updates are owner-initiated.
+- **The Trilium fork stays a separate program (#277, #278).** Notes runs on
+  a fork of Trilium, which is AGPL-3.0-or-later. Its source never enters
+  `Syrinx-app`, the plugin template or the Notes plugin; they reach the
+  running fork only through HTTP messages, and nothing is copied either way.
+  `docs/dev/trilium-audit.md` records what the fork ships.
 - **Fledge sits behind a trait.** The Fledge plugin, on hold since 2026-10-20,
   calls Fledge only through the `fledge-client` trait, on the stand-in client
   until the real client is built after Fledge's Stage C (D24). Syrinx
@@ -331,6 +336,10 @@ style problem.
   under permissive licences (MIT, Apache-2.0, BSD) or as whole MPL-2.0 files
   kept under MPL (Plan 1's "Open threads"). Zed's editor and `languages`
   crate are GPL-3.0 and stay out.
+- **Trilium is never a dependency (#278).** No crate, npm package, vendored
+  file, submodule or copied text from the AGPL Trilium fork comes into
+  Syrinx, the plugin template or the Notes plugin; it is a separate program
+  reached over HTTP (see "Plugins" above and `docs/dev/trilium-audit.md`).
 - **Approved narrow licence exception, 2026-10-10:** `unicode-ident 1.0.26`
   may carry Unicode-3.0 alongside its MIT/Apache-2.0 terms. The owner approved
   it for the pinned Windows bindings' build dependency. This does not choose
