@@ -202,6 +202,38 @@ fn the_largest_revision_round_trips() {
 }
 
 #[test]
+fn revisions_compare_unsigned_across_the_sign_bit() {
+    let directory = TestDirectory::new();
+    let store = installed(&directory);
+    let top = commit(vec![upsert("a", u64::MAX, "Top")], "c1");
+    store.commit_plugin_feed(top).expect("hold the largest");
+    // Stored as -1 in SQLite, u64::MAX still beats 1.
+    let low = commit(vec![upsert("a", 1, "Low")], "c2");
+    assert_eq!(
+        store.commit_plugin_feed(low),
+        Ok(vec![FeedRowOutcome::Stale])
+    );
+
+    let held_one = commit(vec![upsert("b", 1, "One")], "c3");
+    store.commit_plugin_feed(held_one).expect("hold one");
+    // 2^63 is stored as i64::MIN, and still beats 1.
+    let high = commit(vec![upsert("b", 1 << 63, "High")], "c4");
+    assert_eq!(
+        store.commit_plugin_feed(high),
+        Ok(vec![FeedRowOutcome::Applied])
+    );
+    assert_eq!(
+        rows(&store),
+        [
+            ("a".to_owned(), u64::MAX, "Top".to_owned()),
+            ("b".to_owned(), 1 << 63, "High".to_owned())
+        ]
+    );
+    store.shutdown().expect("store closes");
+    directory.cleanup();
+}
+
+#[test]
 fn clearing_first_removes_only_that_feeds_rows() {
     let directory = TestDirectory::new();
     let store = installed(&directory);

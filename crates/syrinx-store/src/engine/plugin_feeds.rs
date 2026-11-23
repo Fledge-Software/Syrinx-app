@@ -13,7 +13,7 @@ impl Store {
         &self,
         commit: PluginFeedCommit,
     ) -> Result<Vec<FeedRowOutcome>, StoreError> {
-        crate::plugin_feeds::validate(&commit)?;
+        crate::plugin_feeds::validate_plugin_feed_commit(&commit)?;
         let writer = self.writer.as_ref().ok_or(StoreError::Closed)?;
         let (reply, result) = mpsc::sync_channel(1);
         writer

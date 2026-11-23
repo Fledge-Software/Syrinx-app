@@ -150,8 +150,9 @@ fn write_error(error: rusqlite::Error) -> StoreError {
     database_error(StoreOperation::Write, error)
 }
 
-/// Checks a whole commit before anything is written, so a refused value never reaches SQLite.
-pub(crate) fn validate(commit: &PluginFeedCommit) -> Result<(), StoreError> {
+/// Checks a whole commit before anything is written, so a refused value never reaches SQLite;
+/// the application also checks a pulled batch with it before writing to either search tier.
+pub fn validate_plugin_feed_commit(commit: &PluginFeedCommit) -> Result<(), StoreError> {
     crate::plugins::validate_plugin_id(&commit.plugin_id)?;
     crate::plugins::validate_plugin_id(&commit.feed)?;
     if commit.next_cursor.len() > MAX_PLUGIN_FEED_CURSOR_BYTES {
@@ -191,7 +192,7 @@ pub(crate) fn commit(
     connection: &mut Connection,
     commit: &PluginFeedCommit,
 ) -> Result<Vec<FeedRowOutcome>, StoreError> {
-    validate(commit)?;
+    validate_plugin_feed_commit(commit)?;
     let transaction = Transaction::new(connection, TransactionBehavior::Immediate)
         .map_err(|error| database_error(StoreOperation::BeginWrite, error))?;
     let applied = apply(&transaction, commit);
