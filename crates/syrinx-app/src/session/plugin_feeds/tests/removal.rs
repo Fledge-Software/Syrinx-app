@@ -231,3 +231,40 @@ fn a_removal_the_open_index_refused_is_tried_again_only_at_the_next_idle_tick() 
     feeds.pump(&mut plugin, &mut sinks).expect("the retry");
     assert!(documents(&index, "quillmark").is_empty());
 }
+
+#[test]
+fn a_plugin_removed_and_added_again_has_its_next_stall_shown_again() {
+    let folder = Folder::new();
+    let store = folder.store();
+    let mut index = folder.index("fulltext");
+    let mut catalogue = Catalogue::new();
+    let mut feeds = PluginFeeds::default();
+    let going_round = || {
+        Scripted::default()
+            .answer(None, batch(Vec::new(), "A", true))
+            .answer(Some("A"), batch(Vec::new(), "B", true))
+            .answer(Some("B"), batch(Vec::new(), "A", true))
+    };
+    let stalled = Err(FeedError::Stalled {
+        plugin: PLUGIN.to_owned(),
+    });
+    let mut plugin = going_round();
+    announce(&mut feeds);
+    let first = settle_with(&mut feeds, &mut plugin, &store, &mut index, &mut catalogue);
+    assert_eq!(first, stalled);
+
+    // Removed, then installed again: the new install's first stall is the owner's to see.
+    assert_eq!(store.remove_plugin(PLUGIN.to_owned()), Ok(true));
+    let removed = PluginEvent::Removed {
+        plugin: PLUGIN.to_owned(),
+    };
+    assert!(feeds.notice([removed]).is_empty());
+    settle(&mut feeds, &mut plugin, &store, &mut index, &mut catalogue);
+    store
+        .save_plugin_install(install())
+        .expect("installed again");
+    let mut plugin = going_round();
+    announce(&mut feeds);
+    let again = settle_with(&mut feeds, &mut plugin, &store, &mut index, &mut catalogue);
+    assert_eq!(again, stalled);
+}

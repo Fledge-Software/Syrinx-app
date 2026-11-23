@@ -349,11 +349,12 @@ impl PluginFeeds {
             next_cursor: batch.next_cursor.clone(),
         };
         batch::check(&commit, &namespace, kept.changes)?;
-        // A pull from the feed's start begins it again, so cursors sent before may come again.
-        // A reset later in a pull does not clear them: a plugin answering every batch with a
-        // reset could otherwise go round for ever.
+        // A pull from the feed's start, or the first reset of an announcement, begins the feed
+        // again, so cursors sent before may come again.
         if pull.from_start {
             self.history.clear();
+        } else if kept.clear_first {
+            self.history.clear_for_reset();
         }
         let index = sinks
             .index

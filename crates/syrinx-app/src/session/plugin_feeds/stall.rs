@@ -17,6 +17,8 @@ pub(super) struct CursorHistory {
     carried: BTreeMap<FeedName, Vec<String>>,
     /// Feeds whose stall the owner has been shown; repeats are only logged.
     stalled: BTreeSet<FeedName>,
+    /// Whether a reset has already cleared this announcement's cursors.
+    reset_cleared: bool,
 }
 
 impl CursorHistory {
@@ -25,6 +27,7 @@ impl CursorHistory {
     pub(super) fn start(&mut self, name: &FeedName, after: Option<&str>) {
         self.earlier = self.carried.remove(name).unwrap_or_default();
         self.asked = after.map(str::to_owned).into_iter().collect();
+        self.reset_cleared = false;
     }
 
     /// Whether this pull or the feed's previous announcement already asked after `cursor`.
@@ -51,6 +54,23 @@ impl CursorHistory {
     pub(super) fn clear(&mut self) {
         self.asked.clear();
         self.earlier.clear();
+    }
+
+    /// Forgets the pull's cursors for the announcement's first reset only. A plugin that
+    /// starts its feed again, as Notes does when the owner switches vaults (#36), may resend
+    /// its offsets; one that resets every batch still stalls within the announcement.
+    pub(super) fn clear_for_reset(&mut self) {
+        if self.reset_cleared {
+            return;
+        }
+        self.reset_cleared = true;
+        self.clear();
+    }
+
+    /// Whether any waiting feed carries cursors into its next announcement.
+    #[cfg(test)]
+    pub(super) fn carries_any(&self) -> bool {
+        !self.carried.is_empty()
     }
 
     /// Forgets what a removed plugin's feeds carried, and that they stalled.

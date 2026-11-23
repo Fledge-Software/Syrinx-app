@@ -29,7 +29,7 @@ use crate::session::{
     DeletionJournal, SessionCommand, WindowsDirectoryLease, Worker, page_text, unbounded,
 };
 
-use fakes::{Endless, FailingIndex, FailingStore, Ready, Scripted};
+use fakes::{Endless, FailingIndex, FailingStore, Ready, Scripted, Sequence};
 
 const PLUGIN: &str = "notes";
 const FEED: &str = "notes.items";
@@ -151,7 +151,7 @@ fn announce(feeds: &mut PluginFeeds) {
 /// Pumps with `store` and `index` until no pull is in flight and nothing waits.
 fn settle_with(
     feeds: &mut PluginFeeds,
-    source: &mut Scripted,
+    source: &mut dyn FeedSource,
     store: &dyn FeedStore,
     index: &mut dyn FeedIndex,
     catalogue: &mut Catalogue,
@@ -174,7 +174,7 @@ fn settle_with(
 
 fn settle(
     feeds: &mut PluginFeeds,
-    source: &mut Scripted,
+    source: &mut dyn FeedSource,
     store: &Store,
     index: &mut FullText,
     catalogue: &mut Catalogue,

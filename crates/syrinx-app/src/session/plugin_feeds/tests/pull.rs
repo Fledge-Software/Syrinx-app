@@ -573,9 +573,85 @@ fn a_feed_that_answers_every_batch_with_a_reset_and_more_ends_stalled() {
             plugin: PLUGIN.to_owned()
         })
     );
-    assert_eq!(plugin.requests, [None, Some("c1".to_owned())]);
+    // The first reset of the announcement may start the feed again; the second may not.
+    let c1 = Some("c1".to_owned());
+    assert_eq!(plugin.requests, [None, c1.clone(), c1]);
     assert!(
         !feeds.busy(true),
         "the feed is not reset again until announced"
     );
+}
+
+#[test]
+fn a_reset_part_way_through_a_pull_may_resend_its_offsets_and_keeps_every_row() {
+    let folder = Folder::new();
+    let store = folder.store();
+    let mut index = folder.index("fulltext");
+    let mut catalogue = Catalogue::new();
+    let mut feeds = PluginFeeds::default();
+    // Two pages of the old vault, then a reset as Notes sends on a vault switch (#36), and
+    // the new vault's pages from offset 256 again.
+    let batches = [
+        batch(vec![entry("p0", 1, "Synthetic old zero")], "256", true),
+        batch(vec![entry("p1", 1, "Synthetic old one")], "512", true),
+        batch(
+            vec![Change::Reset, entry("q0", 1, "Synthetic new zero")],
+            "256",
+            true,
+        ),
+        batch(vec![entry("q1", 1, "Synthetic new one")], "512", true),
+        batch(vec![entry("q2", 1, "Synthetic new two")], "768", false),
+    ];
+    let mut plugin = Sequence {
+        batches: batches.into_iter().collect(),
+        requests: Vec::new(),
+    };
+    announce(&mut feeds);
+    settle_with(&mut feeds, &mut plugin, &store, &mut index, &mut catalogue)
+        .expect("no stall after a reset");
+    let asked = |cursor: &str| Some(cursor.to_owned());
+    assert_eq!(
+        plugin.requests,
+        [None, asked("256"), asked("512"), asked("256"), asked("512")]
+    );
+    assert_eq!(
+        titles(&mut catalogue, "synthetic"),
+        [
+            "Synthetic new one",
+            "Synthetic new two",
+            "Synthetic new zero"
+        ]
+    );
+    assert_eq!(kept_rows(&store).len(), 3);
+}
+
+#[test]
+fn a_cursor_repeated_by_the_batch_that_spends_the_budget_stalls_at_once() {
+    let folder = Folder::new();
+    let store = folder.store();
+    let mut index = folder.index("fulltext");
+    let mut catalogue = Catalogue::new();
+    let mut feeds = PluginFeeds::default();
+    let page = |cursor: usize| batch(Vec::new(), &format!("c{cursor}"), true);
+    let budget = BATCHES_PER_TRIGGER as usize;
+    let mut plugin = Scripted::default().answer(None, page(1));
+    for cursor in 1..budget - 1 {
+        plugin = plugin.answer(Some(&format!("c{cursor}")), page(cursor + 1));
+    }
+    // The budget's last batch goes back to the third cursor.
+    plugin = plugin.answer(Some(&format!("c{}", budget - 1)), page(3));
+    announce(&mut feeds);
+    let stalled = settle_with(&mut feeds, &mut plugin, &store, &mut index, &mut catalogue);
+    assert_eq!(
+        stalled,
+        Err(FeedError::Stalled {
+            plugin: PLUGIN.to_owned()
+        })
+    );
+    assert_eq!(plugin.requests.len(), budget);
+    assert!(
+        !feeds.history.carries_any(),
+        "nothing goes to the next announcement"
+    );
+    assert!(!feeds.busy(true));
 }

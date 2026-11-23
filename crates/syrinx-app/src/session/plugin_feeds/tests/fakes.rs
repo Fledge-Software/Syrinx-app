@@ -50,6 +50,30 @@ impl FeedSource for Scripted {
     }
 }
 
+/// A plugin that answers its requests with these batches in order, whatever the cursor, as a
+/// plugin whose feed changes under it does; it records every cursor asked after.
+pub(super) struct Sequence {
+    pub(super) batches: std::collections::VecDeque<Batch>,
+    pub(super) requests: Vec<Option<String>>,
+}
+
+impl FeedSource for Sequence {
+    fn take_events(&mut self) -> Vec<PluginEvent> {
+        Vec::new()
+    }
+
+    fn request(
+        &mut self,
+        _plugin: &str,
+        _feed: &str,
+        after: Option<String>,
+    ) -> CallResult<Box<dyn BatchAnswer>> {
+        self.requests.push(after);
+        let batch = self.batches.pop_front().expect("a batch in the sequence");
+        Ok(Box::new(Ready(batch)))
+    }
+}
+
 /// A plugin whose feed never ends: every batch has one more entry, a new cursor and more.
 #[derive(Default)]
 pub(super) struct Endless {
