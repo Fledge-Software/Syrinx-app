@@ -37,9 +37,16 @@ const FOLDER_ACCESS: [&str; 2] = ["read", "read-write"];
 /// The one `@unstable` feature the contract has, and the only one a manifest may name.
 const HOME_WIDGETS: &str = "home-widgets";
 
+/// Every 0.1.x version up to this host's; a plugin built for an earlier one still loads. A
+/// contract bump appends the version it replaces here; a test checks none is missing.
+const TRACK_VERSIONS: [&str; 2] = ["0.1.0", CONTRACT_VERSION];
+
 /// The worlds this host runs, as a manifest spells them.
 pub fn supported_worlds() -> Vec<String> {
-    vec![format!("{CONTRACT_PACKAGE}/plugin@{CONTRACT_VERSION}")]
+    TRACK_VERSIONS
+        .iter()
+        .map(|version| format!("{CONTRACT_PACKAGE}/plugin@{version}"))
+        .collect()
 }
 
 /// What discovery knows about where a manifest came from.

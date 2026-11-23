@@ -120,6 +120,16 @@ fn an_unsupported_schema_is_refused_before_anything_else() {
 }
 
 #[test]
+fn every_earlier_patch_of_the_track_is_still_supported() {
+    let (track, patch) = CONTRACT_VERSION.rsplit_once('.').expect("a dotted version");
+    let patch: u32 = patch.parse().expect("a numeric patch");
+    let expected: Vec<String> = (0..=patch)
+        .map(|patch| format!("{CONTRACT_PACKAGE}/plugin@{track}.{patch}"))
+        .collect();
+    assert_eq!(supported_worlds(), expected);
+}
+
+#[test]
 fn an_unsupported_world_is_refused_before_the_other_fields() {
     let text = changed("syrinx:plugin/plugin@0.1.0", "syrinx:plugin/plugin@0.2.0").replacen(
         "id = \"notes\"",
@@ -300,6 +310,29 @@ fn scope_fields_follow_their_kind() {
             ..
         }
     ));
+}
+
+#[test]
+fn a_service_request_takes_a_reason_and_no_address_or_trust() {
+    let reason = "Read your notes' titles and text from the notes server you approve.";
+    let service = with(&format!(
+        "[[capabilities]]\nkind = \"service\"\nreason = \"{reason}\""
+    ));
+    let manifest = parse(&service).expect("a service request parses");
+    let request = manifest.capabilities().last().expect("the service request");
+    assert_eq!(
+        (request.kind, request.reason.as_str()),
+        (CapabilityKind::Service, reason)
+    );
+    let full = with("[[capabilities]]\nkind = \"service\"\ntrust = \"full\"\nreason = \"x\"");
+    assert_eq!(
+        parse(&full),
+        Err(ManifestError::TrustMismatch(CapabilityKind::Service))
+    );
+    // The plugin cannot name its address: the owner approves it.
+    let addressed =
+        with("[[capabilities]]\nkind = \"service\"\naddress = \"https://x.test\"\nreason = \"x\"");
+    assert!(parse(&addressed).is_err());
 }
 
 #[test]

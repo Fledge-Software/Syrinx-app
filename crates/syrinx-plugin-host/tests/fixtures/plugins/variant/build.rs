@@ -7,7 +7,11 @@ const WIT: &str = "../../../../../../wit/v0_1/plugin.wit";
 
 fn main() {
     println!("cargo::rerun-if-changed={WIT}");
-    let original = fs::read_to_string(WIT).expect("the contract's WIT is readable");
+    // Windows checkouts carry CRLF line endings (docs/dev/trapstoknow.md); every change below
+    // matches LF text.
+    let original = fs::read_to_string(WIT)
+        .expect("the contract's WIT is readable")
+        .replace("\r\n", "\n");
     let wit = change(&original);
     let features = if enabled("widgets") {
         "features: [\"home-widgets\"],"
@@ -31,26 +35,29 @@ fn change(wit: &str) -> String {
     if enabled("version-0-2-0") {
         return replace(
             wit,
-            "package syrinx:plugin@0.1.0;",
+            "package syrinx:plugin@0.1.1;",
             "package syrinx:plugin@0.2.0;",
         );
     }
-    if enabled("since-0-1-1") {
+    if enabled("since-0-1-2") {
         let wit = replace(
             wit,
-            "package syrinx:plugin@0.1.0;",
             "package syrinx:plugin@0.1.1;",
+            "package syrinx:plugin@0.1.2;",
         );
         let wit = replace(
             &wit,
             "interface lifecycle {",
-            "@since(version = 0.1.1)\ninterface extra { ping: func(); }\n\ninterface lifecycle {",
+            "@since(version = 0.1.2)\ninterface extra { ping: func(); }\n\ninterface lifecycle {",
         );
         return replace(
             &wit,
             "    import host;",
-            "    import host;\n    @since(version = 0.1.1)\n    import extra;",
+            "    import host;\n    @since(version = 0.1.2)\n    import extra;",
         );
+    }
+    if enabled("contract-0-1-0") {
+        return contract_0_1_0(wit);
     }
     if enabled("extra-case") {
         return replace(
@@ -67,7 +74,11 @@ fn change(wit: &str) -> String {
             "interface lifecycle {",
             "interface documents { read: func() -> string; }\n\ninterface lifecycle {",
         );
-        return replace(&wit, "    import host;", "    import host;\n    import documents;");
+        return replace(
+            &wit,
+            "    import host;",
+            "    import host;\n    import documents;",
+        );
     }
     if enabled("renamed-export") {
         return replace(
@@ -77,6 +88,28 @@ fn change(wit: &str) -> String {
         );
     }
     wit.to_owned()
+}
+
+/// The contract as 0.1.0 shipped it: before 0.1.1 added the `service` import (#280).
+fn contract_0_1_0(wit: &str) -> String {
+    let wit = replace(
+        wit,
+        "package syrinx:plugin@0.1.1;",
+        "package syrinx:plugin@0.1.0;",
+    );
+    let wit = replace(
+        &wit,
+        "    @since(version = 0.1.1)\n    import service;\n",
+        "",
+    );
+    let start = wit
+        .find("@since(version = 0.1.1)\ninterface service {")
+        .expect("the WIT has the service interface");
+    let end = wit[start..]
+        .find("interface lifecycle {")
+        .expect("lifecycle follows the service interface")
+        + start;
+    format!("{}{}", &wit[..start], &wit[end..])
 }
 
 fn replace(wit: &str, from: &str, to: &str) -> String {

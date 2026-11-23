@@ -7,6 +7,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 
 use syrinx_plugin_host::PluginHost;
 use syrinx_plugin_host::bindings::syrinx::plugin::host::{self, LogLevel};
+use syrinx_plugin_host::bindings::syrinx::plugin::service::{self, Header, Method, Response};
 use syrinx_plugin_host::bindings::syrinx::plugin::types::{self, Outcome, PluginError};
 use syrinx_plugin_host::deadline::CallDeadline;
 use syrinx_plugin_host::manifest::{CapabilityKind, PluginManifest};
@@ -132,6 +133,18 @@ impl PluginHost for TestServices {
 }
 
 impl types::Host for TestServices {}
+
+impl service::Host for TestServices {
+    fn request(
+        &mut self,
+        method: Method,
+        path: String,
+        headers: Vec<Header>,
+        body: Vec<u8>,
+    ) -> Result<Response, PluginError> {
+        self.inner.request(method, path, headers, body)
+    }
+}
 
 impl host::Host for TestServices {
     fn log(&mut self, level: LogLevel, message: String) {

@@ -6,7 +6,10 @@
 use std::collections::BTreeMap;
 
 use crate::bindings::syrinx::plugin::host::{self, LogLevel};
+use crate::bindings::syrinx::plugin::service::{self, Header, Method, Response};
 use crate::bindings::syrinx::plugin::types::{self, PluginError};
+use crate::deadline::CallDeadline;
+use crate::service::{self as service_door, ServiceDoor};
 use crate::views::ViewBook;
 use crate::{PluginHost, limits};
 
@@ -18,6 +21,9 @@ pub const SYNTHETIC_NOW: i64 = 1_700_000_000_000;
 pub struct SyntheticHost {
     settings: BTreeMap<String, Vec<u8>>,
     pub(super) book: ViewBook,
+    /// The synthetic address a test approved for the `service` capability, if any.
+    pub(super) door: Option<ServiceDoor>,
+    deadline: Option<CallDeadline>,
 }
 
 impl SyntheticHost {
@@ -32,12 +38,35 @@ impl SyntheticHost {
 }
 
 impl PluginHost for SyntheticHost {
+    fn begin_export(&mut self, deadline: CallDeadline) {
+        self.deadline = Some(deadline);
+    }
+
     fn view_closed(&mut self, view: u64) {
         self.book.view_closed(view);
     }
 }
 
 impl types::Host for SyntheticHost {}
+
+impl service::Host for SyntheticHost {
+    fn request(
+        &mut self,
+        method: Method,
+        path: String,
+        headers: Vec<Header>,
+        body: Vec<u8>,
+    ) -> Result<Response, PluginError> {
+        service_door::answer(
+            self.door.as_ref(),
+            self.deadline,
+            method,
+            &path,
+            headers,
+            body,
+        )
+    }
+}
 
 impl host::Host for SyntheticHost {
     fn log(&mut self, level: LogLevel, message: String) {

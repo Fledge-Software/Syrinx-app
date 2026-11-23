@@ -13,7 +13,7 @@ licence = "MPL-2.0"
 min-syrinx = "0.1.0"
 
 [interface]
-world = "syrinx:plugin/plugin@0.1.0"
+world = "syrinx:plugin/plugin@0.1.1"
 
 [entry]
 module = "plugin.wasm"

@@ -8,6 +8,7 @@ use syrinx_store::{Store, StoreError};
 
 use crate::PluginHost;
 use crate::bindings::syrinx::plugin::host::{self, LogLevel};
+use crate::bindings::syrinx::plugin::service::{self, Header, Method, Response};
 use crate::bindings::syrinx::plugin::types::{self, PluginError};
 use crate::deadline::CallDeadline;
 use crate::views::{ViewBook, ViewRecord};
@@ -70,6 +71,20 @@ impl PluginHost for StoreServices {
 }
 
 impl types::Host for StoreServices {}
+
+/// The owner cannot approve an address in the window yet (#280), so every request is refused
+/// as `no-address` before anything is sent.
+impl service::Host for StoreServices {
+    fn request(
+        &mut self,
+        method: Method,
+        path: String,
+        headers: Vec<Header>,
+        body: Vec<u8>,
+    ) -> Result<Response, PluginError> {
+        crate::service::answer(None, self.deadline, method, &path, headers, body)
+    }
+}
 
 impl host::Host for StoreServices {
     fn log(&mut self, level: LogLevel, message: String) {

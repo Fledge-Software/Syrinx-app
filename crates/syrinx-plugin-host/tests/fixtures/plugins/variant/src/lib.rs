@@ -1,6 +1,8 @@
 //! A synthetic plugin built against a changed copy of the contract (see
 //! build.rs), one change per feature, so the host's tests can show each
-//! change is refused by name. Without a feature it is a plain 0.1.0 plugin.
+//! change is refused by name. Without a feature it is a plain plugin of the
+//! current contract; `contract-0-1-0` builds one of the contract before #280, and `service`
+//! reads from the address the test approved.
 
 mod bindings {
     include!(concat!(env!("OUT_DIR"), "/bindings.rs"));
@@ -19,13 +21,46 @@ use bindings::syrinx::plugin::types::{Outcome, PluginError};
 
 struct Plugin;
 
+/// The `service` variant's commands: `variant.<name>` reads `/<name>` from the approved address
+/// and logs each header it was handed, then the status and body; `variant.other-host` asks for
+/// another host by name.
+#[cfg(feature = "service")]
+mod service {
+    use super::bindings::syrinx::plugin::host::{self, LogLevel};
+    use super::bindings::syrinx::plugin::service::{self, Header, Method};
+    use super::bindings::syrinx::plugin::types::PluginError;
+
+    pub fn fetch(id: &str) -> Result<(), PluginError> {
+        let name = id.strip_prefix("variant.").unwrap_or(id);
+        let path = match name {
+            "other-host" => "https://other.example.test/notes".to_owned(),
+            name => format!("/{name}"),
+        };
+        let accept = Header {
+            name: "accept".into(),
+            value: "text/plain".into(),
+        };
+        let response = service::request(Method::Get, &path, &[accept], &[])?;
+        for header in &response.headers {
+            host::log(
+                LogLevel::Info,
+                &format!("header {}: {}", header.name, header.value),
+            );
+        }
+        let body = String::from_utf8_lossy(&response.body);
+        host::log(LogLevel::Info, &format!("{} {body}", response.status));
+        Ok(())
+    }
+}
+
 fn unused() -> PluginError {
     PluginError::NotFound("not used".into())
 }
 
 /// The one command; each variant uses what its change added, so the import is kept.
+#[cfg(not(feature = "service"))]
 fn command() -> Result<(), PluginError> {
-    #[cfg(feature = "since-0-1-1")]
+    #[cfg(feature = "since-0-1-2")]
     bindings::syrinx::plugin::extra::ping();
     #[cfg(feature = "widgets")]
     bindings::syrinx::plugin::host::widget_changed("variant.widget");
@@ -51,9 +86,14 @@ impl lifecycle::Guest for Plugin {
 }
 
 impl commands::Guest for Plugin {
-    #[cfg(not(feature = "renamed-export"))]
+    #[cfg(all(not(feature = "renamed-export"), not(feature = "service")))]
     fn run(_id: String) -> Result<(), PluginError> {
         command()
+    }
+
+    #[cfg(feature = "service")]
+    fn run(id: String) -> Result<(), PluginError> {
+        service::fetch(&id)
     }
 
     #[cfg(feature = "renamed-export")]

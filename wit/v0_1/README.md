@@ -1,4 +1,4 @@
-# `syrinx:plugin@0.1.0`
+# `syrinx:plugin@0.1.1`
 
 This folder is the contract every Syrinx plugin is written against: one WIT
 (WebAssembly Interface Type) package whose world, `plugin`, lists what Syrinx
@@ -10,6 +10,10 @@ named error, rather than deep inside a call.
 The owner approved its shape on 2026-10-26 (G9 in `docs/decisions.md`). It
 counts as frozen once #28's contract tests pass; the plugin template (#30) and
 Notes copy it from the commit #28's closing comment names.
+
+0.1.1 adds one import, `service` (#280), and nothing else: a plugin built
+for 0.1.0 loads unchanged, and the host's contract tests load one to prove it
+(`a_plugin_built_for_0_1_0_still_loads_and_runs`).
 
 ## Changing it
 
@@ -50,6 +54,23 @@ host's contract tests check them:
   request, or a plugin calls `host.cancel`, the host drops anything still
   queued for that id before delivering it. `plugin-error.cancelled` is never
   used where a write may have happened; that is `outcome.uncertain`.
+- **Service requests.** `service.request` reaches only the one address the
+  owner approved for the plugin, and only under the `service` grant. The
+  plugin gives a path; the host chooses the scheme, host and port, adds the
+  credential (never returned, logged or stored in the repository), refuses
+  the headers it sets itself, follows a redirect only within that address,
+  bounds the request and response sizes and the time
+  (`crates/syrinx-plugin-host/src/limits.rs`), and starts no request while
+  the owner types in the palette. A remote address is HTTPS only. Each
+  refusal's text starts with its rule's name, as in
+  `denied("redirect-off-host: ...")`. `unavailable` means asking again
+  cannot repeat a write: nothing was sent, or the request was a GET or HEAD.
+  Once a POST, PUT, PATCH or DELETE may have reached the server, any failure
+  after that point (a lost or oversized answer, a refused redirect, a later
+  hop that cannot be sent) is `internal("uncertain: ...")`, naming the rule
+  that failed, and the request is never resent. Redirects follow the Fetch
+  standard: a POST answered 301 or 302, or a write answered 303, continues
+  as a bodiless GET; a 307 or 308 repeats the write on the approved address.
 - **Search keywords.** A catalogue entry carries at most 16 keywords of at
   most 120 characters; the host drops and logs an over-limit keyword instead
   of refusing the batch.

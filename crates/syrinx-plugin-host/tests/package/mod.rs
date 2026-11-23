@@ -12,7 +12,7 @@ use syrinx_plugin_host::{
     SignedIdentity, check_signed,
 };
 
-const WORLD: &str = "syrinx:plugin/plugin@0.1.0";
+const WORLD: &str = "syrinx:plugin/plugin@0.1.1";
 
 /// The tables every synthetic manifest shares, for `plugin`.
 fn header(plugin: &str) -> String {
@@ -274,7 +274,7 @@ fn a_component_importing_an_unrequested_capability_is_refused_at_load() {
     else {
         panic!("not an unrequested capability: {error}");
     };
-    assert_eq!(interface, "syrinx:plugin/documents@0.1.0");
+    assert_eq!(interface, "syrinx:plugin/documents@0.1.1");
     assert_eq!(kind, CapabilityKind::Folder);
 }
 
