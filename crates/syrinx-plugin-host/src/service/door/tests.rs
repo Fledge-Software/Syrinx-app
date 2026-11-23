@@ -212,6 +212,31 @@ fn a_303_becomes_a_bodiless_get() {
 }
 
 #[test]
+fn a_301_or_302_after_a_post_becomes_a_bodiless_get_and_never_repeats_the_write() {
+    for status in [301, 302] {
+        let transport = Scripted::new(vec![redirect(status, "/created"), ok(200, Vec::new(), b"")]);
+        let door = door(transport.clone());
+        door.request(Method::Post, "/notes", Vec::new(), b"data", BUDGET)
+            .expect("answered");
+        let second = &transport.sent()[1];
+        assert_eq!(
+            (second.method, second.path.as_str(), second.body.as_slice()),
+            (Method::Get, "/created", &b""[..]),
+            "{status}"
+        );
+    }
+}
+
+#[test]
+fn a_303_after_a_head_stays_a_head() {
+    let transport = Scripted::new(vec![redirect(303, "/result"), ok(200, Vec::new(), b"")]);
+    let door = door(transport.clone());
+    door.request(Method::Head, "/x", Vec::new(), b"", BUDGET)
+        .expect("answered");
+    assert_eq!(transport.sent()[1].method, Method::Head);
+}
+
+#[test]
 fn a_redirect_off_the_address_is_refused_before_it_is_followed() {
     for location in [
         "https://other.example.test/x",

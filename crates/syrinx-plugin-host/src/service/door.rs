@@ -128,14 +128,14 @@ impl ServiceDoor {
         Ok(answered)
     }
 
-    /// The next hop after a redirect, if it stays on the approved address. A 303 becomes a
-    /// bodiless GET, as HTTP says; every other redirect repeats the method and body.
+    /// The next hop after a redirect, if it stays on the approved address. It becomes a
+    /// bodiless GET where Fetch says so (`becomes_get`); otherwise it repeats method and body.
     fn redirected(&self, hop: Hop, status: u16, location: &str) -> Result<Hop, ServiceRefusal> {
         let path = self
             .same_address_path(location)
             .ok_or(ServiceRefusal::RedirectOffHost)?;
         check_path(&path).map_err(|_| ServiceRefusal::InvalidRedirect)?;
-        if status == 303 {
+        if becomes_get(status, hop.method) {
             return Ok(Hop {
                 method: Method::Get,
                 path,
@@ -193,6 +193,16 @@ impl ServiceDoor {
             headers,
             body: response.body,
         }
+    }
+}
+
+/// The Fetch standard's method rule: a POST answered 301 or 302, or any write answered 303,
+/// was likely carried out (post, then redirect to the result), so repeating it would write twice.
+fn becomes_get(status: u16, method: Method) -> bool {
+    match status {
+        301 | 302 => method == Method::Post,
+        303 => !is_reading(method),
+        _ => false,
     }
 }
 
