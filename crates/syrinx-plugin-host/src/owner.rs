@@ -4,6 +4,7 @@
 //! the `store` feature, for `syrinx-app`.
 
 mod cache;
+mod install;
 mod services;
 
 use std::collections::BTreeMap;
@@ -20,6 +21,7 @@ use syrinx_store::{
 use wasmtime::Engine;
 
 pub use cache::{CacheSetup, Sha256};
+pub use install::{BUILT_IN_PLUGINS, InstallRefusal, Offer, Plan, Reviewed};
 pub use services::StoreServices;
 
 use crate::grants::{DenyList, FolderRefusal, GrantSet};

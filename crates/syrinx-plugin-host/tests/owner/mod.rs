@@ -24,6 +24,7 @@ use syrinx_store::{
 };
 
 mod cache;
+mod install;
 
 use crate::lifecycle::answer;
 use crate::package::{manifest_text, register};
