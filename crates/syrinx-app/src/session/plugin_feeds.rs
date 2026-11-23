@@ -46,11 +46,15 @@ pub enum FeedError {
     Store(StoreError),
     Index(FullTextError),
     Search(SearchError),
+    /// The plugin said it had more but did not move its cursor; the feed waits for its next
+    /// announcement instead of being asked the same thing again.
+    Stalled,
 }
 
 impl fmt::Display for FeedError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::Stalled => formatter.write_str("the plugin's feed did not move on"),
             Self::Name => formatter.write_str("a plugin feed's name cannot be indexed"),
             Self::KeysExhausted => formatter.write_str("too many plugin feed rows this session"),
             Self::Host(error) => write!(formatter, "{error}"),
@@ -108,6 +112,8 @@ pub(super) struct Sinks<'a> {
     pub(super) catalogue: &'a mut Catalogue,
     /// Unix seconds; plugin documents keep this as their capture time.
     pub(super) now: i64,
+    /// The loop's clock, against which the owner's typing pause is measured.
+    pub(super) at: Instant,
 }
 
 /// One feed by name.
@@ -123,6 +129,8 @@ struct Pull {
     /// Pulled from the feed's start, so both tiers drop what they held of it first.
     from_start: bool,
     answer: Box<dyn BatchAnswer>,
+    /// The cursor this batch was asked after; a batch with more must move past it.
+    after: Option<String>,
     /// Batches applied for this announcement so far.
     batches: u32,
 }
@@ -137,14 +145,19 @@ pub(super) struct PluginFeeds {
     pull: Option<Pull>,
     /// Plugins the runtime removed whose rows and text are still to go.
     removed: Vec<String>,
+    /// Removed plugins whose rows are gone but whose text the index has not yet given up.
+    unremoved: Vec<String>,
+    /// Since when pulling has held the session's idle work off; see `idle_overdue`.
+    busy_since: Option<Instant>,
     /// Whether this session has looked for text a removed plugin left in the index.
     swept: bool,
     /// When the owner last typed in the palette; pulls wait `TYPING_PAUSE` after it (D9).
     typed_at: Option<Instant>,
 }
 
-/// How long after the owner's last keystroke in the palette a pull may move on again.
-const TYPING_PAUSE: Duration = Duration::from_millis(750);
+/// How long after the owner's last keystroke in the palette a pull may move on again. A
+/// placeholder long enough to span the gap between keystrokes; the owner may tune it.
+pub(super) const TYPING_PAUSE: Duration = Duration::from_millis(750);
 
 impl PluginFeeds {
     /// Puts every kept tier 1 row into the catalogue, so each plugin's entries are found
@@ -157,9 +170,12 @@ impl PluginFeeds {
         Ok(feeds)
     }
 
-    /// Queues each feed announced as changed and each plugin removed; returns a description
-    /// of every other event, which feeds do not read.
-    pub(super) fn notice(&mut self, events: impl IntoIterator<Item = PluginEvent>) -> Vec<String> {
+    /// Queues each feed announced as changed and each plugin removed; returns every other
+    /// event, which feeds do not read, for the session to report.
+    pub(super) fn notice(
+        &mut self,
+        events: impl IntoIterator<Item = PluginEvent>,
+    ) -> Vec<PluginEvent> {
         let mut unread = Vec::new();
         for event in events {
             match event {
@@ -167,7 +183,7 @@ impl PluginFeeds {
                     self.announce(FeedName { plugin, feed });
                 }
                 PluginEvent::Removed { plugin } => self.removed.push(plugin),
-                other => unread.push(describe(&other)),
+                other => unread.push(other),
             }
         }
         unread
@@ -185,6 +201,22 @@ impl PluginFeeds {
         (!left.is_zero()).then_some(left)
     }
 
+    /// Whether the session's idle work has waited `delay` behind pulling; if so, the wait
+    /// starts again from `now`. A plugin that always has more cannot hold it off for longer.
+    pub(super) fn idle_overdue(&mut self, now: Instant, delay: Duration) -> bool {
+        let since = *self.busy_since.get_or_insert(now);
+        if now.saturating_duration_since(since) < delay {
+            return false;
+        }
+        self.busy_since = Some(now);
+        true
+    }
+
+    /// Pulling has nothing left to do, so it holds no idle work off.
+    pub(super) fn idle_released(&mut self) {
+        self.busy_since = None;
+    }
+
     /// Whether a pull is in flight, or work waits while the index can take it.
     pub(super) fn busy(&self, index_open: bool) -> bool {
         let waiting = !self.waiting.is_empty() || !self.removed.is_empty();
@@ -192,12 +224,16 @@ impl PluginFeeds {
     }
 
     /// Moves pulling on by at most one batch: clears removed plugins, applies an answered
-    /// batch, or starts the next waiting feed. Never waits for a plugin.
+    /// batch, or starts the next waiting feed. Never waits for a plugin, and while the owner
+    /// is typing in the palette does nothing at all (D9).
     pub(super) fn pump(
         &mut self,
         source: &mut dyn FeedSource,
         sinks: &mut Sinks<'_>,
     ) -> Result<(), FeedError> {
+        if self.typing_quiet_for(sinks.at).is_some() {
+            return Ok(());
+        }
         self.forget_removed(sinks)?;
         self.sweep_once(sinks)?;
         let Some(pull) = self.pull.take() else {
@@ -222,6 +258,12 @@ impl PluginFeeds {
         index: Option<&mut dyn FeedIndex>,
         catalogue: &mut Catalogue,
     ) -> Result<(), FeedError> {
+        self.forget_rows(plugin, catalogue)?;
+        forget_text(plugin, index)
+    }
+
+    /// Drops a plugin's queued and running pulls and its catalogue rows.
+    fn forget_rows(&mut self, plugin: &str, catalogue: &mut Catalogue) -> Result<(), FeedError> {
         self.waiting.retain(|name| name.plugin != plugin);
         if self
             .pull
@@ -233,23 +275,62 @@ impl PluginFeeds {
         for target in self.keys.forget_plugin(plugin) {
             catalogue.remove(target).map_err(FeedError::Search)?;
         }
-        // A closed index cannot be reached, so the owner hears that the text was left; the
-        // next session's sweep removes it.
-        let index = index.ok_or(FeedError::Index(FullTextError::NeedsReopen))?;
-        committed(index.remove_plugin(plugin)).map_err(FeedError::Index)
+        Ok(())
     }
 
-    /// Clears every plugin the runtime reported removed this session.
+    /// Clears every plugin the runtime reported removed: its catalogue rows at once, whatever
+    /// else fails, and its text once the index takes it. The first error is reported after
+    /// every plugin has had its turn.
     fn forget_removed(&mut self, sinks: &mut Sinks<'_>) -> Result<(), FeedError> {
-        for plugin in std::mem::take(&mut self.removed) {
-            // Re-typed, so the index's borrow can end with this one call.
-            let index = sinks
-                .index
-                .as_deref_mut()
-                .map(|index| index as &mut dyn FeedIndex);
-            self.forget_plugin(&plugin, index, sinks.catalogue)?;
+        let fresh = std::mem::take(&mut self.removed);
+        let retrying = fresh.is_empty();
+        let mut first_error = None;
+        for plugin in &fresh {
+            if let Err(error) = self.forget_rows(plugin, sinks.catalogue) {
+                first_error.get_or_insert(error);
+            }
         }
-        Ok(())
+        for plugin in fresh {
+            if !self.unremoved.contains(&plugin) {
+                self.unremoved.push(plugin);
+            }
+        }
+        if let Err(error) = self.forget_unremoved_text(sinks, retrying) {
+            first_error.get_or_insert(error);
+        }
+        first_error.map_or(Ok(()), Err)
+    }
+
+    /// Removes the text of each removed plugin that still holds some; a plugin whose text could
+    /// not be removed stays for a later turn. A closed index is reported once, when a removal
+    /// is first heard. A retry waits until no pull is under way, so a failing index is not
+    /// asked again at every pull's wake-up.
+    fn forget_unremoved_text(
+        &mut self,
+        sinks: &mut Sinks<'_>,
+        retrying: bool,
+    ) -> Result<(), FeedError> {
+        if self.unremoved.is_empty() {
+            return Ok(());
+        }
+        let Some(index) = sinks.index.as_deref_mut() else {
+            return if retrying {
+                Ok(())
+            } else {
+                Err(FeedError::Index(FullTextError::NeedsReopen))
+            };
+        };
+        if retrying && (self.pull.is_some() || !self.waiting.is_empty()) {
+            return Ok(());
+        }
+        let mut first_error = None;
+        for plugin in std::mem::take(&mut self.unremoved) {
+            if let Err(error) = committed(index.remove_plugin(&plugin)) {
+                self.unremoved.push(plugin);
+                first_error.get_or_insert(FeedError::Index(error));
+            }
+        }
+        first_error.map_or(Ok(()), Err)
     }
 
     /// Once per session, with the index open, removes the text of every plugin the store no
@@ -299,19 +380,22 @@ impl PluginFeeds {
         let after = cursor.filter(|_| fed);
         let from_start = after.is_none();
         let answer = source
-            .request(&name.plugin, &name.feed, after)
+            .request(&name.plugin, &name.feed, after.clone())
             .map_err(FeedError::Host)?;
         self.pull = Some(Pull {
             name,
             from_start,
             answer,
+            after,
             batches: 0,
         });
         Ok(())
     }
 
     /// Asks for the next batch while the plugin has more and this announcement's budget
-    /// lasts; past it, the feed waits behind every other one.
+    /// lasts; past it, the feed waits behind every other one. A plugin that has more but
+    /// did not move its cursor would be asked the same thing forever, so its feed waits for
+    /// its next announcement instead.
     fn follow(
         &mut self,
         pull: Pull,
@@ -321,6 +405,9 @@ impl PluginFeeds {
         if !batch.more {
             return Ok(());
         }
+        if pull.after.as_deref() == Some(batch.next_cursor.as_str()) {
+            return Err(FeedError::Stalled);
+        }
         let batches = pull.batches + 1;
         if batches >= BATCHES_PER_TRIGGER {
             self.announce(pull.name);
@@ -328,12 +415,13 @@ impl PluginFeeds {
         }
         let after = Some(batch.next_cursor);
         let answer = source
-            .request(&pull.name.plugin, &pull.name.feed, after)
+            .request(&pull.name.plugin, &pull.name.feed, after.clone())
             .map_err(FeedError::Host)?;
         self.pull = Some(Pull {
             name: pull.name,
             from_start: false,
             answer,
+            after,
             batches,
         });
         Ok(())
@@ -341,8 +429,8 @@ impl PluginFeeds {
 
     /// Keeps one batch, in this order: the whole batch is checked against both tiers; the
     /// documents go to the index; the rows and the new cursor to the store, in one
-    /// transaction; only then is the feed marked as fed in the index, and the catalogue
-    /// updated as the store kept it. A failure anywhere before the store commit leaves the
+    /// transaction; the catalogue is updated as the store kept it; only then is the feed
+    /// marked as fed in the index. A failure anywhere before the store commit leaves the
     /// old cursor, so the batch is replayed, which both tiers take as a no-op where they hold
     /// it; and a pull from the start is not marked as fed until its cursor is kept, so a
     /// failure there pulls from the start again rather than on from an older cursor.
@@ -369,14 +457,15 @@ impl PluginFeeds {
             .ok_or(FeedError::Index(FullTextError::NeedsReopen))?;
         keep_documents(index, &namespace, &kept, sinks.now)?;
         let outcomes = sinks.store.commit(commit).map_err(FeedError::Store)?;
-        mark_fed(index, &namespace)?;
+        // The store holds the rows now, so the catalogue shows them even if marking fails.
         self.show_kept(
             sinks.catalogue,
             &pull.name,
             kept.clear_first,
             &rows,
             &outcomes,
-        )
+        )?;
+        mark_fed(index, &namespace)
     }
 
     /// Mirrors a committed batch in the catalogue: a cleared feed's rows leave, and each row
@@ -459,21 +548,10 @@ fn namespace(name: &FeedName) -> Result<Namespace, FeedError> {
     Namespace::plugin_feed(&name.plugin, &name.feed).map_err(|_| FeedError::Name)
 }
 
-/// An event feeds do not read, named by plugin and kind only.
-fn describe(event: &PluginEvent) -> String {
-    let (plugin, kind) = match event {
-        PluginEvent::Outcome { plugin, .. } => (Some(plugin), "a write's outcome"),
-        PluginEvent::Failed { plugin, .. } => (Some(plugin), "the plugin failed"),
-        PluginEvent::Deactivated { plugin, .. } => (Some(plugin), "the plugin stopped"),
-        PluginEvent::Cache { plugin, .. } => (plugin.as_ref(), "a compiled-code cache problem"),
-        PluginEvent::PrepareFailed { plugin, .. } => (Some(plugin), "a background compile failed"),
-        PluginEvent::FeedChanged { plugin, .. } => (Some(plugin), "a feed changed"),
-        PluginEvent::Removed { plugin } => (Some(plugin), "the plugin was removed"),
-    };
-    match plugin {
-        Some(plugin) => format!("{plugin}: {kind}"),
-        None => kind.to_owned(),
-    }
+/// Removes a plugin's text from the index; a closed index cannot, and says so.
+fn forget_text(plugin: &str, index: Option<&mut dyn FeedIndex>) -> Result<(), FeedError> {
+    let index = index.ok_or(FeedError::Index(FullTextError::NeedsReopen))?;
+    committed(index.remove_plugin(plugin)).map_err(FeedError::Index)
 }
 
 /// Commits the kept part of a batch to the feed's own namespace, which D40's page-text
@@ -508,5 +586,4 @@ fn mark_fed(index: &mut dyn FeedIndex, namespace: &Namespace) -> Result<(), Feed
 }
 
 #[cfg(test)]
-#[path = "plugin_feed_tests.rs"]
 mod tests;

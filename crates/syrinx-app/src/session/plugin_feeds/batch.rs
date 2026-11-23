@@ -40,6 +40,7 @@ pub(super) fn check(
 ) -> Result<(), FeedError> {
     syrinx_store::validate_plugin_feed_commit(commit).map_err(FeedError::Store)?;
     for change in changes {
+        // Built only to run the index's own check; nothing staged comes from these values.
         let checked = match change {
             Change::UpsertDocument(document) => {
                 fulltext::Change::Upsert(full_text_document(namespace, document, 0))

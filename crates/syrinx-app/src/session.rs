@@ -412,6 +412,8 @@ pub enum SessionError {
     PluginCache(LocationError),
     /// A plugin search feed could not be pulled or kept; it is pulled again later (#141).
     PluginFeed(plugin_feeds::FeedError),
+    /// A plugin failed in a way the owner should hear of, named by plugin and kind only (#141).
+    PluginEvent(String),
     NoActiveTab,
     /// The session worker could not take a request, or stopped before answering it.
     StorageUnavailable,
@@ -486,6 +488,7 @@ impl fmt::Display for SessionError {
             Self::PluginFeed(error) => {
                 write!(formatter, "A plugin's search feed was not indexed: {error}")
             }
+            Self::PluginEvent(event) => write!(formatter, "A plugin reported a problem: {event}"),
             Self::PluginCache(error) => {
                 write!(formatter, "Compiled plugin code cannot be kept: {error}")
             }
@@ -1131,9 +1134,9 @@ impl Worker {
                     let settled = self.settle_titles(store, false);
                     self.survival.result(settled, events)?;
                 }
-                // A pull under way wakes the loop often; the idle work keeps its own pace.
+                // A pull under way wakes the loop often; the idle work still runs on time.
                 Err(mpsc::RecvTimeoutError::Timeout) if self.plugin_feeds_busy() => {
-                    self.pump_plugin_feeds(store, events)?;
+                    self.pull_while_busy(store, events)?;
                 }
                 Err(mpsc::RecvTimeoutError::Timeout) => {
                     self.idle(store, events)?;

@@ -251,6 +251,12 @@ impl PageText {
         self.folder = None;
     }
 
+    /// Makes the daily expiry due at the next idle wake-up, for tests of what runs it.
+    #[cfg(test)]
+    pub(super) fn expiry_due_for_test(&mut self) {
+        self.expiry_due = 0;
+    }
+
     /// Restarts the open index's count; false when it is closed or the restart failed.
     fn restart_open_index(&mut self) -> bool {
         let Some(index) = self.index.as_mut() else {

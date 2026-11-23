@@ -8,7 +8,7 @@ use syrinx_store::Store;
 
 use super::{FeedSource, Sinks};
 use crate::session::{
-    SessionCommand, SessionError, SessionEvent, Worker, emit_recoverable, utc_seconds,
+    IDLE_DELAY, SessionCommand, SessionError, SessionEvent, Worker, emit_recoverable, utc_seconds,
 };
 
 /// How often the session looks for a plugin's answer while a feed is being pulled.
@@ -32,7 +32,8 @@ impl Worker {
         })
     }
 
-    /// `pull_after_command` with any source, for the session's own tests.
+    /// `pull_after_command` with any source, for the session's own tests, which stand in for
+    /// the command arm by passing `is_typing` of the command they sent.
     pub(in crate::session) fn pull_after_command_from(
         &mut self,
         typed: bool,
@@ -55,6 +56,34 @@ impl Worker {
         events: &UnboundedSender<SessionEvent>,
     ) -> Result<(), SessionError> {
         self.with_runtime(|worker, runtime| worker.pump_feeds_from(runtime, store, events))
+    }
+
+    /// The loop's wake-up while a pull is under way: moves pulling on by one batch, and first
+    /// runs the idle work once it has waited `IDLE_DELAY` behind pulling, so a plugin that
+    /// always has more never stops page-text expiry or the backup.
+    pub(in crate::session) fn pull_while_busy(
+        &mut self,
+        store: &Store,
+        events: &UnboundedSender<SessionEvent>,
+    ) -> Result<(), SessionError> {
+        self.with_runtime(|worker, runtime| {
+            worker.pull_while_busy_from(runtime, store, events, Instant::now())
+        })
+    }
+
+    /// `pull_while_busy` with any source and clock, for the session's own tests.
+    pub(in crate::session) fn pull_while_busy_from(
+        &mut self,
+        source: &mut dyn FeedSource,
+        store: &Store,
+        events: &UnboundedSender<SessionEvent>,
+        now: Instant,
+    ) -> Result<(), SessionError> {
+        if self.plugin_feeds.idle_overdue(now, IDLE_DELAY) {
+            // The runtime is out of the worker here, so the idle work's own pull does nothing.
+            self.idle(store, events)?;
+        }
+        self.pump_feeds_from(source, store, events)
     }
 
     /// Runs `step` with the session's plugin runtime as the feed source; nothing without one.
@@ -80,23 +109,41 @@ impl Worker {
         events: &UnboundedSender<SessionEvent>,
     ) -> Result<(), SessionError> {
         self.survival.operation = "pulling plugin search feeds";
-        for unread in self.plugin_feeds.notice(source.take_events()) {
-            // No reader in the session takes these yet; plugin tabs (#29) will. Each is
-            // still reported, by plugin and kind only, never with a plugin's text.
-            eprintln!("Syrinx: plugin event without a reader: {unread}");
-        }
+        self.report_plugin_events(source, events)?;
         let now = utc_seconds()?;
         let mut sinks = Sinks {
             store,
             index: self.page_text.index_mut().map(|index| index as _),
             catalogue: &mut self.catalogue,
             now,
+            at: Instant::now(),
         };
         let pumped = self.plugin_feeds.pump(source, &mut sinks);
+        if !self.plugin_feeds.busy(self.page_text.index_open()) {
+            self.plugin_feeds.idle_released();
+        }
         let Err(error) = pumped else {
             return Ok(());
         };
         emit_recoverable(events, SessionError::PluginFeed(error))
+    }
+
+    /// Hands the runtime's events to the feeds; a failure among the rest is shown in the
+    /// window, the others only logged. No reader in the session takes them yet; plugin tabs
+    /// (#29) will. Each names its plugin and kind only, never a plugin's text.
+    fn report_plugin_events(
+        &mut self,
+        source: &mut dyn FeedSource,
+        events: &UnboundedSender<SessionEvent>,
+    ) -> Result<(), SessionError> {
+        for unread in self.plugin_feeds.notice(source.take_events()) {
+            if unread.is_failure() {
+                emit_recoverable(events, SessionError::PluginEvent(unread.to_string()))?;
+            } else {
+                eprintln!("Syrinx: plugin event without a reader: {unread}");
+            }
+        }
+        Ok(())
     }
 
     /// Whether a pull should move on at the loop's next wake: one is under way, and the owner
