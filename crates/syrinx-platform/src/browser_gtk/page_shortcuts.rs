@@ -16,13 +16,6 @@ struct KeyPress {
     right_alt: bool,
 }
 
-impl KeyPress {
-    /// Whether the key may be read in a Latin layout: never while typing text or with AltGr.
-    fn may_read_latin(&self) -> bool {
-        self.control && !self.right_alt
-    }
-}
-
 /// The shared Windows table decides; GDK keys are translated to its virtual-key codes first.
 pub(super) fn shortcut_for_key(
     key: &gdk::EventKey,
@@ -53,9 +46,10 @@ fn shortcut_for_press(
         alt,
         right_alt,
     } = press;
+    // A Latin layout is read only for Ctrl keys, never while typing text or with AltGr.
     let code = match virtual_key(keyval) {
         Some(code) => code,
-        None if press.may_read_latin() => virtual_key(latin_keyval()?)?,
+        None if control && !right_alt => virtual_key(latin_keyval()?)?,
         None => return None,
     };
     peek_escape(code, control, shift, alt, peek_generation)
@@ -205,6 +199,7 @@ mod tests {
     const ALT: gdk::ModifierType = gdk::ModifierType::MOD1_MASK;
     const ALT_GR: gdk::ModifierType = gdk::ModifierType::MOD5_MASK;
 
+    /// What a key types; Shift only upper-cases, which holds for the letters the tests shift.
     fn keyval(layout: Layout, keycode: u16, shift: bool) -> Option<u32> {
         let (_, value) = layout.iter().find(|(code, _)| *code == keycode)?;
         Some(if shift { *value.to_upper() } else { **value })

@@ -1018,7 +1018,9 @@ i5-4460 / HD 4600; no budget changed.
   wrong: Burmese, `cz(rus)` and some Arabic-script Kurdish layouts carry it on
   AltGr. Source: every layout and variant in `evdev.lst`, compiled with
   libxkbcommon on 2026-11-23: 367 type `a` unshifted, and the other 230, each
-  followed by `us`, give `t` on the T key in the second group (measured); GDK
+  followed by `us`, give `t` on the T key in the second group (measured; a
+  Latin layout without an unshifted `a` would be read through another, and
+  none ships); GDK
   3.24's `gdkkeys-x11.c` (code-read). The owner's window check is pending
   (#243).
 - **GPUI's X11 backend ignores `show: false` and keeps a stale window
