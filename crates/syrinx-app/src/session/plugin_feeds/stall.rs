@@ -46,16 +46,17 @@ impl CursorHistory {
             .insert(name.clone(), std::mem::take(&mut self.asked));
     }
 
-    /// Forgets the pull's cursors. A batch kept from the feed's start, or one holding a reset,
-    /// starts the feed again, so a plugin may rightly send a cursor it sent before.
+    /// Forgets the pull's cursors. A pull from the feed's start begins it again, so a plugin
+    /// may rightly send a cursor it sent before.
     pub(super) fn clear(&mut self) {
         self.asked.clear();
         self.earlier.clear();
     }
 
-    /// Forgets what a removed plugin's feeds carried.
+    /// Forgets what a removed plugin's feeds carried, and that they stalled.
     pub(super) fn forget_plugin(&mut self, plugin: &str) {
         self.carried.retain(|name, _| name.plugin != plugin);
+        self.stalled.retain(|name| name.plugin != plugin);
     }
 
     /// Stops a feed that went round: the owner is shown its first stall this session, and the

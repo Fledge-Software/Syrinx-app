@@ -293,7 +293,7 @@ impl PluginFeeds {
     /// Asks for the next batch while the plugin has more and this announcement's budget
     /// lasts; past it, the feed waits behind every other one, carrying its cursors. A plugin
     /// that has more but sends a cursor already asked after would go round for ever, so its
-    /// feed waits for its next announcement.
+    /// feed waits for its next announcement; that holds for the budget's last batch too.
     fn follow(
         &mut self,
         pull: Pull,
@@ -303,14 +303,14 @@ impl PluginFeeds {
         if !batch.more {
             return Ok(());
         }
+        if self.history.seen(&batch.next_cursor) {
+            return self.history.report_stall(pull.name);
+        }
         let batches = pull.batches + 1;
         if batches >= BATCHES_PER_TRIGGER {
             self.history.carry(&pull.name, &batch.next_cursor);
             self.announce(pull.name);
             return Ok(());
-        }
-        if self.history.seen(&batch.next_cursor) {
-            return self.history.report_stall(pull.name);
         }
         self.history.ask(&batch.next_cursor);
         let answer = source
@@ -349,8 +349,10 @@ impl PluginFeeds {
             next_cursor: batch.next_cursor.clone(),
         };
         batch::check(&commit, &namespace, kept.changes)?;
-        // A batch from the feed's start, or holding a reset, starts the feed again.
-        if kept.clear_first {
+        // A pull from the feed's start begins it again, so cursors sent before may come again.
+        // A reset later in a pull does not clear them: a plugin answering every batch with a
+        // reset could otherwise go round for ever.
+        if pull.from_start {
             self.history.clear();
         }
         let index = sinks

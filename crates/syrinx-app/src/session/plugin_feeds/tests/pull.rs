@@ -550,3 +550,32 @@ fn a_feed_pulled_again_from_its_start_part_way_through_is_not_taken_for_going_ro
         Ok(Some(format!("{}", (last + 1) * 256)))
     );
 }
+
+#[test]
+fn a_feed_that_answers_every_batch_with_a_reset_and_more_ends_stalled() {
+    let folder = Folder::new();
+    let store = folder.store();
+    let mut index = folder.index("fulltext");
+    let mut catalogue = Catalogue::new();
+    let mut feeds = PluginFeeds::default();
+    let reset = |cursor: &str| {
+        let changes = vec![Change::Reset, entry("a", 1, "Synthetic alpha")];
+        batch(changes, cursor, true)
+    };
+    let mut plugin = Scripted::default()
+        .answer(None, reset("c1"))
+        .answer(Some("c1"), reset("c1"));
+    announce(&mut feeds);
+    let stalled = settle_with(&mut feeds, &mut plugin, &store, &mut index, &mut catalogue);
+    assert_eq!(
+        stalled,
+        Err(FeedError::Stalled {
+            plugin: PLUGIN.to_owned()
+        })
+    );
+    assert_eq!(plugin.requests, [None, Some("c1".to_owned())]);
+    assert!(
+        !feeds.busy(true),
+        "the feed is not reset again until announced"
+    );
+}
