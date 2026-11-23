@@ -811,8 +811,12 @@ fn an_index_emptied_between_two_batches_of_one_pull_is_fed_again_from_the_start(
         at: Instant::now(),
     };
     // One pump starts the pull, the next keeps the first batch and asks for the second.
-    feeds.pump(&mut plugin, &mut sinks).expect("the pull starts");
-    feeds.pump(&mut plugin, &mut sinks).expect("the first batch");
+    feeds
+        .pump(&mut plugin, &mut sinks)
+        .expect("the pull starts");
+    feeds
+        .pump(&mut plugin, &mut sinks)
+        .expect("the first batch");
     assert!(feeds.pull.is_some(), "the second batch is in flight");
 
     // A history repair empties the index while the second batch is in flight.
