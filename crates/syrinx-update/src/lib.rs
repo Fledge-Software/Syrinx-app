@@ -56,8 +56,9 @@ pub use ncrypt::{KeyStorage, StoredKey};
 pub use path::{MAX_COMPONENT_BYTES, MAX_COMPONENTS, MAX_PATH_BYTES, PackagePath};
 pub use payload::{Payload, VerifiedFile, VerifiedPayload, read_bounded};
 pub use plugin_install::{
-    Installed, ListedFile, PLUGIN_STAGING_FOLDER, PLUGINS_FOLDER, PlacedPlugin, PluginFolders,
-    PluginInstallError, PluginOffer, Publisher, StagedPlugin, stage_plugin,
+    Basis, Installed, ListedFile, PLUGIN_STAGING_FOLDER, PLUGINS_FOLDER, PlacedPlugin,
+    PluginFolders, PluginInstallError, PluginOffer, Publisher, StagedPlugin, find_pending_update,
+    open_installed, stage_plugin,
 };
 pub use plugin_package::{
     MAX_PLUGIN_ID_BYTES, PACKAGE_FILE, PACKAGE_SIGNATURE_FILE, PluginPackageList, PluginPayload,

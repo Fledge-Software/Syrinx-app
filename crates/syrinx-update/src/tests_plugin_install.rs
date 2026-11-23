@@ -8,9 +8,10 @@ use crate::cng;
 use crate::cng::test_keys::TestKeyPair;
 use crate::error::UpdateError;
 use crate::{
-    DetachedSignature, FileEntry, Installed, KeyId, PACKAGE_FILE, PACKAGE_SIGNATURE_FILE,
+    Basis, DetachedSignature, FileEntry, Installed, KeyId, PACKAGE_FILE, PACKAGE_SIGNATURE_FILE,
     PLUGIN_STAGING_FOLDER, PackagePath, PinnedKey, PluginFolders, PluginInstallError, PluginOffer,
-    PluginPackageList, Publisher, SignatureKind, StagedPlugin, Version, stage_plugin,
+    PluginPackageList, Publisher, SignatureKind, StagedPlugin, Version, find_pending_update,
+    open_installed, stage_plugin,
 };
 
 const WORLD: &str = "syrinx:plugin/plugin@0.1.0";
@@ -99,8 +100,9 @@ fn key(signer: &TestKeyPair) -> Result<PinnedKey, UpdateError> {
 fn first_install(folder: &Path, trusted: PinnedKey) -> PluginOffer<'_> {
     PluginOffer {
         folder,
-        installed: None,
-        first_use: Some(trusted),
+        basis: Basis::New {
+            trusted: Some(trusted),
+        },
         developer_mode: false,
     }
 }
@@ -108,8 +110,7 @@ fn first_install(folder: &Path, trusted: PinnedKey) -> PluginOffer<'_> {
 fn update<'a>(folder: &'a Path, installed: Installed<'a>) -> PluginOffer<'a> {
     PluginOffer {
         folder,
-        installed: Some(installed),
-        first_use: None,
+        basis: Basis::Update(installed),
         developer_mode: false,
     }
 }
@@ -259,8 +260,7 @@ fn an_unsigned_folder_needs_developer_mode_and_never_replaces_a_signed_plugin()
 
     let mut offer = PluginOffer {
         folder: &source,
-        installed: None,
-        first_use: None,
+        basis: Basis::New { trusted: None },
         developer_mode: false,
     };
     assert_eq!(
@@ -274,7 +274,7 @@ fn an_unsigned_folder_needs_developer_mode_and_never_replaces_a_signed_plugin()
 
     // A signed plugin is never replaced by an unsigned folder, even in developer mode.
     let signer = TestKeyPair::generate()?;
-    offer.installed = Some(Installed {
+    offer.basis = Basis::Update(Installed {
         id: "sample",
         version: v(1),
         publisher: Publisher::Key(key(&signer)?),
@@ -303,7 +303,7 @@ fn developer_mode_never_accepts_a_folder_signed_by_another_key() -> Result<(), U
     );
 
     // A signed update to an unsigned development plugin is a different publisher too.
-    offer.installed = Some(Installed {
+    offer.basis = Basis::Update(Installed {
         id: "sample",
         version: Version::new(0, 0, 1),
         publisher: Publisher::Unsigned,
@@ -323,8 +323,7 @@ fn a_signed_first_install_needs_the_key_the_owner_trusts() -> Result<(), UpdateE
     write_package(&source, "sample", v(1), Some(&signer))?;
     let offer = PluginOffer {
         folder: &source,
-        installed: None,
-        first_use: None,
+        basis: Basis::New { trusted: None },
         developer_mode: true,
     };
     assert_eq!(
@@ -377,12 +376,130 @@ fn a_recorded_publisher_round_trips_and_damage_is_refused() -> Result<(), Update
         Publisher::from_record(&Publisher::Unsigned.to_record()),
         Ok(Publisher::Unsigned)
     );
-    for damaged in ["", "synthetic-test-key", "p256:00", &text.to_uppercase()] {
+    let upper_hex = format!("p256:{}", text["p256:".len()..].to_uppercase());
+    for damaged in ["", "synthetic-test-key", "p256:00", &upper_hex] {
         assert_eq!(
             Publisher::from_record(damaged),
             Err(PluginInstallError::RecordedPublisher),
             "{damaged}"
         );
     }
+    Ok(())
+}
+
+/// Install `id` at `version` signed by `signer` as a first install, keeping its folder.
+fn place_new(
+    scratch: &Scratch,
+    folders: &PluginFolders,
+    version: Version,
+    signer: &TestKeyPair,
+) -> Result<(), UpdateError> {
+    let source = scratch.0.join(format!("chosen-{version}"));
+    write_package(&source, "sample", version, Some(signer))?;
+    stage_plugin(folders, &first_install(&source, key(signer)?))
+        .expect("staged")
+        .place(folders)
+        .expect("placed")
+        .keep();
+    Ok(())
+}
+
+#[test]
+fn the_installed_version_is_found_again_and_a_changed_file_is_refused() -> Result<(), UpdateError> {
+    let scratch = Scratch::new();
+    let signer = TestKeyPair::generate()?;
+    let folders = scratch.folders();
+    place_new(&scratch, &folders, v(1), &signer)?;
+    let installed = Installed {
+        id: "sample",
+        version: v(1),
+        publisher: Publisher::Key(key(&signer)?),
+    };
+
+    let found = open_installed(&folders, installed, false).expect("found again");
+    assert_eq!(found.list().version(), v(1));
+    drop(found);
+    assert!(
+        folders.version_folder("sample", v(1)).is_dir(),
+        "found again, kept"
+    );
+
+    // A record naming another plugin, or another publisher, does not match the folder.
+    let other_slot = Installed {
+        id: "other",
+        ..installed
+    };
+    assert!(open_installed(&folders, other_slot, false).is_err());
+    let stranger = TestKeyPair::generate()?;
+    let wrong_key = Installed {
+        publisher: Publisher::Key(key(&stranger)?),
+        ..installed
+    };
+    assert_eq!(
+        open_installed(&folders, wrong_key, false).err(),
+        Some(PluginInstallError::DifferentPublisher)
+    );
+
+    // A component changed after placing is refused, by `read_listed` and when found again.
+    let placed = open_installed(&folders, installed, false).expect("found again");
+    let module = folders.version_folder("sample", v(1)).join(MODULE);
+    fs::write(&module, b"\0asm changed after placing").expect("tampers");
+    assert_eq!(
+        placed.read_listed(MODULE, LIMIT).err(),
+        Some(PluginInstallError::Package(UpdateError::HashMismatch {
+            path: MODULE.to_owned()
+        }))
+    );
+    assert!(open_installed(&folders, installed, false).is_err());
+    Ok(())
+}
+
+#[test]
+fn a_held_update_is_found_again_offered_again_and_a_broken_one_removed() -> Result<(), UpdateError>
+{
+    let scratch = Scratch::new();
+    let signer = TestKeyPair::generate()?;
+    let folders = scratch.folders();
+    place_new(&scratch, &folders, v(1), &signer)?;
+    let installed = Installed {
+        id: "sample",
+        version: v(1),
+        publisher: Publisher::Key(key(&signer)?),
+    };
+    assert!(
+        find_pending_update(&folders, installed, false)
+            .expect("looked")
+            .is_none()
+    );
+
+    // An update held for the owner is its own kept folder, found again as after a restart.
+    let source = scratch.0.join("update");
+    write_package(&source, "sample", v(2), Some(&signer))?;
+    let offer = update(&source, installed);
+    stage_plugin(&folders, &offer)
+        .expect("staged")
+        .place(&folders)
+        .expect("placed")
+        .keep();
+    let pending = find_pending_update(&folders, installed, false).expect("looked");
+    assert_eq!(pending.map(|placed| placed.list().version()), Some(v(2)));
+
+    // Offering the same version again replaces it instead of getting stuck.
+    stage_plugin(&folders, &offer)
+        .expect("staged again")
+        .place(&folders)
+        .expect("placed again")
+        .keep();
+    assert_eq!(folders.versions("sample").expect("listed"), [v(1), v(2)]);
+
+    // A waiting folder that no longer verifies is removed, never offered.
+    let module = folders.version_folder("sample", v(2)).join(MODULE);
+    fs::write(&module, b"\0asm changed while waiting").expect("tampers");
+    assert!(
+        find_pending_update(&folders, installed, false)
+            .expect("looked")
+            .is_none()
+    );
+    assert_eq!(folders.versions("sample").expect("listed"), [v(1)]);
     Ok(())
 }

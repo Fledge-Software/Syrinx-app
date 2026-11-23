@@ -1,10 +1,11 @@
 //! Stages a plugin package from a folder the owner chose and places it in
-//! `Plugins/<id>/<version>/` (#140): only verified bytes are copied, and a failed step leaves
-//! no folder behind. Which publisher may sign is decided here; what the plugin asks for is the
-//! plugin host's to judge.
+//! `Plugins/<id>/<version>/` (#140): only verified bytes are copied, a failed step leaves no
+//! folder behind, and a placed folder can be verified again later from its own kept files.
+//! Whether the right publisher signed is decided here, and only here; what the plugin asks for
+//! is the plugin host's to judge.
 
 use std::fmt;
-use std::fs::{self, File};
+use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
@@ -14,12 +15,12 @@ use crate::error::UpdateError;
 use crate::install::InstallError;
 use crate::install::error::io_error;
 use crate::install::files::{
-    copy_exact, ensure_plain_directory, entry_present, prepare_destination, remove_update_folder,
-    write_new,
+    copy_exact, ensure_plain_directory, prepare_destination, remove_update_folder, write_new,
 };
 use crate::keys::{KeySet, PinnedKey};
 use crate::manifest::{FileEntry, MAX_MANIFEST_BYTES};
-use crate::payload::read_bounded;
+use crate::path::PackagePath;
+use crate::payload::{Payload, read_bounded};
 use crate::plugin_package::{
     PACKAGE_FILE, PACKAGE_SIGNATURE_FILE, PluginPackageList, read_unsigned_plugin_package,
     verify_new_plugin_package, verify_plugin_package,
@@ -68,14 +69,14 @@ impl Publisher {
     }
 }
 
-/// Why a plugin package was not staged or placed.
+/// Why a plugin package was not staged, placed or found again.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PluginInstallError {
     /// The signature, list or files were refused.
     Package(UpdateError),
     /// A file step failed or found something Syrinx did not make.
     Files(InstallError),
-    /// The update is not signed by the key recorded at first install.
+    /// The package is not signed by the publisher its install record names.
     DifferentPublisher,
     /// The folder is unsigned and developer mode is off.
     Unsigned,
@@ -83,8 +84,8 @@ pub enum PluginInstallError {
     NoPublisherKey,
     /// The install record's publisher is damaged.
     RecordedPublisher,
-    /// This version of the plugin already has a folder.
-    AlreadyPlaced { version: Version },
+    /// An installed version's folder holds another version than its record names.
+    NotRecordedVersion { recorded: Version, found: Version },
 }
 
 impl fmt::Display for PluginInstallError {
@@ -92,6 +93,7 @@ impl fmt::Display for PluginInstallError {
         match self {
             Self::Package(error) => write!(formatter, "{error}"),
             Self::Files(error) => write!(formatter, "{error}"),
+            // The one place this owner-facing sentence is written.
             Self::DifferentPublisher => {
                 formatter.write_str("This update is signed by a different publisher")
             }
@@ -99,9 +101,10 @@ impl fmt::Display for PluginInstallError {
                 .write_str("this plugin is not signed; unsigned plugins need developer mode"),
             Self::NoPublisherKey => formatter.write_str("no publisher key was given to trust"),
             Self::RecordedPublisher => formatter.write_str("the recorded publisher is damaged"),
-            Self::AlreadyPlaced { version } => {
-                write!(formatter, "version {version} is already in place")
-            }
+            Self::NotRecordedVersion { recorded, found } => write!(
+                formatter,
+                "the folder for version {recorded} holds version {found}"
+            ),
         }
     }
 }
@@ -120,15 +123,14 @@ impl From<InstallError> for PluginInstallError {
     }
 }
 
-/// A listed file's bytes and the SHA-256 they were checked against, so an install record
-/// names exactly the bytes that load.
+/// A listed file's bytes and the SHA-256 they were checked against.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ListedFile {
     pub bytes: Vec<u8>,
     pub sha256: [u8; 32],
 }
 
-/// The installed version an update replaces, as its install record names it.
+/// An installed version, as its install record names it.
 #[derive(Debug, Clone, Copy)]
 pub struct Installed<'a> {
     /// The expected slot comes from here, never from the package (#140).
@@ -137,15 +139,32 @@ pub struct Installed<'a> {
     pub publisher: Publisher,
 }
 
-/// A folder the owner chose, and what Syrinx already knows about the plugin in it.
+/// What a package is checked against.
+#[derive(Debug, Clone, Copy)]
+pub enum Basis<'a> {
+    /// A plugin new to Syrinx, with the publisher key the owner chose to trust if the folder is
+    /// signed (the package format carries only the key's identifier).
+    New { trusted: Option<PinnedKey> },
+    /// An update of the installed version: the same id, a strictly higher version, and the
+    /// recorded publisher.
+    Update(Installed<'a>),
+}
+
+/// A folder the owner chose, what it is checked against, and the owner's developer mode.
 pub struct PluginOffer<'a> {
     pub folder: &'a Path,
-    /// The install record of the version this updates; `None` for a first install.
-    pub installed: Option<Installed<'a>>,
-    /// For a first install, the publisher key the owner chose to trust; an update ignores it.
-    pub first_use: Option<PinnedKey>,
+    pub basis: Basis<'a>,
     /// The owner's developer-mode setting, off by default.
     pub developer_mode: bool,
+}
+
+/// What a folder must prove, as `check_folder` reads it.
+#[derive(Clone, Copy)]
+enum Expect<'a> {
+    New(Option<PinnedKey>),
+    Newer(Installed<'a>),
+    /// The installed version itself, found again at start-up.
+    Exactly(Installed<'a>),
 }
 
 /// The data folder's plugin folders.
@@ -183,8 +202,8 @@ impl PluginFolders {
         )?)
     }
 
-    /// Remove every version of plugin `id` but `keep`, once `keep` has activated once, so the
-    /// previous version stays for a rollback until then. A held newer version is kept too.
+    /// Remove every version of plugin `id` older than `keep`, once `keep` has activated once,
+    /// so the previous version stays for a rollback until then. A held newer version stays.
     pub fn remove_older_versions(&self, id: &str, keep: Version) -> Result<(), PluginInstallError> {
         for version in self.versions(id)? {
             if version < keep {
@@ -194,7 +213,7 @@ impl PluginFolders {
         Ok(())
     }
 
-    /// The versions with a folder for plugin `id`; a name that is not a version is ignored.
+    /// The versions with a folder for plugin `id`, oldest first; other names are ignored.
     pub fn versions(&self, id: &str) -> Result<Vec<Version>, PluginInstallError> {
         const STEP: &str = "listing a plugin's versions";
         let folder = self.plugin_folder(id);
@@ -253,15 +272,16 @@ impl StagedPlugin {
         read_listed(&self.folder, &self.list, path, limit)
     }
 
-    /// Move the staged copy to `Plugins/<id>/<version>/`. A failure leaves no folder there.
+    /// Move the staged copy to `Plugins/<id>/<version>/`, replacing a folder an earlier offer of
+    /// this same version left there. Callers never stage the installed version itself: an
+    /// update must be newer, and a new plugin has no installed version. A failure leaves no
+    /// folder there.
     pub fn place(mut self, folders: &PluginFolders) -> Result<PlacedPlugin, PluginInstallError> {
         let (id, version) = (self.list.id().to_owned(), self.list.version());
         ensure_plain_directory(&folders.plugins(), "the plugins folder")?;
         ensure_plain_directory(&folders.plugin_folder(&id), "a plugin's folder")?;
         let destination = folders.version_folder(&id, version);
-        if entry_present(&destination, "inspecting a plugin version's folder")? {
-            return Err(PluginInstallError::AlreadyPlaced { version });
-        }
+        remove_update_folder(&destination, "an earlier offer of this version")?;
         fs::rename(&self.folder, &destination).map_err(io_error("placing a plugin"))?;
         self.placed = true;
         Ok(PlacedPlugin {
@@ -279,14 +299,14 @@ impl Drop for StagedPlugin {
             return;
         }
         // The owner said no, or a check failed: nothing of the package stays.
-        if remove_update_folder(&self.folder, "a staged plugin").is_err() {
-            eprintln!("a staged plugin folder could not be removed");
+        if let Err(error) = remove_update_folder(&self.folder, "a staged plugin") {
+            eprintln!("a staged plugin folder could not be removed: {error}");
         }
     }
 }
 
-/// A package in its version folder, removed when dropped unless `keep` was called, so any
-/// failure after placing rolls the folder back.
+/// A package in its version folder. One just placed is removed when dropped unless `keep` was
+/// called, so any failure after placing rolls the folder back; one found again is kept.
 pub struct PlacedPlugin {
     folder: PathBuf,
     list: PluginPackageList,
@@ -319,141 +339,230 @@ impl Drop for PlacedPlugin {
         if self.kept {
             return;
         }
-        if remove_update_folder(&self.folder, "a placed plugin").is_err() {
-            eprintln!("a plugin version folder could not be rolled back");
+        if let Err(error) = remove_update_folder(&self.folder, "a placed plugin") {
+            eprintln!("a plugin version folder could not be rolled back: {error}");
         }
     }
 }
 
-/// Verify the package in `offer.folder` against the publisher its record or the owner trusts,
-/// then copy exactly the verified bytes into `PluginStaging` and verify the copy.
+/// Verify the package in `offer.folder` against its basis, then copy exactly the verified bytes
+/// into `PluginStaging` and verify the copy.
 pub fn stage_plugin(
     folders: &PluginFolders,
     offer: &PluginOffer<'_>,
 ) -> Result<StagedPlugin, PluginInstallError> {
-    let SignedFiles {
-        list,
-        publisher,
-        signature,
-    } = verify_signed_files(offer)?;
+    let expect = match offer.basis {
+        Basis::New { trusted } => Expect::New(trusted),
+        Basis::Update(installed) => Expect::Newer(installed),
+    };
+    let mut source = DirectoryPayload::open(offer.folder)?;
+    let files = check_package_files(&mut source, expect, offer.developer_mode)?;
     ensure_plain_directory(&folders.staging(), "the plugin staging folder")?;
     let folder = folders
         .staging()
-        .join(format!("{}-{}", list.id(), list.version()));
+        .join(format!("{}-{}", files.list.id(), files.list.version()));
     remove_update_folder(&folder, "a leftover staged plugin")?;
     fs::create_dir(&folder).map_err(io_error("creating a staged plugin"))?;
     let staged = StagedPlugin {
         folder,
-        list,
-        publisher,
+        list: files.list,
+        publisher: files.publisher,
         placed: false,
     };
-    copy_verified(offer.folder, &staged, signature.as_deref())?;
+    copy_verified(source, &staged, files.signature.as_deref())?;
     staged
         .list
         .verify_payload(DirectoryPayload::open(&staged.folder)?)?;
     Ok(staged)
 }
 
+/// The installed version's folder, verified again from its kept files against its record, so
+/// Syrinx loads at start-up only what the record names.
+pub fn open_installed(
+    folders: &PluginFolders,
+    installed: Installed<'_>,
+    developer_mode: bool,
+) -> Result<PlacedPlugin, PluginInstallError> {
+    let folder = folders.version_folder(installed.id, installed.version);
+    verify_placed(folder, Expect::Exactly(installed), developer_mode)
+}
+
+/// The update waiting for the owner, if any: the newest version folder newer than the record
+/// that still verifies against the recorded publisher. It survives a restart because it is its
+/// own signed folder; nothing about it is recorded until the owner accepts. Newer folders that
+/// no longer verify, and older waiting ones, are removed, so none is left stuck.
+pub fn find_pending_update(
+    folders: &PluginFolders,
+    installed: Installed<'_>,
+    developer_mode: bool,
+) -> Result<Option<PlacedPlugin>, PluginInstallError> {
+    let mut newer: Vec<Version> = folders
+        .versions(installed.id)?
+        .into_iter()
+        .filter(|version| *version > installed.version)
+        .collect();
+    let mut pending = None;
+    while let Some(version) = newer.pop() {
+        if pending.is_some() {
+            folders.remove_version(installed.id, version)?;
+            continue;
+        }
+        let folder = folders.version_folder(installed.id, version);
+        match verify_placed(folder, Expect::Newer(installed), developer_mode) {
+            Ok(placed) => pending = Some(placed),
+            Err(PluginInstallError::Files(error)) => return Err(error.into()),
+            Err(_) => folders.remove_version(installed.id, version)?,
+        }
+    }
+    Ok(pending)
+}
+
+/// A version folder checked in place against `expect`; it is kept when dropped.
+fn verify_placed(
+    folder: PathBuf,
+    expect: Expect<'_>,
+    developer_mode: bool,
+) -> Result<PlacedPlugin, PluginInstallError> {
+    let mut payload = DirectoryPayload::open(&folder)?;
+    let files = check_package_files(&mut payload, expect, developer_mode)?;
+    files.list.verify_payload(payload)?;
+    Ok(PlacedPlugin {
+        folder,
+        list: files.list,
+        publisher: files.publisher,
+        kept: true,
+    })
+}
+
 /// A package's checked list, who signed it, and the signature kept beside the copy so the
 /// version folder can be checked again later.
-struct SignedFiles {
+struct PackageFiles {
     list: PluginPackageList,
     publisher: Publisher,
     signature: Option<Vec<u8>>,
 }
 
-/// The package's list, checked against the publisher it must come from.
-fn verify_signed_files(offer: &PluginOffer<'_>) -> Result<SignedFiles, PluginInstallError> {
-    let package = read_signed_file(offer.folder, PACKAGE_FILE, MAX_MANIFEST_BYTES)?
+/// Read `package` and `package.sig` through the folder's held handles and check them.
+fn check_package_files<P: Payload>(
+    payload: &mut P,
+    expect: Expect<'_>,
+    developer_mode: bool,
+) -> Result<PackageFiles, PluginInstallError> {
+    let package = read_package_file(payload, PACKAGE_FILE, MAX_MANIFEST_BYTES)?
         .ok_or(InstallError::NotAPackage)?;
-    let signature = read_signed_file(offer.folder, PACKAGE_SIGNATURE_FILE, SIGNATURE_BYTES)?;
+    let signature = read_package_file(payload, PACKAGE_SIGNATURE_FILE, SIGNATURE_BYTES)?;
     let (list, publisher) = match &signature {
-        Some(signature) => verify_signed_package(offer, &package, signature)?,
-        None => read_unsigned_package(offer, &package)?,
+        Some(signature) => check_signed(&package, signature, expect)?,
+        None => check_unsigned(&package, expect, developer_mode)?,
     };
-    Ok(SignedFiles {
+    if let Expect::Exactly(installed) = expect {
+        check_recorded_version(&list, installed)?;
+    }
+    Ok(PackageFiles {
         list,
         publisher,
         signature,
     })
 }
 
-/// A signed package: an update must come from the recorded key, a first install from the
-/// key the owner chose.
-fn verify_signed_package(
-    offer: &PluginOffer<'_>,
+/// A signed package: a new plugin's must come from the key the owner chose, an installed one's
+/// from the key its record names.
+fn check_signed(
     package: &[u8],
     signature: &[u8],
+    expect: Expect<'_>,
 ) -> Result<(PluginPackageList, Publisher), PluginInstallError> {
-    let Some(installed) = offer.installed else {
-        let key = offer.first_use.ok_or(PluginInstallError::NoPublisherKey)?;
-        let keys = KeySet::new(&[key])?;
-        let verified = verify_new_plugin_package(package, signature, &keys)?;
-        return Ok((verified.list().clone(), Publisher::Key(key)));
+    let installed = match expect {
+        Expect::New(trusted) => {
+            let key = trusted.ok_or(PluginInstallError::NoPublisherKey)?;
+            let verified = verify_new_plugin_package(package, signature, &KeySet::new(&[key])?)?;
+            return Ok((verified.list().clone(), Publisher::Key(key)));
+        }
+        Expect::Newer(installed) | Expect::Exactly(installed) => installed,
     };
-    // An unsigned development plugin has no key a signed update could match.
+    // An unsigned development plugin has no key a signed package could match.
     let Publisher::Key(recorded) = installed.publisher else {
         return Err(PluginInstallError::DifferentPublisher);
     };
+    let older = match expect {
+        Expect::Newer(installed) => Some(installed.version),
+        Expect::New(_) | Expect::Exactly(_) => None,
+    };
     let keys = KeySet::new(&[recorded])?;
-    let verified = verify_plugin_package(
-        package,
-        signature,
-        &keys,
-        installed.id,
-        Some(installed.version),
-    )
-    .map_err(|error| match error {
-        UpdateError::UnknownKey => PluginInstallError::DifferentPublisher,
-        other => PluginInstallError::Package(other),
-    })?;
+    let verified =
+        verify_plugin_package(package, signature, &keys, installed.id, older).map_err(|error| {
+            match error {
+                UpdateError::UnknownKey => PluginInstallError::DifferentPublisher,
+                other => PluginInstallError::Package(other),
+            }
+        })?;
     Ok((verified.list().clone(), Publisher::Key(recorded)))
 }
 
-/// A folder without `package.sig`: only in developer mode, and never over a signed plugin.
-fn read_unsigned_package(
-    offer: &PluginOffer<'_>,
+/// A folder without `package.sig`: only in developer mode, and never for a signed plugin.
+fn check_unsigned(
     package: &[u8],
+    expect: Expect<'_>,
+    developer_mode: bool,
 ) -> Result<(PluginPackageList, Publisher), PluginInstallError> {
-    if !offer.developer_mode {
+    if !developer_mode {
         return Err(PluginInstallError::Unsigned);
     }
-    let installed = match offer.installed {
-        None => None,
-        Some(installed) if installed.publisher == Publisher::Unsigned => {
-            Some((installed.id, installed.version))
+    let rules = match expect {
+        Expect::New(_) => None,
+        Expect::Newer(installed) | Expect::Exactly(installed) => {
+            if installed.publisher != Publisher::Unsigned {
+                return Err(PluginInstallError::DifferentPublisher);
+            }
+            matches!(expect, Expect::Newer(_)).then_some((installed.id, installed.version))
         }
-        Some(_) => return Err(PluginInstallError::DifferentPublisher),
     };
-    let list = read_unsigned_plugin_package(package, installed)?;
+    let list = read_unsigned_plugin_package(package, rules)?;
     Ok((list, Publisher::Unsigned))
 }
 
-/// Read `package` or `package.sig` whole and bounded, or `None` when absent.
-fn read_signed_file(
-    folder: &Path,
+/// The installed version's folder must hold that plugin at exactly that version.
+fn check_recorded_version(
+    list: &PluginPackageList,
+    installed: Installed<'_>,
+) -> Result<(), PluginInstallError> {
+    if list.id() != installed.id {
+        return Err(UpdateError::WrongPlugin {
+            expected: installed.id.to_owned(),
+            signed: list.id().to_owned(),
+        }
+        .into());
+    }
+    if list.version() != installed.version {
+        return Err(PluginInstallError::NotRecordedVersion {
+            recorded: installed.version,
+            found: list.version(),
+        });
+    }
+    Ok(())
+}
+
+/// Read `package` or `package.sig` whole and bounded through a held handle, or `None`.
+fn read_package_file<P: Payload>(
+    payload: &mut P,
     name: &'static str,
     limit: usize,
 ) -> Result<Option<Vec<u8>>, PluginInstallError> {
-    let file = match File::open(folder.join(name)) {
-        Ok(file) => file,
-        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
-        Err(error) => return Err(io_error("reading a plugin package")(error).into()),
+    let path = PackagePath::parse(name).map_err(|_| InstallError::NotAPackage)?;
+    let Some(file) = payload.open(&path)? else {
+        return Ok(None);
     };
     Ok(Some(read_bounded(file, limit, name)?))
 }
 
 /// Copy each listed file from the handle that was hashed, then the signed files themselves.
 fn copy_verified(
-    source: &Path,
+    source: DirectoryPayload,
     staged: &StagedPlugin,
     signature: Option<&[u8]>,
 ) -> Result<(), PluginInstallError> {
     const STEP: &str = "copying a plugin into staging";
-    let mut payload = staged
-        .list
-        .verify_payload(DirectoryPayload::open(source)?)?;
+    let mut payload = staged.list.verify_payload(source)?;
     for file in payload.files_mut() {
         let entry = file.entry().clone();
         let destination = prepare_destination(&staged.folder, entry.path(), STEP)?;
@@ -476,7 +585,8 @@ fn copy_verified(
     Ok(())
 }
 
-/// A listed file read back and checked: its size and SHA-256 must be the list's.
+/// A listed file read back through a held handle and checked: its size and SHA-256 must be
+/// the list's.
 fn read_listed(
     folder: &Path,
     list: &PluginPackageList,
@@ -484,12 +594,12 @@ fn read_listed(
     limit: usize,
 ) -> Result<ListedFile, PluginInstallError> {
     let entry = listed(list, path)?;
-    let joined = entry
-        .path()
-        .as_str()
-        .split('/')
-        .fold(folder.to_path_buf(), |joined, part| joined.join(part));
-    let file = File::open(&joined).map_err(io_error("reading an installed plugin file"))?;
+    let mut payload = DirectoryPayload::open(folder)?;
+    let file = payload
+        .open(entry.path())?
+        .ok_or_else(|| UpdateError::MissingFile {
+            path: path.to_owned(),
+        })?;
     let bytes = read_bounded(file, limit, "an installed plugin file")?;
     let matches = bytes.len() as u64 == entry.size() && &cng::sha256(&bytes)? == entry.sha256();
     if !matches {
