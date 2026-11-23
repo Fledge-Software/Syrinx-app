@@ -14,7 +14,7 @@ use super::{
     choices::PaletteChoices,
     display::{
         Highlighted, PAGE_TEXT_LABEL, ROW_TEXT_LIMIT, Section, address_label, highlight,
-        page_passage, page_title, row_title, search_label,
+        page_address, page_passage, page_title, row_title, search_label,
     },
     query::{Chip, View},
 };
@@ -362,7 +362,7 @@ fn page_row(
                     .gap_3()
                     .line_height(px(PAGE_TITLE_LINE))
                     .child(row_text(title))
-                    .child(trailing_address(&page.address, &[])),
+                    .child(trailing_text(page_address(page, ROW_TEXT_LIMIT))),
             )
             .child(
                 div()
@@ -489,6 +489,11 @@ fn row_text(highlighted: Highlighted) -> Div {
 }
 
 fn trailing_address(address: &str, matches: &[std::ops::Range<usize>]) -> Div {
+    trailing_text(highlight(address, matches, ROW_TEXT_LIMIT))
+}
+
+/// Muted text after a row's name, such as its address.
+fn trailing_text(text: Highlighted) -> Div {
     div()
         .max_w(px(TRAILING_WIDTH))
         .flex_shrink(1.)
@@ -498,7 +503,7 @@ fn trailing_address(address: &str, matches: &[std::ops::Range<usize>]) -> Div {
         .text_size(px(text::SMALL))
         .text_color(rgba(theme::current().text_muted))
         .font_weight(FontWeight::NORMAL)
-        .child(styled(highlight(address, matches, ROW_TEXT_LIMIT)))
+        .child(styled(text))
 }
 
 fn section_header(section: Section) -> Div {

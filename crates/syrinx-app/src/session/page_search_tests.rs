@@ -236,6 +236,31 @@ fn rows_still_stored_are_hidden_when_the_rules_or_an_erase_forbid_them() {
 }
 
 #[test]
+fn a_page_of_one_very_long_word_sends_a_bounded_passage() {
+    let fixture = Fixture::new();
+    let (handle, mut events) = fixture.start();
+    state(&mut events);
+    send(&handle, capture(true));
+    // Tantivy's snippet keeps one token whole, however long.
+    let word = format!("longsigil{}", "x".repeat(50_000));
+    send(
+        &handle,
+        SessionCommand::StorePageText(captured("https://long.example.test/", &word)),
+    );
+    let pages = found_pages(&handle, &mut events, "longsigil");
+    assert_eq!(pages.len(), 1);
+    let page = &pages[0];
+    assert!(page.passage.len() <= 640, "{} bytes", page.passage.len());
+    assert!(
+        page.matches
+            .iter()
+            .all(|range| range.start < range.end && range.end <= page.passage.len())
+    );
+    stop(handle, &mut events);
+    fixture.cleanup();
+}
+
+#[test]
 fn a_found_page_never_shows_its_address_title_or_text_in_debug_output() {
     let page = FoundPage {
         address: "https://debug-sentinel.example.test/".to_owned(),

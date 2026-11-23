@@ -85,24 +85,39 @@ pub fn page_title(page: &FoundPage, limit: usize) -> Highlighted {
     } else {
         &page.title
     };
-    highlight(title, &[], limit)
+    highlight(&visible(title), &[], limit)
 }
 
-/// The passage of a found page's text that matched, on lines of its own: a line break or tab
-/// in the page's text becomes a space, which keeps every highlight's byte range.
+/// A found page's address, as its row shows it.
+pub fn page_address(page: &FoundPage, limit: usize) -> Highlighted {
+    highlight(&visible(&page.address), &[], limit)
+}
+
+/// The passage of a found page's text that matched, on one line with its highlights in place.
 pub fn page_passage(page: &FoundPage, limit: usize) -> Highlighted {
-    let flat: String = page
-        .passage
-        .chars()
-        .map(|character| {
-            if character.is_ascii_control() {
-                ' '
-            } else {
-                character
-            }
+    highlight(&visible(&page.passage), &page.matches, limit)
+}
+
+/// `text` without the line breaks and direction controls a page's own text can carry, which
+/// would break a row's line or reorder what it shows. Each becomes a space of the same UTF-8
+/// width, so every highlight's byte range still holds.
+fn visible(text: &str) -> String {
+    text.chars()
+        .map(|character| match character {
+            _ if character.is_ascii_control() => ' ',
+            // NEL is two bytes, as the no-break space is.
+            '\u{85}' => '\u{a0}',
+            // Line and paragraph separators, direction embeddings, overrides and isolates,
+            // and the direction marks are three bytes, as the punctuation space is.
+            '\u{2028}'
+            | '\u{2029}'
+            | '\u{202a}'..='\u{202e}'
+            | '\u{2066}'..='\u{2069}'
+            | '\u{200e}'
+            | '\u{200f}' => '\u{2008}',
+            _ => character,
         })
-        .collect();
-    highlight(&flat, &page.matches, limit)
+        .collect()
 }
 
 /// The palette's groups, in the order the design lists them.
@@ -267,6 +282,36 @@ mod tests {
         assert_eq!(&shown.text[shown.ranges[0].clone()], "recallé");
         // A page that had no title is named by its address.
         assert_eq!(page_title(&page, ROW_TEXT_LIMIT).text, page.address);
+    }
+
+    #[test]
+    fn a_found_page_row_shows_no_line_breaks_or_direction_controls() {
+        let hidden = [
+            '\u{85}', '\u{2028}', '\u{2029}', '\u{202a}', '\u{202b}', '\u{202c}', '\u{202d}',
+            '\u{202e}', '\u{2066}', '\u{2067}', '\u{2068}', '\u{2069}', '\u{200e}', '\u{200f}',
+        ];
+        let carrying: String = hidden.iter().collect();
+        let passage = format!("{carrying}before recallword{carrying}after");
+        let start = passage.find("recallword").expect("synthetic match");
+        let page = FoundPage {
+            address: format!("https://found.example.test/{carrying}"),
+            title: format!("Synthetic{carrying}title"),
+            passage,
+            matches: vec![Range {
+                start,
+                end: start + "recallword".len(),
+            }],
+        };
+        let shown = [
+            page_title(&page, ROW_TEXT_LIMIT),
+            page_address(&page, ROW_TEXT_LIMIT),
+            page_passage(&page, ROW_TEXT_LIMIT),
+        ];
+        for text in &shown {
+            assert!(!text.text.contains(&hidden[..]), "{:?}", text.text);
+        }
+        let passage = &shown[2];
+        assert_eq!(&passage.text[passage.ranges[0].clone()], "recallword");
     }
 
     #[test]

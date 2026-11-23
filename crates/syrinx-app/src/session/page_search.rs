@@ -11,6 +11,10 @@ use super::{PageTextSetting, SessionError, SessionEvent, Worker, emit, utc_secon
 /// The most pages one reply lists, under the catalogue's own rows.
 pub(super) const PAGES: usize = 5;
 
+/// The most bytes of a passage sent to the window: the 160 characters a row shows, at up to
+/// four bytes each. Tantivy keeps one long word whole, so its snippet alone is unbounded.
+const PASSAGE_BYTES: usize = 640;
+
 /// Fewer typed characters than this match too much of every page to be worth a lookup.
 const MIN_CHARACTERS: usize = 3;
 
@@ -37,13 +41,30 @@ impl fmt::Debug for FoundPage {
 
 impl From<FullTextHit> for FoundPage {
     fn from(hit: FullTextHit) -> Self {
+        let (passage, matches) = bounded(hit.snippet, hit.highlights);
         Self {
             address: hit.id,
             title: hit.title,
-            passage: hit.snippet,
-            matches: hit.highlights,
+            passage,
+            matches,
         }
     }
+}
+
+/// The passage cut to `PASSAGE_BYTES` on a character boundary, with each highlight cut to what
+/// is kept and any that starts beyond it dropped.
+fn bounded(mut passage: String, matches: Vec<Range<usize>>) -> (String, Vec<Range<usize>>) {
+    let mut end = passage.len().min(PASSAGE_BYTES);
+    while !passage.is_char_boundary(end) {
+        end -= 1;
+    }
+    passage.truncate(end);
+    let matches = matches
+        .into_iter()
+        .filter(|range| range.start < end)
+        .map(|range| range.start..range.end.min(end))
+        .collect();
+    (passage, matches)
 }
 
 /// An answered query whose pages are still to be looked up.
@@ -102,5 +123,35 @@ impl Worker {
                 pages,
             },
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_passage_of_one_very_long_word_is_cut_on_a_character_boundary() {
+        // Tantivy returns a single long token whole; "é" is two bytes, so 640 falls between.
+        let word = format!("x{}", "é".repeat(50_000));
+        let (passage, matches) = bounded(word.clone(), vec![0..word.len(), 700..800]);
+        assert!(passage.len() <= PASSAGE_BYTES);
+        assert_eq!(passage.len(), PASSAGE_BYTES - 1);
+        assert!(word.starts_with(&passage));
+        assert_eq!(
+            matches,
+            vec![Range {
+                start: 0,
+                end: passage.len()
+            }],
+            "cut to what is kept, the later one dropped"
+        );
+
+        let (short, kept) = bounded(
+            "a short passage".to_owned(),
+            vec![Range { start: 2, end: 7 }],
+        );
+        assert_eq!(short, "a short passage");
+        assert_eq!(kept, vec![Range { start: 2, end: 7 }]);
     }
 }
