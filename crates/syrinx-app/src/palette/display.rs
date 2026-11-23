@@ -6,6 +6,8 @@ use std::ops::Range;
 use syrinx_core::{AddressPrefix, TabModelSnapshot, address_prefix, live_instance};
 use syrinx_search::{SearchHit, SearchResults, Target};
 
+use crate::session::FoundPage;
+
 /// Row text is cut here so one long title cannot stall layout.
 pub const ROW_TEXT_LIMIT: usize = 160;
 
@@ -71,6 +73,36 @@ pub fn row_title(hit: &SearchHit, limit: usize) -> Highlighted {
         return highlight(&hit.address, &hit.address_matches, limit);
     }
     highlight(&hit.title, &hit.title_matches, limit)
+}
+
+/// The header over the pages found by their kept text, which follow every other group (#54).
+pub const PAGE_TEXT_LABEL: &str = "Page text";
+
+/// A found page's main text: its title, or its address when the page had none.
+pub fn page_title(page: &FoundPage, limit: usize) -> Highlighted {
+    let title = if page.title.trim().is_empty() {
+        &page.address
+    } else {
+        &page.title
+    };
+    highlight(title, &[], limit)
+}
+
+/// The passage of a found page's text that matched, on lines of its own: a line break or tab
+/// in the page's text becomes a space, which keeps every highlight's byte range.
+pub fn page_passage(page: &FoundPage, limit: usize) -> Highlighted {
+    let flat: String = page
+        .passage
+        .chars()
+        .map(|character| {
+            if character.is_ascii_control() {
+                ' '
+            } else {
+                character
+            }
+        })
+        .collect();
+    highlight(&flat, &page.matches, limit)
 }
 
 /// The palette's groups, in the order the design lists them.
@@ -215,6 +247,26 @@ mod tests {
             highlight(text, &[6..9, 0..2, 0..6], 10).ranges,
             vec![Range { start: 0, end: 9 }]
         );
+    }
+
+    #[test]
+    fn a_found_page_shows_its_passage_on_one_line_with_its_match_in_place() {
+        let passage = "first line\nthen\tthe recallé word";
+        let start = passage.find("recallé").expect("synthetic match");
+        let page = FoundPage {
+            address: "https://found.example.test/".to_owned(),
+            title: " ".to_owned(),
+            passage: passage.to_owned(),
+            matches: vec![Range {
+                start,
+                end: start + "recallé".len(),
+            }],
+        };
+        let shown = page_passage(&page, ROW_TEXT_LIMIT);
+        assert_eq!(shown.text, "first line then the recallé word");
+        assert_eq!(&shown.text[shown.ranges[0].clone()], "recallé");
+        // A page that had no title is named by its address.
+        assert_eq!(page_title(&page, ROW_TEXT_LIMIT).text, page.address);
     }
 
     #[test]

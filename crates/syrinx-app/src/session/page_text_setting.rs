@@ -198,6 +198,11 @@ impl AppliedSetting {
         self.save(store, page_text)
     }
 
+    /// The setting in force now, saved or not.
+    pub(super) fn setting(&self) -> &PageTextSetting {
+        &self.setting
+    }
+
     /// Saves again a setting the database refused; the idle step and shutdown call this.
     pub(super) fn retry(
         &mut self,

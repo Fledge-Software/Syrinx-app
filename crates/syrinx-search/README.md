@@ -127,9 +127,16 @@ feeding it again: plugin feeds (#141) must notice an emptied index, which no
 longer holds their documents, and re-feed from their source. The restart
 itself, the usual path, leaves feeds untouched.
 
-Search does not filter by age, so whoever owns the index calls `expire` at
+`search` does not filter by age, so whoever owns the index calls `expire` at
 start-up and at least daily. A feed's tombstones never expire; `reset` is how
 a feed starts afresh.
+
+`search_pages` is the palette's search of page text (#54). Unlike `search`,
+it never returns text past D40's seven days, even before `expire` has run,
+and it skips pages found only by their title. It ranks at most 64 candidates
+and excerpts only those its caller's `may_show` accepts by address and visit
+time, so a page the owner has excluded or cleared since it was stored can
+neither fill the limit nor reach a snippet.
 
 Queries match every word in the title or the body, after folding case and
 accents; `prefix_last` matches the last word as a prefix. A query returns at

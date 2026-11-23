@@ -142,13 +142,12 @@ impl FullText {
 
     /// Removes page text and tombstones past D40's seven days; returns the documents removed.
     ///
-    /// Search does not filter by age, so the owner of the index runs this at start-up and
+    /// `search` does not filter by age, so the owner of the index runs this at start-up and
     /// at least daily. `CleanupPending` means the expiry is durable but its text is still on
     /// disk; running it again then reports 0.
     pub fn expire(&mut self, now: i64) -> Result<usize, FullTextError> {
         self.require_nothing_staged()?;
-        let cutoff = now.saturating_sub(PAGE_RETENTION_SECONDS);
-        let expired = self.page_dated(Bound::Unbounded, Bound::Included(cutoff));
+        let expired = self.page_dated(Bound::Unbounded, Bound::Included(expiry_cutoff(now)));
         let removed = self.count_documents(&expired)?;
         self.stage_deletion(expired)?;
         self.commit_with(self.cleared)?;
@@ -247,6 +246,36 @@ impl FullText {
     pub fn search(&self, request: &SearchRequest) -> Result<Vec<FullTextHit>, FullTextError> {
         self.require_usable()?;
         search::run(&self.index, &self.searcher()?, &self.fields, request)
+    }
+
+    /// The pages whose text holds the owner's words, best first, the last word matched as a
+    /// start since it may be half typed (#54).
+    ///
+    /// Text past D40's seven days at `now` is never returned, even before `expire` removes it,
+    /// and nor is a page `may_show` refuses by its address and visit time.
+    pub fn search_pages(
+        &self,
+        text: &str,
+        now: i64,
+        limit: usize,
+        may_show: impl Fn(&str, i64) -> bool,
+    ) -> Result<Vec<FullTextHit>, FullTextError> {
+        self.require_usable()?;
+        let request = SearchRequest {
+            text: text.to_owned(),
+            prefix_last: true,
+            namespaces: NamespaceFilter::Only(vec![Namespace::page()]),
+            limit,
+        };
+        let kept = self.page_dated(Bound::Excluded(expiry_cutoff(now)), Bound::Unbounded);
+        search::run_pages(
+            &self.index,
+            &self.searcher()?,
+            &self.fields,
+            &request,
+            kept,
+            may_show,
+        )
     }
 
     /// Decides one change against what its key holds, and writes it if it wins.
@@ -415,6 +444,11 @@ impl FullText {
         let reader = self.reader.as_ref().ok_or(FullTextError::Engine)?;
         Ok(reader.searcher())
     }
+}
+
+/// The newest date that is past D40's seven days at `now`.
+fn expiry_cutoff(now: i64) -> i64 {
+    now.saturating_sub(PAGE_RETENTION_SECONDS)
 }
 
 /// A page clear must name a non-empty range; anything else carries no range.

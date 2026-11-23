@@ -8,7 +8,10 @@ use super::{
     display,
     query::{ChipCounts, CommandCounts, ParsedQuery},
 };
-use crate::{navigation, session::SessionError};
+use crate::{
+    navigation,
+    session::{FoundPage, SessionError},
+};
 
 #[derive(Default)]
 pub(super) struct PaletteChoices {
@@ -23,6 +26,11 @@ pub(super) struct PaletteChoices {
     /// Strong command rows, the worker's rows, then other commands; only the current request
     /// changes them.
     pub(super) results: Vec<SearchHit>,
+    /// Pages found by their kept text (#54), listed after `results`; they arrive in a reply of
+    /// their own, after the rows.
+    pub(super) pages: Vec<FoundPage>,
+    /// A refresh lost the selected page until its pages arrive again.
+    wanted_page: Option<String>,
     pub(super) selected: Option<usize>,
     refresh_selection: Option<RefreshSelection>,
     /// A problem or a wait worth one line under the rows; empty when there is nothing to say.
@@ -45,7 +53,7 @@ pub(super) struct PaletteChoices {
     pub(super) counts: ChipCounts,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 enum RefreshSelection {
     Default,
     /// The owner chose the typed row: Go to or the web search.
@@ -53,6 +61,8 @@ enum RefreshSelection {
     /// This row was chosen, by the owner or as a view's top row, so it is followed wherever it
     /// moves, and never replaced by whatever row inherits its index once it is gone.
     Target(Target),
+    /// The same, for a page found by its text, named by its address.
+    Page(String),
     Unselected,
 }
 
@@ -74,6 +84,7 @@ impl PaletteChoices {
         // Routine progress is not shown (#265); the line is kept for problems.
         self.show_refusal();
         self.results.clear();
+        self.pages.clear();
         self.awaiting_reply = true;
         self.request_id
     }
@@ -110,6 +121,7 @@ impl PaletteChoices {
         };
         self.selected = Some(0);
         self.refresh_selection = None;
+        self.wanted_page = None;
         self.moved = false;
         // Changed text replaces whatever an earlier Enter was waiting to submit.
         self.deferred = None;
@@ -119,6 +131,13 @@ impl PaletteChoices {
     fn selection(&self) -> RefreshSelection {
         if let Some(hit) = self.selected_hit() {
             return RefreshSelection::Target(hit.target);
+        }
+        if let Some(address) = self
+            .selected_page()
+            .map(|page| &page.address)
+            .or(self.wanted_page.as_ref())
+        {
+            return RefreshSelection::Page(address.clone());
         }
         if self.selected.is_none() {
             return RefreshSelection::Unselected;
@@ -148,7 +167,10 @@ impl PaletteChoices {
 
     pub(super) fn refresh(&mut self) -> u64 {
         // Repeated model changes retain intent even after the visible rows were invalidated.
-        let selection = self.refresh_selection.unwrap_or_else(|| self.selection());
+        let selection = self
+            .refresh_selection
+            .take()
+            .unwrap_or_else(|| self.selection());
         self.begin_query();
         // The typed row needs no local rows, so it stays selected while the rows reload.
         self.selected = match selection {
@@ -209,6 +231,13 @@ impl PaletteChoices {
         // A removed local selection cannot silently activate the row that inherited its index.
         self.selected = match refresh_selection {
             Some(RefreshSelection::Target(target)) => self.target_row(target),
+            // The page's own reply selects it again, if it is still found.
+            // A failed reply brings no pages, so there is nothing to wait for.
+            Some(RefreshSelection::Page(_)) if !succeeded => None,
+            Some(RefreshSelection::Page(address)) => {
+                self.wanted_page = Some(address);
+                None
+            }
             Some(RefreshSelection::Unselected) => None,
             Some(RefreshSelection::Lead) => Some(0),
             Some(RefreshSelection::Default) if !succeeded && self.lead_rows() == 0 => None,
@@ -219,6 +248,37 @@ impl PaletteChoices {
             None => Some(0),
         };
         true
+    }
+
+    /// Lists the pages found by their kept text for the current request, under its rows. A page
+    /// a refresh lost is selected again; nothing else moves, since these rows come last.
+    pub(super) fn receive_pages(&mut self, request_id: u64, pages: Vec<FoundPage>) -> bool {
+        if request_id != self.request_id || self.awaiting_reply {
+            return false;
+        }
+        self.pages = pages;
+        // A page the refresh no longer finds gives way to the typed row, as a lost row does.
+        if let Some(address) = self.wanted_page.take()
+            && self.selected.is_none()
+        {
+            self.selected = self
+                .page_row(&address)
+                .or_else(|| (self.lead_rows() > 0).then_some(0));
+        }
+        true
+    }
+
+    /// Drops the pages found by their text, so none stays in memory while the popup is hidden.
+    pub(super) fn forget_pages(&mut self) {
+        self.pages.clear();
+        self.wanted_page = None;
+    }
+
+    fn page_row(&self, address: &str) -> Option<usize> {
+        self.pages
+            .iter()
+            .position(|page| page.address == address)
+            .map(|index| index + self.lead_rows() + self.results.len())
     }
 
     fn target_row(&self, target: Target) -> Option<usize> {
@@ -234,9 +294,9 @@ impl PaletteChoices {
         usize::from(self.address.is_some() || self.web_search)
     }
 
-    /// How many selectable rows are drawn: the typed row, if any, then the results.
+    /// How many selectable rows are drawn: the typed row, if any, the results, then the pages.
     pub(super) fn row_count(&self) -> usize {
-        self.results.len() + self.lead_rows()
+        self.lead_rows() + self.results.len() + self.pages.len()
     }
 
     /// The row a screen reader hears as focused (DW-60): the selection, but only once the
@@ -251,8 +311,17 @@ impl PaletteChoices {
             .and_then(|index| self.results.get(index))
     }
 
+    /// The selected page found by its text, if a page row is selected.
+    pub(super) fn selected_page(&self) -> Option<&FoundPage> {
+        let index = self
+            .selected?
+            .checked_sub(self.lead_rows() + self.results.len())?;
+        self.pages.get(index)
+    }
+
     pub(super) fn select(&mut self, selected: usize) {
         self.selected = Some(selected);
+        self.wanted_page = None;
         self.moved = true;
         // An explicit choice while waiting supersedes the retained pre-refresh selection.
         if self.refresh_selection.is_some() {
@@ -277,7 +346,7 @@ impl PaletteChoices {
     }
 
     pub(super) fn previous(&mut self) {
-        if self.results.is_empty() && self.lead_rows() == 0 {
+        if self.row_count() == 0 {
             return;
         }
         self.move_to(
@@ -304,6 +373,15 @@ impl PaletteChoices {
             .then_some(PaletteEvent::Activate(target))
     }
 
+    /// The event a click on the page row for `address` makes, while that row is still listed.
+    pub(super) fn page_activation(&self, request_id: u64, address: &str) -> Option<PaletteEvent> {
+        if request_id != self.request_id || self.refresh_selection.is_some() {
+            return None;
+        }
+        self.page_row(address)
+            .map(|_| PaletteEvent::OpenPage(address.to_owned()))
+    }
+
     /// What Enter does now. The typed row needs no reply, so Enter on it acts at once; with no
     /// typed row and no visible row chosen, Enter waits for the reply instead.
     pub(super) fn submission(&mut self, text: String, force_search: bool) -> Option<PaletteEvent> {
@@ -322,7 +400,7 @@ impl PaletteChoices {
 
     /// The submission an Enter pressed while waiting makes, once its reply has arrived.
     pub(super) fn take_deferred(&mut self) -> Option<PaletteEvent> {
-        if self.awaiting_reply {
+        if self.awaiting_reply || self.wanted_page.is_some() {
             return None;
         }
         let text = self.deferred.take()?;
@@ -330,8 +408,10 @@ impl PaletteChoices {
     }
 
     /// Enter waits when the rows it would choose from have not arrived and nothing is chosen.
+    /// A page row a refresh is bringing back counts as not yet arrived.
     fn must_wait_for_rows(&self, force_search: bool) -> bool {
-        !force_search && self.awaiting_reply && self.selected_hit().is_none() && !self.lead_chosen()
+        let rows_pending = self.awaiting_reply || self.wanted_page.is_some();
+        !force_search && rows_pending && self.selected_hit().is_none() && !self.lead_chosen()
     }
 
     /// Whether the typed row is selected, which Enter can take before any reply.
@@ -339,17 +419,24 @@ impl PaletteChoices {
         self.selected == Some(0) && self.lead_rows() > 0
     }
 
+    /// What choosing the selected result or page row does, if one is selected.
+    fn selected_row_event(&self) -> Option<PaletteEvent> {
+        if let Some(hit) = self.selected_hit() {
+            return Some(PaletteEvent::Activate(hit.target));
+        }
+        let page = self.selected_page()?;
+        Some(PaletteEvent::OpenPage(page.address.clone()))
+    }
+
     fn decide(&self, text: String, force_search: bool) -> Option<PaletteEvent> {
         // Enter on a prefixed query only runs or opens a listed row; Alt Enter stays explicit.
         if self.prefixed && !force_search {
-            return self
-                .selected_hit()
-                .map(|hit| PaletteEvent::Activate(hit.target));
+            return self.selected_row_event();
         }
         if !force_search {
             self.selected?;
-            if let Some(hit) = self.selected_hit() {
-                return Some(PaletteEvent::Activate(hit.target));
+            if let Some(event) = self.selected_row_event() {
+                return Some(event);
             }
             if self.selected == Some(0)
                 && let Some(address) = &self.address
@@ -363,6 +450,9 @@ impl PaletteChoices {
         Some(PaletteEvent::Submit { text, force_search })
     }
 }
+
+#[cfg(test)]
+mod page_tests;
 
 #[cfg(test)]
 mod tests {

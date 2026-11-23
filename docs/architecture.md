@@ -47,7 +47,9 @@ session and the command table, with no window or browser engine in sight.
 `syrinx-store` persists it to one local **SQLite** database through
 rusqlite. `syrinx-search` ranks open tabs, saved pages, history and commands
 in memory with the frizbee fuzzy matcher on every keystroke, and holds the
-Tantivy full-text index, which is not yet fed page text (#53, planned).
+Tantivy full-text index, which holds the page text the owner chose to keep
+(#53, #54) and which the palette searches after a keystroke's ranked rows
+have gone out, and only while no newer keystroke is waiting.
 `syrinx-platform` is the only crate
 that touches WebView2 and Win32. Plugins (Notes first, then Forge) will be
 **WebAssembly components** in their own repositories, loaded and sandboxed
@@ -155,7 +157,8 @@ its `fulltext` module reads and writes files.
 - **Syrinx crates:** `syrinx-core`.
 - **Outside crates:** `frizbee` (patched) and `tantivy` 0.27.0, chosen over
   SQLite FTS5 by the P1-23 bake-off (#52). The adapter that feeds page text
-  into the index is #53.
+  into the index is #53; `FullText::search_pages` is the palette's read of it
+  (#54).
 - **Feature:** `acceptance-diagnostics`, opt-in timing output for the
   100,000-row acceptance workload.
 

@@ -2,7 +2,7 @@
 
 use std::{fmt, fs};
 
-use syrinx_core::address_within_site;
+use syrinx_core::{PageTextPolicy, address_within_site};
 use syrinx_platform::{CacheFolder, ExcludedSitesFile, WindowsDirectoryLease};
 use syrinx_search::fulltext::{
     Change, ClearRequest, ClearScope, FullText, FullTextDocument, FullTextError, Namespace,
@@ -10,6 +10,7 @@ use syrinx_search::fulltext::{
 use syrinx_store::deletion::{DeletionCategory, DeletionLog, DeletionRequest};
 use syrinx_store::{DirectoryLease, LocationError};
 
+use super::page_search::{self, FoundPage};
 use super::page_text_setting::KeptSites;
 use super::{SessionError, deletions, retention, stop};
 
@@ -132,7 +133,7 @@ impl PageText {
     /// A page visited before a clear or erase that covers it is not kept, however late its
     /// capture arrives.
     pub(super) fn store(&mut self, page: CapturedPage, now: i64) {
-        if self.fences.iter().any(|fence| fence.covers(&page)) {
+        if fenced(&self.fences, &page.address, page.visited_at) {
             return;
         }
         let Some(index) = self.index.as_mut() else {
@@ -221,6 +222,30 @@ impl PageText {
         }
         let retried = index.retry_cleanup().or_else(cleanup_later);
         self.settle(retried, "removing deleted text from the search index");
+    }
+
+    /// The pages whose kept text holds the typed words, best first (#54). A page `policy` refuses
+    /// now, or that a clear or erase made this session covers, is not found even while its row
+    /// is still stored. A failed search closes the index, as any other failure does.
+    pub(super) fn search(
+        &mut self,
+        text: &str,
+        policy: &PageTextPolicy,
+        now: i64,
+    ) -> Vec<FoundPage> {
+        let Some(index) = self.index.as_ref() else {
+            return Vec::new();
+        };
+        let may_show = |address: &str, visited_at: i64| {
+            policy.address_allowed(address).is_ok() && !fenced(&self.fences, address, visited_at)
+        };
+        match index.search_pages(text, now, page_search::PAGES, may_show) {
+            Ok(hits) => hits.into_iter().map(FoundPage::from).collect(),
+            Err(error) => {
+                self.settle(Err(SessionError::FullText(error)), page_search::SEARCHING);
+                Vec::new()
+            }
+        }
     }
 
     /// The failures to show the owner once, if any.
@@ -367,13 +392,18 @@ impl Fence {
         }
     }
 
-    fn covers(&self, page: &CapturedPage) -> bool {
-        (self.start..self.end).contains(&page.visited_at)
+    fn covers(&self, address: &str, visited_at: i64) -> bool {
+        (self.start..self.end).contains(&visited_at)
             && self
                 .site
                 .as_ref()
-                .is_none_or(|site| address_within_site(&page.address, site))
+                .is_none_or(|site| address_within_site(address, site))
     }
+}
+
+/// Whether a clear or erase made this session covers the visit.
+fn fenced(fences: &[Fence], address: &str, visited_at: i64) -> bool {
+    fences.iter().any(|fence| fence.covers(address, visited_at))
 }
 
 /// The revision for the next capture: the clock's seconds, but always past the last one, so
