@@ -2,7 +2,7 @@
 
 use std::{cmp::Reverse, collections::BTreeMap, time::Duration};
 
-use crate::{Entry, Target, field_groups::GroupId};
+use crate::{Entry, Target, field_groups::GroupId, types::KINDS};
 
 mod ranking;
 mod tests;
@@ -31,11 +31,9 @@ impl Default for Limits {
     }
 }
 
-/// Row kinds counted apart: tabs, saved pages, history, commands and plugin feed rows.
-const KINDS: usize = 5;
-
 #[derive(Clone, Copy, Eq, PartialEq, Ord, PartialOrd)]
 struct Class {
+    /// `Target::kind_index`.
     kind: usize,
     open: bool,
     frequency: u32,
@@ -44,13 +42,7 @@ struct Class {
 impl Class {
     fn new(entry: &Entry) -> Self {
         Self {
-            kind: match entry.target {
-                Target::Tab(_) => 0,
-                Target::Saved(_) => 1,
-                Target::History(_) => 2,
-                Target::Command(_) => 3,
-                Target::Plugin { .. } => 4,
-            },
+            kind: entry.target.kind_index(),
             open: entry.open,
             frequency: u32::BITS - entry.usage.visits.leading_zeros(),
         }

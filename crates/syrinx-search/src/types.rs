@@ -158,12 +158,51 @@ impl ScopeCounts {
     }
 
     pub(crate) fn include(&mut self, target: Target) {
-        match target {
-            Target::Tab(_) => self.tabs += 1,
-            Target::Saved(_) => self.saved += 1,
-            Target::History(_) => self.history += 1,
-            Target::Command(_) => self.commands += 1,
-            Target::Plugin { .. } => self.plugins += 1,
+        *self.kinds_mut()[target.kind_index()] += 1;
+    }
+
+    /// Adds counts kept per kind, in `Target::kind_index` order.
+    pub(crate) fn add_kinds(&mut self, counts: &[usize; KINDS]) {
+        for (count, added) in self.kinds_mut().into_iter().zip(counts) {
+            *count += added;
+        }
+    }
+
+    /// Adds another set of counts, as disjoint partitions sum.
+    pub(crate) fn add(&mut self, other: Self) {
+        self.add_kinds(&[
+            other.tabs,
+            other.saved,
+            other.history,
+            other.commands,
+            other.plugins,
+        ]);
+    }
+
+    /// Each kind's count, in `Target::kind_index` order.
+    fn kinds_mut(&mut self) -> [&mut usize; KINDS] {
+        [
+            &mut self.tabs,
+            &mut self.saved,
+            &mut self.history,
+            &mut self.commands,
+            &mut self.plugins,
+        ]
+    }
+}
+
+/// How many kinds of row the catalogue counts apart.
+pub(crate) const KINDS: usize = 5;
+
+impl Target {
+    /// The kind's position wherever counts are kept per kind; the one mapping from kinds.
+    pub(crate) fn kind_index(self) -> usize {
+        match self {
+            Self::Tab(_) => 0,
+            Self::Saved(_) => 1,
+            Self::History(_) => 2,
+            Self::Command(_) => 3,
+            Self::Plugin { .. } => 4,
         }
     }
 }

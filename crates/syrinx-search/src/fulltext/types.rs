@@ -81,6 +81,14 @@ impl Namespace {
         }
     }
 
+    /// The plugin a plugin feed's namespace belongs to.
+    pub(super) fn plugin(&self) -> Option<&str> {
+        match &self.0 {
+            Source::Plugin { plugin, .. } => Some(plugin),
+            Source::Page | Source::Feed(_) => None,
+        }
+    }
+
     pub(super) fn is_page(&self) -> bool {
         self.0 == Source::Page
     }
@@ -105,6 +113,17 @@ impl Namespace {
         let name = stored.strip_prefix("feed:").ok_or(FullTextError::Damaged)?;
         Self::feed(name).map_err(|_| FullTextError::Damaged)
     }
+}
+
+/// The stored spellings of one plugin's namespaces, or of every plugin's with `None`, as a
+/// half-open range: `;` follows `:` in byte order and no plugin id holds either.
+pub(super) fn plugin_spellings(plugin: Option<&str>) -> (String, String) {
+    let stem = match plugin {
+        Some(plugin) => format!("{PLUGIN_PREFIX}{plugin}:"),
+        None => PLUGIN_PREFIX.to_owned(),
+    };
+    let end = format!("{};", &stem[..stem.len() - 1]);
+    (stem, end)
 }
 
 /// A plugin id or feed name as `syrinx_core::CommandId` accepts it.
@@ -192,7 +211,8 @@ impl Change {
         }
     }
 
-    pub(super) fn validate(&self) -> Result<(), FullTextError> {
+    /// Whether `stage` would take this change at all, checked before anything is written.
+    pub fn validate(&self) -> Result<(), FullTextError> {
         let id = self.id();
         if id.is_empty() || id.len() > MAX_ID_BYTES || id.starts_with(RESERVED_ID_START) {
             return Err(FullTextError::InvalidDocument);

@@ -175,19 +175,13 @@ impl FullText {
 
     /// Removes every namespace of `plugin`, whatever feeds its manifest declared, and commits.
     ///
-    /// Plugin namespaces are spelled `plugin:{plugin}:{feed}` and a plugin id holds no `:`, so
-    /// the stored spellings from `plugin:{plugin}:` up to the next character after `:` are
-    /// exactly this plugin's: never another plugin's, a `Namespace::feed` or page text.
+    /// The range of this plugin's stored spellings (`types::plugin_spellings`) is exactly its
+    /// own: never another plugin's, a `Namespace::feed` or page text.
     pub fn remove_plugin(&mut self, plugin: &str) -> Result<(), FullTextError> {
         self.require_nothing_staged()?;
-        let namespace = |bound: char| {
-            let spelling = format!("{}{plugin}{bound}", types::PLUGIN_PREFIX);
-            Term::from_field_text(self.fields.namespace, &spelling)
-        };
-        let own = RangeQuery::new(
-            Bound::Included(namespace(':')),
-            Bound::Excluded(namespace(';')),
-        );
+        let (start, end) = types::plugin_spellings(Some(plugin));
+        let term = |spelling: &str| Term::from_field_text(self.fields.namespace, spelling);
+        let own = RangeQuery::new(Bound::Included(term(&start)), Bound::Excluded(term(&end)));
         self.stage_deletion(BooleanQuery::new(vec![(
             Occur::Must,
             Box::new(own) as Box<dyn Query>,
@@ -199,22 +193,18 @@ impl FullText {
     /// after its removal can be found without its manifest.
     pub fn plugin_ids(&self) -> Result<BTreeSet<String>, FullTextError> {
         self.require_usable()?;
-        let prefix = types::PLUGIN_PREFIX;
-        // `;` follows `:` in byte order, so this range is exactly the `plugin:` spellings.
-        let end = format!("{}{}", &prefix[..prefix.len() - 1], ';');
+        let (start, end) = types::plugin_spellings(None);
         let mut plugins = BTreeSet::new();
         for segment in self.searcher()?.segment_readers() {
             let namespaces = segment.inverted_index(self.fields.namespace)?;
-            let mut terms = namespaces
-                .terms()
-                .range()
-                .ge(prefix)
-                .lt(&end)
-                .into_stream()?;
+            let terms = namespaces.terms().range().ge(&start).lt(&end);
+            let mut terms = terms.into_stream()?;
             while terms.advance() {
                 let spelling =
                     std::str::from_utf8(terms.key()).map_err(|_| FullTextError::Damaged)?;
-                plugins.insert(plugin_of(spelling)?.to_owned());
+                let namespace = Namespace::from_stored(spelling)?;
+                let plugin = namespace.plugin().ok_or(FullTextError::Damaged)?;
+                plugins.insert(plugin.to_owned());
             }
         }
         Ok(plugins)
@@ -509,15 +499,6 @@ impl FullText {
         let reader = self.reader.as_ref().ok_or(FullTextError::Engine)?;
         Ok(reader.searcher())
     }
-}
-
-/// The plugin id a stored `plugin:{plugin}:{feed}` spelling names.
-fn plugin_of(spelling: &str) -> Result<&str, FullTextError> {
-    let pair = spelling
-        .strip_prefix(types::PLUGIN_PREFIX)
-        .ok_or(FullTextError::Damaged)?;
-    let (plugin, _) = pair.split_once(':').ok_or(FullTextError::Damaged)?;
-    Ok(plugin)
 }
 
 /// A page clear must name a non-empty range; anything else carries no range.
