@@ -20,9 +20,9 @@ the fork (Syrinx launching a program a plugin names); #280, the slice that
 gives the Notes plugin HTTP to one owner-approved address, the fork's; #281,
 the slice that hardens the fork's defaults (loopback only, Syrinx-issued
 credentials, and a changes endpoint, an HTTP route that tells the Notes plugin
-which notes changed since it last asked); and #283, packaging. Where this file says what those slices should
-do, it is a recommendation; their scope is the owner's, and the proposals are
-gathered under "Needs the owner".
+which notes changed since it last asked); and #283, packaging. Where this
+file says what those slices should do, it is a recommendation; their scope
+is the owner's, and the proposals are gathered under "Needs the owner".
 
 **Where the decision is recorded.** Epic #277 says the owner's decision is
 recorded in `docs/decisions.md` under 2026-11-23. On `main` at the time of
@@ -236,12 +236,13 @@ from the shipping apps at all).
   licence is copyleft; the Eclipse Public License is the weaker one, a
   module-level copyleft that covers changes to elkjs itself.
 - **`lightningcss@1.33.0` and its eleven platform binaries, MPL-2.0
-  (upper only, a build tool):** a CSS compiler used while building. MPL-2.0 is Syrinx's own
-  licence and file-level; it matters only if it ships, which a build tool
-  does not.
+  (upper only, a build tool):** a CSS compiler used while building. MPL-2.0
+  is Syrinx's own licence and file-level; it matters only if it ships,
+  which a build tool does not.
 - **No licence in the registry metadata:** `buffers@0.1.1` and
   `khroma@2.1.0` (ships), `color-convert@0.5.3` and `exif-parser@0.1.12`
-  (upper only), `union@0.5.0` (outside). Their repositories were not checked.
+  (upper only), `union@0.5.0` (outside). Their repositories were not
+  checked.
 - **`@img/sharp-*@0.35.5` and `@img/sharp-libvips-*@1.3.4`,
   LGPL-3.0-or-later alone or with Apache-2.0 and MIT (14 packages,
   outside):** the libvips image library's prebuilt binaries for the sharp
@@ -324,9 +325,9 @@ months, eight minor and seven patch releases: `v0.100.0` (2025-12-05),
 `v0.101.0` to `v0.101.3` (2025-12-25 to 2026-01-08), `v0.102.0` to
 `v0.102.2` (2026-03-01 to 2026-04-05), `v0.103.0` (2026-05-13), `v0.104.0`
 and `v0.104.1` (2026-07-18 and 2026-07-25), `v0.105.0` (2026-08-19),
-`v0.106.0` and `v0.106.1` (2026-09-25 and 2026-10-23) and `v0.107.0` (2026-11-08), with
-`v0.108.0-rc.1` on 2026-11-21. That is a minor release roughly every six
-weeks for the fork to merge.
+`v0.106.0` and `v0.106.1` (2026-09-25 and 2026-10-23) and `v0.107.0`
+(2026-11-08), with `v0.108.0-rc.1` on 2026-11-21. That is a minor release
+roughly every six weeks for the fork to merge.
 
 **Security policy.** `SECURITY.md` (at `v0.107.0`) asks for reports through
 GitHub's private security advisories, promises a first answer within 7 days
