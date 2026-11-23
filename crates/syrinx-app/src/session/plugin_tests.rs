@@ -33,11 +33,19 @@ pub(super) fn full_component() -> &'static [u8] {
 pub(super) fn registered_fixture(
     registry: &mut PluginRegistry,
 ) -> &syrinx_plugin_host::RegisteredPlugin {
+    registered_fixture_requiring_storage(registry, false)
+}
+
+/// `registered_fixture`, with `storage` marked `required` or not.
+pub(super) fn registered_fixture_requiring_storage(
+    registry: &mut PluginRegistry,
+    required: bool,
+) -> &syrinx_plugin_host::RegisteredPlugin {
     let mut text = fs::read_to_string(fixture_workspace().join("full").join(MANIFEST_FILE))
         .expect("the fixture's manifest");
-    text.push_str(
-        "\n[[capabilities]]\nkind = \"storage\"\nreason = \"Keeps synthetic settings.\"\nrequired = false\n",
-    );
+    text.push_str(&format!(
+        "\n[[capabilities]]\nkind = \"storage\"\nreason = \"Keeps synthetic settings.\"\nrequired = {required}\n",
+    ));
     let manifest =
         PluginManifest::parse(text.as_bytes(), DiscoveryOptions::default()).expect("manifest");
     let lines = SignedIdentity::from_signed_lines(manifest.id(), manifest.version(), WORLD);

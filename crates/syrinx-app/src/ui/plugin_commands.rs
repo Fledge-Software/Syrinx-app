@@ -10,36 +10,39 @@ impl BrowserView {
     pub(super) fn run_plugin_command(&mut self, plugin: &str, command: &str) {
         // Today `PaletteEvent::Run` has already ended the entry, so a form cannot be shown.
         let in_palette = self.palette.is_some();
-        let call = self.plugin_commands.choose(plugin, command, in_palette);
-        self.tell_plugin_notice();
+        let (call, forgotten) = self.plugin_commands.choose(plugin, command, in_palette);
+        self.tell_plugin_notice(forgotten);
         self.command(SessionCommand::Plugin(call));
     }
 
-    /// The palette entry ended: its form is dropped, while a call that may write is kept.
-    pub(super) fn abandon_plugin_form(&mut self) {
-        self.plugin_commands.abandon();
-        self.tell_plugin_notice();
+    /// The palette entry ended: its form is dropped, while a call that may write is kept. The
+    /// text is for a set-aside call forgotten to make room, for the caller to show.
+    pub(super) fn abandon_plugin_form(&mut self) -> Option<String> {
+        self.plugin_commands.abandon().map(notice_text)
     }
 
-    /// What the model has to say by itself, such as a forgotten call.
-    fn tell_plugin_notice(&mut self) {
-        if let Some(notice) = self.plugin_commands.take_notice() {
+    /// A plugin's worker stopped; a form still waiting on it is told so.
+    pub(super) fn plugin_stopped(&mut self, plugin: &str) {
+        let notice = self.plugin_commands.plugin_stopped(plugin);
+        self.tell_plugin_notice(notice);
+    }
+
+    fn tell_plugin_notice(&mut self, notice: Option<Notice>) {
+        if let Some(notice) = notice {
             self.message = notice_text(notice);
         }
     }
 
     /// The session's answer to a plugin call; one for an abandoned command changes nothing.
     pub(super) fn plugin_answered(&mut self, answer: PluginAnswer) {
-        if let Some(notice) = self.plugin_commands.receive(answer) {
-            self.message = notice_text(notice);
-        }
+        let notice = self.plugin_commands.receive(answer);
+        self.tell_plugin_notice(notice);
     }
 
     /// The outcome of a submission that answered pending, if it is still the one awaited.
     pub(super) fn plugin_outcome(&mut self, late: LateOutcome) {
-        if let Some(notice) = self.plugin_commands.receive_outcome(late) {
-            self.message = notice_text(notice);
-        }
+        let notice = self.plugin_commands.receive_outcome(late);
+        self.tell_plugin_notice(notice);
     }
 }
 
@@ -60,9 +63,13 @@ fn notice_text(notice: Notice) -> String {
         }
         Notice::Invalid(error) => format!("{}: {}", error.name, error.message),
         Notice::Pending => "Sent; waiting for the plugin to finish.".to_owned(),
-        Notice::Forgotten => {
-            "An earlier plugin command may have happened; check before trying again.".to_owned()
-        }
+        Notice::Forgotten {
+            may_have_written: true,
+        } => "It may have happened; check before trying again.".to_owned(),
+        Notice::Forgotten {
+            may_have_written: false,
+        } => "Its result can no longer be shown.".to_owned(),
+        Notice::SetAside { command, notice } => format!("{command}: {}", notice_text(*notice)),
     }
 }
 
@@ -122,8 +129,29 @@ mod tests {
             ),
             (Notice::Pending, "Sent; waiting for the plugin to finish."),
             (
-                Notice::Forgotten,
-                "An earlier plugin command may have happened; check before trying again.",
+                Notice::SetAside {
+                    command: "New item".to_owned(),
+                    notice: Box::new(Notice::Forgotten {
+                        may_have_written: true,
+                    }),
+                },
+                "New item: It may have happened; check before trying again.",
+            ),
+            (
+                Notice::SetAside {
+                    command: "test.new-item".to_owned(),
+                    notice: Box::new(Notice::Forgotten {
+                        may_have_written: false,
+                    }),
+                },
+                "test.new-item: Its result can no longer be shown.",
+            ),
+            (
+                Notice::SetAside {
+                    command: "test.echo".to_owned(),
+                    notice: Box::new(Notice::Outcome(Outcome::Done(None))),
+                },
+                "test.echo: Done.",
             ),
             (
                 Notice::Invalid(FieldError {

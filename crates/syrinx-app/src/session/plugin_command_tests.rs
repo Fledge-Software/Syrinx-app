@@ -13,7 +13,8 @@ use syrinx_plugin_host::manifest::CapabilityKind;
 use syrinx_plugin_host::owner::OwnerRuntime;
 
 use super::plugin_tests::{
-    create_database, full_component, install_record, registered_fixture, started,
+    create_database, full_component, install_record, registered_fixture,
+    registered_fixture_requiring_storage, started,
 };
 use super::*;
 
@@ -81,7 +82,10 @@ impl Route {
         }
     }
 
-    /// The next answer, passing over word that a plugin stopped, which its own tests check.
+    /// The next answer. A plugin's worker reports its stop after the answers it sent, so word of
+    /// a stop can fall between answers here; `an_answer_reaches_the_window_ahead_of_its_own_outcome`
+    /// and `a_pending_outcome_after_another_command_was_chosen_reaches_only_the_status_line`
+    /// read it explicitly.
     fn answer(&mut self) -> PluginAnswer {
         loop {
             match self.next_event() {
@@ -101,7 +105,7 @@ impl Route {
 
     /// Choose the test plugin's form command in an open palette and see its form open.
     fn open_form(&mut self) {
-        let call = self.commands.choose("test", "test.new-item", true);
+        let call = self.commands.choose("test", "test.new-item", true).0;
         let notice = self.exchange(call);
         let title = "New item".to_owned();
         assert_eq!(notice, Some(Notice::FormReady { title }));
@@ -142,6 +146,14 @@ impl Route {
     }
 }
 
+/// `notice`, named for the set-aside call `command`.
+fn set_aside(command: &str, notice: Notice) -> Notice {
+    Notice::SetAside {
+        command: command.to_owned(),
+        notice: Box::new(notice),
+    }
+}
+
 fn host_failure(message: &str) -> Failure {
     Failure {
         kind: FailureKind::Host,
@@ -161,7 +173,7 @@ fn validate(token: u64, values: Vec<FieldValue>) -> PluginCall {
 #[test]
 fn a_command_without_a_form_runs_and_one_with_a_form_opens_it() {
     let mut route = Route::new();
-    let call = route.commands.choose("test", "test.echo", true);
+    let call = route.commands.choose("test", "test.echo", true).0;
     assert_eq!(
         route.exchange(call),
         Some(Notice::Outcome(Outcome::Done(None)))
@@ -171,7 +183,7 @@ fn a_command_without_a_form_runs_and_one_with_a_form_opens_it() {
     let form = route.commands.form().expect("open");
     assert_eq!(form.spec().fields.len(), 10);
     assert_eq!(form.spec().submit_label, "Create");
-    let call = route.commands.choose("test", "test.fail", true);
+    let call = route.commands.choose("test", "test.fail", true).0;
     let failure = Failure {
         kind: FailureKind::InvalidInput,
         message: "synthetic failure".to_owned(),
@@ -188,7 +200,7 @@ fn a_form_chosen_after_the_palette_closed_is_told_on_the_status_line() {
     let mut route = Route::new();
     // `PaletteEvent::Run` ends the entry before the command is chosen.
     route.commands.abandon();
-    let call = route.commands.choose("test", "test.new-item", false);
+    let call = route.commands.choose("test", "test.new-item", false).0;
     let title = "New item".to_owned();
     assert_eq!(route.exchange(call), Some(Notice::FormNotShown { title }));
     assert!(route.commands.form().is_none());
@@ -343,7 +355,10 @@ fn a_closed_palettes_submission_still_reports_its_own_outcome() {
     route.commands.abandon();
     let answer = route.answer();
     let done = Outcome::Done(Some("created Ada".to_owned()));
-    assert_eq!(route.commands.receive(answer), Some(Notice::Outcome(done)));
+    assert_eq!(
+        route.commands.receive(answer),
+        Some(set_aside("New item", Notice::Outcome(done)))
+    );
     assert!(route.commands.form().is_none());
     route.close();
 }
@@ -410,15 +425,20 @@ fn a_pending_outcome_after_another_command_was_chosen_reaches_only_the_status_li
     let mut route = Route::new();
     route.pending();
     // The owner moves on to another command before the outcome arrives.
-    let other = route.commands.choose("test", "test.echo", true);
+    let other = route.commands.choose("test", "test.echo", true).0;
     route.runtime().remove("test").expect("removed");
     let SessionEvent::PluginOutcome(late) = route.next_event() else {
         panic!("the settled write");
     };
     let notice = route.commands.receive_outcome(late);
-    let Some(Notice::Outcome(Outcome::Uncertain(_))) = notice else {
+    let Some(Notice::SetAside { command, notice }) = notice else {
         panic!("the closed submission is still told: {notice:?}");
     };
+    assert_eq!(command, "New item");
+    assert!(
+        matches!(*notice, Notice::Outcome(Outcome::Uncertain(_))),
+        "{notice:?}"
+    );
     assert!(route.commands.form().is_none());
     assert!(matches!(
         route.next_event(),
@@ -453,7 +473,7 @@ fn a_plugin_command_reaches_the_session_and_fails_plainly_when_its_plugin_is_not
     let (handle, mut events) = fixture.start();
     state(&mut events);
     let mut commands = PluginCommands::default();
-    let call = commands.choose("test", "test.echo", false);
+    let call = commands.choose("test", "test.echo", false).0;
     send(&handle, SessionCommand::Plugin(call));
     let answer = loop {
         match next_any_event(&mut events) {
@@ -492,9 +512,43 @@ fn a_submission_closed_before_it_answered_pending_still_hears_its_settled_outcom
         panic!("the settled write");
     };
     let notice = route.commands.receive_outcome(late);
-    let Some(Notice::Outcome(Outcome::Uncertain(_))) = notice else {
+    let Some(Notice::SetAside { command, notice }) = notice else {
         panic!("the closed submission is told it may have happened: {notice:?}");
     };
+    assert_eq!(command, "New item");
+    assert!(
+        matches!(*notice, Notice::Outcome(Outcome::Uncertain(_))),
+        "{notice:?}"
+    );
     assert!(route.commands.form().is_none());
     route.close();
+}
+
+#[test]
+fn a_call_refused_before_it_was_queued_is_told_the_hosts_reason() {
+    let fixture = Fixture::new();
+    create_database(&fixture);
+    let (store, mut plugins) = started(&fixture);
+    let mut registry = PluginRegistry::new();
+    // `storage` is required and not granted, so the worker refuses to start for any call.
+    let registered = registered_fixture_requiring_storage(&mut registry, true);
+    plugins
+        .runtime
+        .install(registered, Arc::from(full_component()), install_record())
+        .expect("installed");
+    let (sender, mut receiver) = unbounded();
+    let mut commands = PluginCommands::default();
+    let (call, _) = commands.choose("test", "test.echo", true);
+    plugin_commands::start(Some(&mut plugins.runtime), call, &sender);
+    let Ok(SessionEvent::Plugin(answer)) = receiver.try_recv() else {
+        panic!("the refusal is answered at once, on the session's thread");
+    };
+    let failure = host_failure("Syrinx refused the request before the plugin saw it.");
+    assert_eq!(
+        commands.receive(answer),
+        Some(Notice::Outcome(Outcome::Failed(failure)))
+    );
+    assert!(receiver.try_recv().is_err(), "told once");
+    assert_eq!(plugins::close(Some(plugins), store), Ok(()));
+    fixture.cleanup();
 }

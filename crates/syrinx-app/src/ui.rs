@@ -882,9 +882,7 @@ impl BrowserView {
             SessionEvent::UpdateSnapshot(result) => self.update_snapshot_taken(result, cx),
             SessionEvent::Plugin(answer) => self.plugin_answered(answer),
             SessionEvent::PluginOutcome(late) => self.plugin_outcome(late),
-            SessionEvent::PluginStopped { plugin } => {
-                self.plugin_commands.plugin_stopped(&plugin);
-            }
+            SessionEvent::PluginStopped { plugin } => self.plugin_stopped(&plugin),
             SessionEvent::Usage { status, problem } => {
                 self.usage_status_received(status, problem);
             }

@@ -48,10 +48,11 @@ pub(super) fn start(
     let has_form = runtime
         .as_deref()
         .and_then(|runtime| runtime.command_has_form(&plugin, &command));
-    let asked = Asked::of(&kind, has_form == Some(true));
-    let reply = Reply::new(token, asked, events.clone());
+    let asked = Asked::of(kind, has_form == Some(true));
+    let failed = asked.failure();
+    let reply = Reply::new(token, failed, events.clone());
     let (Some(runtime), Some(_)) = (runtime, has_form) else {
-        return reply.send(asked.failed(host_failure(NOT_AVAILABLE)));
+        return reply.send(failed(host_failure(NOT_AVAILABLE)));
     };
     // The job and this thread share the reply: the job takes it when it runs, and if the job
     // is dropped unrun the last holder's drop says so.
@@ -60,7 +61,7 @@ pub(super) fn start(
     let job = move |session: &mut Session<StoreServices>| {
         if let Some(mut reply) = take(&held) {
             reply.progress = Progress::Running;
-            let answered = answer(session, &command, kind, asked, &mut reply);
+            let answered = answer(session, &command, asked, &mut reply);
             reply.send(answered);
         }
         Ok(())
@@ -71,7 +72,7 @@ pub(super) fn start(
         // Refused before it was queued: the host's reason is the answer.
         Err(refused) => {
             if let Some(reply) = take(&reply) {
-                reply.send(asked.failed(host_reason(&refused, false)));
+                reply.send(failed(host_reason(&refused, false)));
             }
         }
     }
@@ -110,32 +111,36 @@ pub(super) fn watch_outcomes(runtime: &OwnerRuntime, events: &UnboundedSender<Se
     });
 }
 
-/// Which export a call reaches, which decides what an answer that never came means.
-#[derive(Clone, Copy)]
+/// The export a call reaches, with the values it carries.
 enum Asked {
     Run,
     Form,
-    Validate,
-    Submit,
+    Validate(Vec<FieldValue>),
+    Submit(Vec<FieldValue>),
 }
 
+/// How a call says it failed without effect.
+type Failed = fn(Failure) -> PluginReply;
+
 impl Asked {
-    fn of(kind: &CallKind, has_form: bool) -> Self {
+    fn of(kind: CallKind, has_form: bool) -> Self {
         match kind {
             CallKind::Choose if has_form => Self::Form,
             CallKind::Choose => Self::Run,
-            CallKind::Validate(_) => Self::Validate,
-            CallKind::Submit(_) => Self::Submit,
+            CallKind::Validate(values) => Self::Validate(values),
+            CallKind::Submit(values) => Self::Submit(values),
         }
     }
 
     /// This call's reply when it failed without effect.
-    fn failed(self, failure: Failure) -> PluginReply {
+    fn failure(&self) -> Failed {
         match self {
-            Self::Run => PluginReply::Ran(Err(failure)),
-            Self::Form => PluginReply::Form(Err(failure)),
-            Self::Validate => PluginReply::Validated(Err(failure)),
-            Self::Submit => PluginReply::Submitted(Submitted::Finished(Outcome::Failed(failure))),
+            Self::Run => |failure| PluginReply::Ran(Err(failure)),
+            Self::Form => |failure| PluginReply::Form(Err(failure)),
+            Self::Validate(_) => |failure| PluginReply::Validated(Err(failure)),
+            Self::Submit(_) => {
+                |failure| PluginReply::Submitted(Submitted::Finished(Outcome::Failed(failure)))
+            }
         }
     }
 }
@@ -144,7 +149,7 @@ impl Asked {
 /// far the job got (`Progress`).
 struct Reply {
     token: u64,
-    asked: Asked,
+    failed: Failed,
     events: UnboundedSender<SessionEvent>,
     progress: Progress,
     sent: bool,
@@ -162,10 +167,10 @@ enum Progress {
 }
 
 impl Reply {
-    fn new(token: u64, asked: Asked, events: UnboundedSender<SessionEvent>) -> Self {
+    fn new(token: u64, failed: Failed, events: UnboundedSender<SessionEvent>) -> Self {
         Self {
             token,
-            asked,
+            failed,
             events,
             progress: Progress::Queued,
             sent: false,
@@ -173,6 +178,11 @@ impl Reply {
     }
 
     fn send(mut self, reply: PluginReply) {
+        self.emit(reply);
+    }
+
+    /// The one way a reply reaches the window, once.
+    fn emit(&mut self, reply: PluginReply) {
         self.sent = true;
         let answer = PluginAnswer {
             token: self.token,
@@ -190,15 +200,11 @@ impl Drop for Reply {
         // `Running` and `Submitting` are reached only by unwinding out of the job, which no
         // test can cause; they are an untested safety net.
         let reply = match self.progress {
-            Progress::Queued => self.asked.failed(host_failure(NOT_SENT)),
-            Progress::Running => self.asked.failed(host_failure(STOPPED)),
+            Progress::Queued => (self.failed)(host_failure(NOT_SENT)),
+            Progress::Running => (self.failed)(host_failure(STOPPED)),
             Progress::Submitting => may_have_happened(),
         };
-        let answer = PluginAnswer {
-            token: self.token,
-            reply,
-        };
-        tell(&self.events, SessionEvent::Plugin(answer));
+        self.emit(reply);
     }
 }
 
@@ -213,23 +219,14 @@ fn tell(events: &UnboundedSender<SessionEvent>, event: SessionEvent) {
 fn answer(
     session: &mut Session<StoreServices>,
     command: &str,
-    kind: CallKind,
     asked: Asked,
     reply: &mut Reply,
 ) -> PluginReply {
     match asked {
         Asked::Run => ran(session, command),
         Asked::Form => form(session, command),
-        Asked::Validate => validated(session, command, &values_of(kind)),
-        Asked::Submit => submitted(session, command, &values_of(kind), reply),
-    }
-}
-
-/// The values a validation or a submission carries.
-fn values_of(kind: CallKind) -> Vec<FieldValue> {
-    match kind {
-        CallKind::Validate(values) | CallKind::Submit(values) => values,
-        CallKind::Choose => Vec::new(),
+        Asked::Validate(values) => validated(session, command, &values),
+        Asked::Submit(values) => submitted(session, command, &values, reply),
     }
 }
 
