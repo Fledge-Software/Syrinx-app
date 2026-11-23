@@ -333,8 +333,8 @@ list could not be read:
 
 - `v0.101.0` and `v0.101.1` each note a reported vulnerability fixed, with
   details withheld.
-- `v0.102.2` says it "contains important security fixes" for content
-  handling and the desktop app.
+- `v0.102.2` is described as an important security release, with fixes
+  in content handling and the desktop app.
 - `v0.103.0` names two low-severity advisories: an SQL injection through a
   URL parameter (GHSA-64fm-4j23-99j2) and a stored cross-site scripting flaw
   in the share index page (GHSA-97mx-2qjm-qhfx).
@@ -344,8 +344,8 @@ list could not be read:
   for the server that updates Node.js for a Brotli decoder out-of-bounds
   write which, the notes say, any client that could reach the server could
   trigger before authentication.
-- `v0.107.0` updates Node.js for the same issue and fixes "a few low and
-  medium-priority security reports regarding ETAPI", Trilium's external API.
+- `v0.107.0` updates Node.js for the same issue and fixes several low- and
+  medium-severity reports against ETAPI, Trilium's external API.
 
 The record shows an active project that fixes and discloses security
 problems, and also a large attack surface: a server that parses untrusted
@@ -434,8 +434,8 @@ Notes on the tables:
   recommendation for #281 is to initialise the database and set the
   Syrinx-issued credential before the listener opens, or to keep these routes
   closed until then.
-- **`/custom/*path`.** `server/routes/custom.ts` mounts it for every method,
-  "explicitly" without CSRF protection, and `core/routes/custom.ts` answers
+- **`/custom/*path`.** `server/routes/custom.ts` mounts it for every method
+  and deliberately leaves out CSRF protection, and `core/routes/custom.ts` answers
   from the first note labelled `#customRequestHandler` or
   `#customResourceProvider` whose pattern matches. A resource provider
   serves the note's content to anyone, with no login, and is not gated by
