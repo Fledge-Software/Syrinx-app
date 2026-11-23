@@ -1149,16 +1149,17 @@ uses its own tree. Still use a private target directory for each worktree.
 
 ## Storage
 
-- **A migration that alters a version 1 table or adds a view breaks the
-  recovery tests' flat-schema downgrade, and the store's own tests never see
-  it.** `storage/recovery/tests.rs` in `syrinx-platform` reads
-  `syrinx_store::SCHEMA_VERSION` and the backup's own `sqlite_master`, so a
-  bump that only adds tables needs no edit there; it keeps only the version
-  1 list `FLAT_SCHEMA_TABLES` and drops every other table with foreign keys
-  off. Change `downgrade_to_flat_schema` with such a migration, and after any
-  bump run `cargo test -p syrinx-platform recovery`, not only
-  `-p syrinx-store`: no Linux CI job runs it. Source: #137's Windows CI run
-  on 83c48a5, which failed while these tests still hard-coded the version and
+- **A migration that alters a version 1 table, or adds an index, trigger or
+  view on one, breaks the recovery tests' flat-schema downgrade, and the
+  store's own tests never see it.** `storage/recovery/tests.rs` in
+  `syrinx-platform` reads `syrinx_store::SCHEMA_VERSION` and the backup's
+  own `sqlite_master`, so a bump that only adds tables needs no edit there;
+  it writes down only the version 1 tables (`FLAT_SCHEMA_TABLES`) and drops
+  every other table with foreign keys off, so such a change survives the
+  downgrade. Change `downgrade_to_flat_schema` with such a migration, and
+  after any bump run `cargo test -p syrinx-platform recovery`, not only `-p
+  syrinx-store`: no Linux CI job runs it. Source: #137's Windows CI run on
+  83c48a5, which failed while these tests still hard-coded the version and
   table list (observed 2026-11-20), and #269.
 - **A new deletion-journal category makes a build that predates it refuse
   the journal and offer the clear-all-history repair.** D47's codec fails
