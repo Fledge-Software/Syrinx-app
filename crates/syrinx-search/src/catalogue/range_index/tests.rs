@@ -31,6 +31,18 @@ fn policy() -> SearchPolicy {
     }
 }
 
+/// A plugin feed row, so every kind's counts pass through the range index (#141).
+fn plugin_target(id: u64) -> Target {
+    let entry = u32::try_from(id)
+        .ok()
+        .and_then(std::num::NonZeroU32::new)
+        .expect("synthetic plugin entry");
+    Target::Plugin {
+        feed: crate::FeedKey::new(std::num::NonZeroU32::MIN),
+        entry: crate::EntryKey::new(entry),
+    }
+}
+
 fn entry(id: u64, title: &str, address: &str) -> Entry {
     let identity = NonZeroU64::new(id).expect("synthetic ID");
     let target = match id % 4 {
@@ -95,7 +107,7 @@ fn check(catalogue: &Catalogue) {
     let mut targets = BTreeSet::new();
     let mut buckets = 0;
     for (key, pair) in &state.pairs {
-        let mut counts = [0; 4];
+        let mut counts = [0; KINDS];
         assert!(!pair.buckets.is_empty());
         for (class, bucket) in &pair.buckets {
             buckets += 1;
@@ -199,6 +211,31 @@ fn ranges_preserve_scopes_limits_unicode_digits_and_errors() {
             }
         }
     }
+}
+
+#[test]
+fn plugin_rows_are_counted_and_ranked_through_the_ranges() {
+    let mut catalogue = fixture();
+    for id in 26..=40 {
+        let mut row = entry(id, &format!("project 東京 note{id:02}"), "made-up subtitle");
+        row.target = plugin_target(id);
+        catalogue.upsert(row).expect("synthetic plugin row");
+    }
+    enable(&mut catalogue, Limits::default());
+    for scope in [Scope::Everything, Scope::Tabs, Scope::Commands] {
+        for query in ["project", "東京", "note3", ""] {
+            compare(&mut catalogue, query, scope, NOW, policy());
+        }
+    }
+    let ranked = catalogue.query_with_strategy(
+        "東京",
+        Scope::Everything,
+        NOW,
+        policy(),
+        QueryStrategy::Ranges,
+        &mut Unobserved,
+    );
+    assert_eq!(ranked.expect("ranked").counts.plugins, 15);
 }
 
 #[test]

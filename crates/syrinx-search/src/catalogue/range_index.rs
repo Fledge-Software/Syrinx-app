@@ -31,6 +31,9 @@ impl Default for Limits {
     }
 }
 
+/// Row kinds counted apart: tabs, saved pages, history, commands and plugin feed rows.
+const KINDS: usize = 5;
+
 #[derive(Clone, Copy, Eq, PartialEq, Ord, PartialOrd)]
 struct Class {
     kind: usize,
@@ -177,7 +180,8 @@ impl Bucket {
 
 #[derive(Default)]
 struct Pair {
-    counts: [usize; 4],
+    /// Rows of each kind, indexed by `Class::kind`.
+    counts: [usize; KINDS],
     buckets: BTreeMap<Class, Bucket>,
 }
 
