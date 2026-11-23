@@ -228,6 +228,11 @@ impl PageText {
         self.problem.take().map_or(Ok(()), Err)
     }
 
+    /// The open index, which plugin search feeds also write to (#141); `None` once closed.
+    pub(super) fn index_mut(&mut self) -> Option<&mut FullText> {
+        self.index.as_mut()
+    }
+
     /// The open index, for tests that read what it holds.
     #[cfg(test)]
     pub(super) fn index(&self) -> Option<&FullText> {
@@ -239,12 +244,6 @@ impl PageText {
     pub(super) fn close_for_test(&mut self) {
         self.index = None;
         self.folder = None;
-    }
-
-    /// The open index, for tests that stage work in it.
-    #[cfg(test)]
-    pub(super) fn index_mut(&mut self) -> Option<&mut FullText> {
-        self.index.as_mut()
     }
 
     /// Restarts the open index's count; false when it is closed or the restart failed.
