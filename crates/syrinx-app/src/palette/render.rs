@@ -13,11 +13,13 @@ use super::{
     PaletteView,
     choices::PaletteChoices,
     display::{
-        Highlighted, ROW_TEXT_LIMIT, Section, address_label, highlight, row_title, search_label,
+        Highlighted, PAGE_TEXT_LABEL, ROW_TEXT_LIMIT, Section, address_label, highlight,
+        page_address, page_passage, page_title, row_title, search_label,
     },
     query::{Chip, View},
 };
 use crate::controls::control;
+use crate::session::FoundPage;
 use crate::text_field;
 use crate::theme::{self, rgba};
 
@@ -28,6 +30,10 @@ pub(super) const BAR_HEIGHT: f32 = 52.;
 /// The list's `border_t_1` under the bar.
 const LIST_DIVIDER: f32 = 1.;
 const ROW_HEIGHT: f32 = 36.;
+/// A page found by its text: its title over two lines of the passage that matched (#54).
+const PAGE_ROW_HEIGHT: f32 = 64.;
+const PAGE_TITLE_LINE: f32 = 18.;
+const PAGE_PASSAGE_LINE: f32 = 16.;
 const ROW_GAP: f32 = 2.;
 const HEADER_HEIGHT: f32 = 28.;
 /// The header's `mt_1`.
@@ -70,10 +76,12 @@ fn list_height(choices: &PaletteChoices, explains_empty: bool) -> f32 {
             0.
         };
     }
-    let headers = section_headers(&choices.results, choices.results.len());
+    let pages = choices.pages.len();
+    let headers = section_headers(&choices.results, choices.results.len()) + usize::from(pages > 0);
     let gaps = (rows + headers - 1) as f32 * ROW_GAP;
     2. * LIST_PADDING
-        + rows as f32 * ROW_HEIGHT
+        + (rows - pages) as f32 * ROW_HEIGHT
+        + pages as f32 * PAGE_ROW_HEIGHT
         + headers as f32 * (HEADER_HEIGHT + HEADER_MARGIN)
         + gaps
 }
@@ -110,8 +118,11 @@ pub(super) fn child_index(choices: &PaletteChoices, row: usize) -> usize {
     let Some(hit_index) = row.checked_sub(lead_rows) else {
         return row;
     };
-    let headers = section_headers(&choices.results, (hit_index + 1).min(choices.results.len()));
-    lead_rows + hit_index + headers
+    let listed = choices.results.len();
+    let headers = section_headers(&choices.results, (hit_index + 1).min(listed));
+    // Page rows follow every result, under their own header.
+    let page_header = usize::from(hit_index >= listed);
+    lead_rows + hit_index + headers + page_header
 }
 
 /// How many section headers are drawn among the first `count` hits.
@@ -212,6 +223,12 @@ pub(super) fn list(view: &PaletteView, cx: &mut Context<PaletteView>) -> Option<
         }
         rows = rows.child(result_row(view, index, hit, cx));
     }
+    if !view.choices.pages.is_empty() {
+        rows = rows.child(header(PAGE_TEXT_LABEL));
+    }
+    for (index, page) in view.choices.pages.iter().enumerate() {
+        rows = rows.child(page_row(view, index, page, cx));
+    }
     if view.choices.row_count() == 0 {
         rows = rows.children(explanation);
     }
@@ -284,7 +301,8 @@ fn result_row(
             .shortcut
             .as_ref()
             .map(|shortcut| key_hint(&shortcut.label()).into_any_element()),
-        None => (!hit.title.is_empty()).then(|| trailing_address(hit).into_any_element()),
+        None => (!hit.title.is_empty())
+            .then(|| trailing_address(&hit.address, &hit.address_matches).into_any_element()),
     };
     let title = row_title(hit, ROW_TEXT_LIMIT);
     row_frame(("result", index).into(), title.text.clone(), row)
@@ -299,6 +317,63 @@ fn result_row(
         .child(row_text(title))
         .children(trailing)
         .into_any_element()
+}
+
+/// A page found by its kept text: its title and address, then the passage that matched. A click
+/// or Enter opens it in a new tab (#54).
+fn page_row(
+    view: &PaletteView,
+    index: usize,
+    page: &FoundPage,
+    cx: &mut Context<PaletteView>,
+) -> AnyElement {
+    let request_id = view.choices.request_id;
+    let lead = view.choices.lead_rows() + view.choices.results.len();
+    let title = page_title(page, ROW_TEXT_LIMIT);
+    let passage = page_passage(page, ROW_TEXT_LIMIT);
+    let address = page.address.clone();
+    row_frame(
+        ("page", index).into(),
+        title.text.clone(),
+        RowState::of(&view.choices, lead + index),
+    )
+    .aria_description(format!(
+        "{PAGE_TEXT_LABEL} {} {}",
+        page.address, passage.text
+    ))
+    .h(px(PAGE_ROW_HEIGHT))
+    .on_click(cx.listener(move |this, _, window, cx| {
+        let Some(event) = this.choices.page_activation(request_id, &address) else {
+            return;
+        };
+        this.finish(event, window, cx);
+    }))
+    .child(glyph("¶"))
+    .child(
+        div()
+            .flex_1()
+            .min_w_0()
+            .flex()
+            .flex_col()
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_3()
+                    .line_height(px(PAGE_TITLE_LINE))
+                    .child(row_text(title))
+                    .child(trailing_text(page_address(page, ROW_TEXT_LIMIT))),
+            )
+            .child(
+                div()
+                    .text_size(px(text::SMALL))
+                    .font_weight(FontWeight::NORMAL)
+                    .line_height(px(PAGE_PASSAGE_LINE))
+                    .line_clamp(2)
+                    .child(styled(passage)),
+            ),
+    )
+    .into_any_element()
 }
 
 /// What a screen reader learns about one row besides its name.
@@ -413,7 +488,12 @@ fn row_text(highlighted: Highlighted) -> Div {
         .child(styled(highlighted))
 }
 
-fn trailing_address(hit: &SearchHit) -> Div {
+fn trailing_address(address: &str, matches: &[std::ops::Range<usize>]) -> Div {
+    trailing_text(highlight(address, matches, ROW_TEXT_LIMIT))
+}
+
+/// Muted text after a row's name, such as its address.
+fn trailing_text(text: Highlighted) -> Div {
     div()
         .max_w(px(TRAILING_WIDTH))
         .flex_shrink(1.)
@@ -423,14 +503,14 @@ fn trailing_address(hit: &SearchHit) -> Div {
         .text_size(px(text::SMALL))
         .text_color(rgba(theme::current().text_muted))
         .font_weight(FontWeight::NORMAL)
-        .child(styled(highlight(
-            &hit.address,
-            &hit.address_matches,
-            ROW_TEXT_LIMIT,
-        )))
+        .child(styled(text))
 }
 
 fn section_header(section: Section) -> Div {
+    header(section.label())
+}
+
+fn header(label: &'static str) -> Div {
     div()
         .h(px(HEADER_HEIGHT))
         .flex_shrink_0()
@@ -441,7 +521,7 @@ fn section_header(section: Section) -> Div {
         .text_size(px(text::CAPTION))
         .font_weight(FontWeight::SEMIBOLD)
         .text_color(rgba(theme::current().text_muted))
-        .child(section.label().to_uppercase())
+        .child(label.to_uppercase())
 }
 
 /// The title and detail shown in place of rows, for a view that is empty for a known reason.
@@ -607,6 +687,42 @@ mod tests {
             + 2. * (HEADER_HEIGHT + HEADER_MARGIN)
             + 4. * ROW_GAP;
         assert_eq!(list_height(&choices, false), expected);
+    }
+
+    #[test]
+    fn pages_found_by_their_text_add_their_header_and_taller_rows() {
+        let tab = Target::Tab(TabId::new(1).expect("tab"));
+        let found = |address: &str| crate::session::FoundPage {
+            address: address.to_owned(),
+            title: "Synthetic found page".to_owned(),
+            passage: "a synthetic passage".to_owned(),
+            matches: Vec::new(),
+        };
+        let mut choices = PaletteChoices::default();
+        let request = choices.query_scoped("synthetic", true);
+        assert!(choices.receive(
+            request,
+            Ok(SearchResults {
+                generation: 1,
+                counts: ScopeCounts::default(),
+                hits: vec![hit(tab)],
+            })
+        ));
+        let rows_only = list_height(&choices, false);
+        assert!(choices.receive_pages(
+            request,
+            vec![
+                found("https://one.example.test/"),
+                found("https://two.example.test/")
+            ]
+        ));
+        // Children: typed row, [Open tabs] tab, [Page text] page page.
+        let expected =
+            rows_only + HEADER_HEIGHT + HEADER_MARGIN + 2. * PAGE_ROW_HEIGHT + 3. * ROW_GAP;
+        assert_eq!(list_height(&choices, false), expected);
+        assert_eq!(child_index(&choices, 1), 2);
+        assert_eq!(child_index(&choices, 2), 4);
+        assert_eq!(child_index(&choices, 3), 5);
     }
 
     #[test]

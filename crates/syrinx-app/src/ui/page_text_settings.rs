@@ -21,7 +21,7 @@ use crate::theme::rgba;
 
 /// Never promises that every `no-store` page is skipped: WebView2 can hide a repeated header (F2).
 const CAPTURE_DESCRIPTION: &str = "Keeps the words on pages you open after switching this on, \
-    on this computer only, and deletes them after seven days, or at once when you switch \
+    so the palette can find a page by what it said, on this computer only, and deletes them after seven days, or at once when you switch \
     this off. Never reads Google's sites, banks and payment sites, pages with a password or \
     card field, or the sites you exclude, and excluding a site deletes what was kept from it. \
     Pages that ask not to be stored are skipped whenever Syrinx can see that request.";

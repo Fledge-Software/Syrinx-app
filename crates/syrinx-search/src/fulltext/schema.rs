@@ -108,6 +108,13 @@ impl Fields {
             .ok_or(FullTextError::Damaged)
     }
 
+    /// The Unix seconds a row is dated by.
+    pub fn date(&self, row: &TantivyDocument) -> Result<i64, FullTextError> {
+        row.get_first(self.captured)
+            .and_then(|value| value.as_i64())
+            .ok_or(FullTextError::Damaged)
+    }
+
     pub fn text<'a>(
         &self,
         row: &'a TantivyDocument,

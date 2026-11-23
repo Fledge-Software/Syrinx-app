@@ -5,6 +5,7 @@ mod deletions;
 mod folders;
 mod history;
 mod history_repair;
+mod page_search;
 mod page_text;
 mod page_text_setting;
 mod plugins;
@@ -20,6 +21,7 @@ mod zoom_levels;
 pub use back_forward::HistoryListRow;
 pub use folders::FolderCommand;
 pub use history_repair::{HistoryRepairPrompt, HistoryRepairReason};
+pub use page_search::FoundPage;
 pub use page_text::CapturedPage;
 pub use page_text_setting::PageTextSetting;
 pub use recovery::RecoveryPrompt;
@@ -293,6 +295,12 @@ pub enum SessionEvent {
     Search {
         request_id: u64,
         result: Result<SearchResults, SessionError>,
+    },
+    /// Sent some time after the `Search` with the same identity, while capture is on: the pages
+    /// whose kept text matched (#54).
+    FoundPages {
+        request_id: u64,
+        pages: Vec<FoundPage>,
     },
     /// Sent just before `Search`, only by a worker started with `spawn_acceptance`.
     QueryTimed {
@@ -917,6 +925,8 @@ struct Worker {
     page_text: page_text::PageText,
     /// The owner's page-text setting, held until the database has taken it (#54).
     page_text_setting: page_text_setting::AppliedSetting,
+    /// The newest query's page-text lookup, made once no command is waiting (#54).
+    page_lookup: Option<page_search::PageLookup>,
     revision: u64,
     previous_shutdown: ShutdownState,
     destinations: QuickDestinations,
@@ -1007,6 +1017,7 @@ impl Worker {
                 restored.setting,
                 restored.resave,
             ),
+            page_lookup: None,
             revision: stored.revision,
             previous_shutdown: store.previous_shutdown(),
             destinations: stored_preferences.destinations,
@@ -1059,6 +1070,11 @@ impl Worker {
                 Some(retry) => wait.min(retry),
                 None => wait,
             };
+            // A lookup runs only once no command waits, so a newer keystroke replaces it.
+            let wait = match self.page_lookup {
+                Some(_) => Duration::ZERO,
+                None => wait,
+            };
             let received = commands.recv_timeout(wait);
             // The worker's existing wake-ups carry the five-minute usage write; it adds none,
             // and reads no clock unless a write is waiting.
@@ -1103,6 +1119,12 @@ impl Worker {
                     self.survival.result(handled, events)?;
                     self.report_page_text(events)?;
                     delay = IDLE_DELAY;
+                }
+                Err(mpsc::RecvTimeoutError::Timeout) if self.page_lookup.is_some() => {
+                    self.survival.operation = page_search::SEARCHING;
+                    let found = self.look_up_pages(events);
+                    self.survival.result(found, events)?;
+                    self.report_page_text(events)?;
                 }
                 Err(mpsc::RecvTimeoutError::Timeout) if self.history.has_pending_titles() => {
                     // A due tab retry runs here too, so a passed retry time cannot zero the wait.
@@ -1534,6 +1556,10 @@ impl Worker {
                 },
             )?;
         }
+        self.page_lookup = match &result {
+            Ok(_) => page_search::PageLookup::wanted(request_id, text, scope),
+            Err(_) => None,
+        };
         // Failures carry the same identity as successful replies, so stale queries stay silent.
         emit(events, SessionEvent::Search { request_id, result })
     }

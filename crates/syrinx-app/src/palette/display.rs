@@ -6,6 +6,8 @@ use std::ops::Range;
 use syrinx_core::{AddressPrefix, TabModelSnapshot, address_prefix, live_instance};
 use syrinx_search::{SearchHit, SearchResults, Target};
 
+use crate::session::FoundPage;
+
 /// Row text is cut here so one long title cannot stall layout.
 pub const ROW_TEXT_LIMIT: usize = 160;
 
@@ -71,6 +73,51 @@ pub fn row_title(hit: &SearchHit, limit: usize) -> Highlighted {
         return highlight(&hit.address, &hit.address_matches, limit);
     }
     highlight(&hit.title, &hit.title_matches, limit)
+}
+
+/// The header over the pages found by their kept text, which follow every other group (#54).
+pub const PAGE_TEXT_LABEL: &str = "Page text";
+
+/// A found page's main text: its title, or its address when the page had none.
+pub fn page_title(page: &FoundPage, limit: usize) -> Highlighted {
+    let title = if page.title.trim().is_empty() {
+        &page.address
+    } else {
+        &page.title
+    };
+    highlight(&visible(title), &[], limit)
+}
+
+/// A found page's address, as its row shows it.
+pub fn page_address(page: &FoundPage, limit: usize) -> Highlighted {
+    highlight(&visible(&page.address), &[], limit)
+}
+
+/// The passage of a found page's text that matched, on one line with its highlights in place.
+pub fn page_passage(page: &FoundPage, limit: usize) -> Highlighted {
+    highlight(&visible(&page.passage), &page.matches, limit)
+}
+
+/// `text` without the line breaks and direction controls a page's own text can carry, which
+/// would break a row's line or reorder what it shows. Each becomes a space of the same UTF-8
+/// width, so every highlight's byte range still holds.
+fn visible(text: &str) -> String {
+    text.chars()
+        .map(|character| match character {
+            _ if character.is_ascii_control() => ' ',
+            // NEL is two bytes, as the no-break space is.
+            '\u{85}' => '\u{a0}',
+            // Line and paragraph separators, direction embeddings, overrides and isolates,
+            // and the direction marks are three bytes, as the punctuation space is.
+            '\u{2028}'
+            | '\u{2029}'
+            | '\u{202a}'..='\u{202e}'
+            | '\u{2066}'..='\u{2069}'
+            | '\u{200e}'
+            | '\u{200f}' => '\u{2008}',
+            _ => character,
+        })
+        .collect()
 }
 
 /// The palette's groups, in the order the design lists them.
@@ -215,6 +262,56 @@ mod tests {
             highlight(text, &[6..9, 0..2, 0..6], 10).ranges,
             vec![Range { start: 0, end: 9 }]
         );
+    }
+
+    #[test]
+    fn a_found_page_shows_its_passage_on_one_line_with_its_match_in_place() {
+        let passage = "first line\nthen\tthe recallé word";
+        let start = passage.find("recallé").expect("synthetic match");
+        let page = FoundPage {
+            address: "https://found.example.test/".to_owned(),
+            title: " ".to_owned(),
+            passage: passage.to_owned(),
+            matches: vec![Range {
+                start,
+                end: start + "recallé".len(),
+            }],
+        };
+        let shown = page_passage(&page, ROW_TEXT_LIMIT);
+        assert_eq!(shown.text, "first line then the recallé word");
+        assert_eq!(&shown.text[shown.ranges[0].clone()], "recallé");
+        // A page that had no title is named by its address.
+        assert_eq!(page_title(&page, ROW_TEXT_LIMIT).text, page.address);
+    }
+
+    #[test]
+    fn a_found_page_row_shows_no_line_breaks_or_direction_controls() {
+        let hidden = [
+            '\u{85}', '\u{2028}', '\u{2029}', '\u{202a}', '\u{202b}', '\u{202c}', '\u{202d}',
+            '\u{202e}', '\u{2066}', '\u{2067}', '\u{2068}', '\u{2069}', '\u{200e}', '\u{200f}',
+        ];
+        let carrying: String = hidden.iter().collect();
+        let passage = format!("{carrying}before recallword{carrying}after");
+        let start = passage.find("recallword").expect("synthetic match");
+        let page = FoundPage {
+            address: format!("https://found.example.test/{carrying}"),
+            title: format!("Synthetic{carrying}title"),
+            passage,
+            matches: vec![Range {
+                start,
+                end: start + "recallword".len(),
+            }],
+        };
+        let shown = [
+            page_title(&page, ROW_TEXT_LIMIT),
+            page_address(&page, ROW_TEXT_LIMIT),
+            page_passage(&page, ROW_TEXT_LIMIT),
+        ];
+        for text in &shown {
+            assert!(!text.text.contains(&hidden[..]), "{:?}", text.text);
+        }
+        let passage = &shown[2];
+        assert_eq!(&passage.text[passage.ranges[0].clone()], "recallword");
     }
 
     #[test]

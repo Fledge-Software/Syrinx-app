@@ -17,6 +17,8 @@ use super::types::{FullTextError, FullTextHit, Namespace, NamespaceFilter, Searc
 pub(super) const SNIPPET_BYTES: usize = 160;
 /// The most results one query returns; Tantivy reserves room for twice the limit.
 pub(super) const MAX_RESULTS: usize = 1_000;
+/// How many of the best pages one page search considers before giving up on filling its limit.
+pub(super) const MAX_PAGE_CANDIDATES: usize = 64;
 /// How many indexed words one typed prefix may stand for.
 const MAX_PREFIX_EXPANSIONS: u32 = 1_000;
 
@@ -36,7 +38,7 @@ pub(super) fn run(
     if request.limit == 0 || (words.whole.is_empty() && words.prefix.is_none()) {
         return Ok(Vec::new());
     }
-    let query = build_query(fields, &words, &request.namespaces);
+    let query = BooleanQuery::new(clauses(fields, &words, &request.namespaces));
     let snippets = snippet_generator(index, searcher, fields, &words)?;
     let ranked = searcher.search(
         &query,
@@ -49,6 +51,41 @@ pub(super) fn run(
             hit(fields, &snippets, &row, score)
         })
         .collect()
+}
+
+/// Ranks the pages `request` finds in their body, among the rows `kept` selects by date, and
+/// returns the best `may_show` accepts by address and visit. Only those are excerpted.
+pub(super) fn run_pages(
+    index: &Index,
+    searcher: &Searcher,
+    fields: &Fields,
+    request: &SearchRequest,
+    kept: BooleanQuery,
+    may_show: impl Fn(&str, i64) -> bool,
+) -> Result<Vec<FullTextHit>, FullTextError> {
+    let words = fold(index, fields, request)?;
+    if request.limit == 0 || (words.whole.is_empty() && words.prefix.is_none()) {
+        return Ok(Vec::new());
+    }
+    let mut clauses = clauses(fields, &words, &request.namespaces);
+    clauses.push((Occur::Must, filter(kept)));
+    clauses.push((Occur::Must, any_word_in_body(fields, &words)));
+    let snippets = snippet_generator(index, searcher, fields, &words)?;
+    let ranked = searcher.search(
+        &BooleanQuery::new(clauses),
+        &TopDocs::with_limit(MAX_PAGE_CANDIDATES).order_by_score(),
+    )?;
+    let mut hits = Vec::new();
+    for (score, address) in ranked {
+        if hits.len() == request.limit {
+            break;
+        }
+        let row: TantivyDocument = searcher.doc(address)?;
+        if may_show(fields.text(&row, fields.id)?, fields.date(&row)?) {
+            hits.push(hit(fields, &snippets, &row, score)?);
+        }
+    }
+    Ok(hits)
 }
 
 fn fold(index: &Index, fields: &Fields, request: &SearchRequest) -> Result<Words, FullTextError> {
@@ -67,7 +104,11 @@ fn fold(index: &Index, fields: &Fields, request: &SearchRequest) -> Result<Words
 }
 
 /// Every word must match the title or the body; only live documents in the chosen namespaces.
-fn build_query(fields: &Fields, words: &Words, namespaces: &NamespaceFilter) -> BooleanQuery {
+fn clauses(
+    fields: &Fields,
+    words: &Words,
+    namespaces: &NamespaceFilter,
+) -> Vec<(Occur, Box<dyn Query>)> {
     let mut clauses: Vec<(Occur, Box<dyn Query>)> = Vec::new();
     for word in &words.whole {
         clauses.push((
@@ -91,7 +132,21 @@ fn build_query(fields: &Fields, words: &Words, namespaces: &NamespaceFilter) -> 
     if let NamespaceFilter::Only(chosen) = namespaces {
         clauses.push((Occur::Must, namespace_filter(fields, chosen)));
     }
-    BooleanQuery::new(clauses)
+    clauses
+}
+
+/// At least one word is in the body, so a page found only by its title, which history
+/// already lists, is not offered as found by its text.
+fn any_word_in_body(fields: &Fields, words: &Words) -> Box<dyn Query> {
+    let mut any: Vec<(Occur, Box<dyn Query>)> = words
+        .whole
+        .iter()
+        .map(|word| (Occur::Should, term_query(fields.body, word)))
+        .collect();
+    if let Some(prefix) = &words.prefix {
+        any.push((Occur::Should, prefix_query(fields.body, prefix)));
+    }
+    filter(BooleanQuery::new(any))
 }
 
 fn either_field(fields: &Fields, query: impl Fn(Field) -> Box<dyn Query>) -> Box<dyn Query> {

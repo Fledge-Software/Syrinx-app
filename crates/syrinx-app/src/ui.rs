@@ -825,6 +825,22 @@ impl BrowserView {
                     }
                 }
             }
+            SessionEvent::FoundPages { request_id, pages } => {
+                if let Some((pending, local)) = self.pending_query
+                    && pending == request_id
+                    && let Some(palette) = &self.palette
+                {
+                    let view = palette.view.clone();
+                    // A waiting Enter may open the page, which closes the popup's own window.
+                    let delivered = palette.window.update(cx, |_, popup, cx| {
+                        view.update(cx, |palette, cx| {
+                            palette.receive_pages(local, pages, popup, cx)
+                        })
+                    });
+                    // `Err` means the popup already closed, so its pages have nothing to show.
+                    drop(delivered);
+                }
+            }
             SessionEvent::QueryTimed {
                 request_id,
                 elapsed,
@@ -1481,6 +1497,7 @@ impl BrowserView {
             PaletteEvent::Activate(Target::History(_)) => {
                 usage.count(Feature::PaletteChoseHistory);
             }
+            PaletteEvent::OpenPage(_) => usage.count(Feature::PaletteChosePageText),
             PaletteEvent::Run(action) => {
                 usage.count(Feature::PaletteChoseCommand);
                 match action {
@@ -1548,6 +1565,11 @@ impl BrowserView {
                         self.message = "Commands run through their own row.".to_owned()
                     }
                 }
+                self.focus_page(window, cx);
+            }
+            // A new tab, as a history row opens; the owner's own navigation, so it is read again.
+            PaletteEvent::OpenPage(address) => {
+                self.command(SessionCommand::NewTab { address });
                 self.focus_page(window, cx);
             }
             PaletteEvent::Run(action) => {
@@ -2632,6 +2654,7 @@ mod palette_shortcut_tests {
                         }
                         PaletteEvent::Submit { .. }
                         | PaletteEvent::Activate(_)
+                        | PaletteEvent::OpenPage(_)
                         | PaletteEvent::Run(_)
                         | PaletteEvent::Closed
                         | PaletteEvent::ClickedAway => {

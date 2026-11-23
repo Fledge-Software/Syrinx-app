@@ -29,7 +29,11 @@ use choices::PaletteChoices;
 use commands::{CommandMatcher, CommandMatches};
 use query::{Chip, ParsedQuery, View};
 
-use crate::{acceptance::PresentProbe, session::SessionError, text_field, theme, ui};
+use crate::{
+    acceptance::PresentProbe,
+    session::{FoundPage, SessionError},
+    text_field, theme, ui,
+};
 
 actions!(palette, [Dismiss, NextResult, PreviousResult, SearchWeb]);
 
@@ -47,6 +51,8 @@ pub enum PaletteEvent {
         force_search: bool,
     },
     Activate(Target),
+    /// A page found by its kept text: open its address in a new tab, as a history row does (#54).
+    OpenPage(String),
     Run(CommandAction),
     Shortcut(BrowserShortcut),
     /// What the popup lists changed its height, so the browser refits the popup (#265).
@@ -61,6 +67,7 @@ impl PaletteEvent {
         match self {
             Self::Submit { .. }
             | Self::Activate(_)
+            | Self::OpenPage(_)
             | Self::Run(_)
             | Self::Closed
             | Self::ClickedAway => true,
@@ -275,6 +282,7 @@ impl PaletteView {
     /// Hides the popup and drops the entry's channel, which ends the browser's receiver.
     pub fn close(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.events = None;
+        self.choices.forget_pages();
         self.replace_input(window, cx);
         cx.notify();
         let hidden = syrinx_platform::browser::hide_overlay(self.native.popup, self.native.owner);
@@ -357,6 +365,27 @@ impl PaletteView {
         if let Some(probe) = &self.probe {
             probe.replied(request_id, Instant::now());
         }
+        if let Some(event) = self.choices.take_deferred() {
+            self.finish(event, window, cx);
+            return true;
+        }
+        self.scroll_to_selection();
+        self.redraw(cx);
+        true
+    }
+
+    /// Lists the pages the current request found by their kept text, under its rows (#54).
+    pub fn receive_pages(
+        &mut self,
+        request_id: u64,
+        pages: Vec<FoundPage>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        if !self.is_open() || !self.choices.receive_pages(request_id, pages) {
+            return false;
+        }
+        // An Enter that waited for a page a refresh was bringing back applies now.
         if let Some(event) = self.choices.take_deferred() {
             self.finish(event, window, cx);
             return true;

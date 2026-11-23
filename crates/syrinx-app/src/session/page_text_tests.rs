@@ -976,6 +976,9 @@ fn a_captured_page_never_shows_its_address_title_or_text_in_debug_output() {
     assert!(!format!("{command:?}").contains("sentinel"));
 }
 
+#[path = "page_search_tests.rs"]
+mod page_search_tests;
+
 // Windows file-sharing behaviour: a held file cannot be read or deleted.
 #[cfg(windows)]
 mod windows {

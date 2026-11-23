@@ -1,7 +1,7 @@
 //! Checks ranking inputs, folding and the bounded, highlighted snippet.
 
 use super::super::*;
-use super::fixture::{Fixture, NOW, page_document, upsert};
+use super::fixture::{DAY, Fixture, NOW, document, notes, page_document, upsert};
 
 fn request(text: &str, prefix_last: bool) -> SearchRequest {
     SearchRequest {
@@ -133,4 +133,87 @@ fn queries_without_words_or_room_return_nothing() {
             .expect("empty prefix")
             .is_empty()
     );
+}
+
+/// The page ids `search_pages` returns for `text` at `now`, accepting every page.
+fn page_ids(index: &FullText, text: &str, now: i64) -> Vec<String> {
+    index
+        .search_pages(text, now, 10, |_, _| true)
+        .expect("search page text")
+        .into_iter()
+        .map(|hit| hit.id)
+        .collect()
+}
+
+#[test]
+fn a_page_search_matches_the_last_word_as_typed_and_highlights_it() {
+    let fixture = Fixture::new();
+    let index = index_with(&fixture, vec![page_document("a", 1, NOW, "lanternfish")]);
+    let hits = index
+        .search_pages("paragraph lantern", NOW, 10, |_, _| true)
+        .expect("search page text");
+    assert_eq!(hits.len(), 1);
+    let highlighted: Vec<&str> = hits[0]
+        .highlights
+        .iter()
+        .map(|range| &hits[0].snippet[range.clone()])
+        .collect();
+    assert!(highlighted.contains(&"lanternfish"), "{highlighted:?}");
+}
+
+#[test]
+fn a_page_search_reads_page_text_only_and_skips_title_only_matches() {
+    let fixture = Fixture::new();
+    let mut titled = page_document("titled", 1, NOW, "bodyword");
+    titled.title = "Marigold".to_owned();
+    let index = index_with(
+        &fixture,
+        vec![
+            titled,
+            page_document("body", 1, NOW, "marigold"),
+            document(notes(), "note", 1, NOW, "marigold"),
+        ],
+    );
+    // History already lists a page by its title; only a match in its text earns a row.
+    assert_eq!(page_ids(&index, "marigold", NOW), ["body"]);
+    // A title word still narrows a body match.
+    assert_eq!(page_ids(&index, "marigold bodyword", NOW), ["titled"]);
+}
+
+#[test]
+fn a_page_search_never_returns_text_past_seven_days_even_before_expiry_runs() {
+    let fixture = Fixture::new();
+    let index = index_with(
+        &fixture,
+        vec![
+            page_document("fresh", 1, NOW, "agesigil"),
+            page_document("ageing", 1, NOW - 6 * DAY, "agesigil"),
+        ],
+    );
+    let mut found = page_ids(&index, "agesigil", NOW);
+    found.sort();
+    assert_eq!(found, ["ageing", "fresh"]);
+    // Seven days after its visit the text is past D40's limit, as `expire` judges it.
+    let expires = NOW - 6 * DAY + PAGE_RETENTION_SECONDS;
+    assert_eq!(page_ids(&index, "agesigil", expires - 1).len(), 2);
+    assert_eq!(page_ids(&index, "agesigil", expires), ["fresh"]);
+    assert_eq!(fixture.ids(&index, "agesigil").len(), 2, "still stored");
+}
+
+#[test]
+fn a_page_search_skips_refused_pages_and_still_fills_its_limit() {
+    let fixture = Fixture::new();
+    let documents = (0..8)
+        .map(|number| page_document(&format!("p{number}"), 1, NOW - number, "fillsigil"))
+        .collect();
+    let index = index_with(&fixture, documents);
+    let refused = ["p0", "p1", "p2", "p3", "p4"];
+    let hits = index
+        .search_pages("fillsigil", NOW, 3, |id, visited_at| {
+            assert!(visited_at <= NOW, "the stored date is the visit");
+            !refused.contains(&id)
+        })
+        .expect("search page text");
+    assert_eq!(hits.len(), 3);
+    assert!(hits.iter().all(|hit| !refused.contains(&hit.id.as_str())));
 }
