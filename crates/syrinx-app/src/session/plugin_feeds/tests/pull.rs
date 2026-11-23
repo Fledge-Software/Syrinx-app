@@ -461,10 +461,20 @@ fn a_feed_that_goes_round_between_cursors_stalls_and_its_repeat_is_only_logged()
         [None, Some("A".to_owned()), Some("B".to_owned())]
     );
 
-    // The next announcement goes round again: stopped, but the owner is not told twice.
+    // Past the cool-down, the next announcement is pulled from the kept cursor and goes round
+    // again: stopped, but the owner is not told twice.
     announce(&mut feeds);
-    let repeated = settle_with(&mut feeds, &mut plugin, &store, &mut index, &mut catalogue);
+    let later = Instant::now() + QUIET_PACE;
+    let repeated = settle_at(
+        &mut feeds,
+        &mut plugin,
+        &store,
+        &mut index,
+        &mut catalogue,
+        later,
+    );
     assert_eq!(repeated, Ok(()));
+    assert_eq!(plugin.requests.len(), 5, "pulled after A and after B again");
     assert!(!feeds.busy(true));
 }
 
@@ -667,7 +677,7 @@ fn a_looping_feed_that_announces_itself_is_pulled_once_per_cool_down() {
         .answer(None, batch(Vec::new(), "A", true))
         .answer(Some("A"), batch(Vec::new(), "B", true))
         .answer(Some("B"), batch(Vec::new(), "A", true));
-    let cool_down = crate::session::plugin_feeds::worker::IDLE_BOUND;
+    let cool_down = QUIET_PACE;
     // Twenty wake-ups at `at`, the plugin announcing its feed again before each one.
     let mut wake_ups = |feeds: &mut PluginFeeds, plugin: &mut Scripted, at: Instant| {
         let mut sinks = Sinks {
@@ -706,4 +716,76 @@ fn a_looping_feed_that_announces_itself_is_pulled_once_per_cool_down() {
     // goes round again, which is only logged, and cools down once more.
     assert!(wake_ups(&mut feeds, &mut plugin, start + cool_down).is_empty());
     assert_eq!(plugin.requests.len(), 5);
+}
+
+#[test]
+fn a_feed_announced_while_cooling_down_is_pulled_once_when_the_cool_down_ends() {
+    let folder = Folder::new();
+    let store = folder.store();
+    let mut index = folder.index("fulltext");
+    let mut catalogue = Catalogue::new();
+    let mut feeds = PluginFeeds::default();
+    let mut plugin = Scripted::default()
+        .answer(None, batch(Vec::new(), "A", true))
+        .answer(Some("A"), batch(Vec::new(), "B", true))
+        .answer(Some("B"), batch(Vec::new(), "A", true));
+    let start = Instant::now();
+    announce(&mut feeds);
+    let stalled = settle_at(
+        &mut feeds,
+        &mut plugin,
+        &store,
+        &mut index,
+        &mut catalogue,
+        start,
+    );
+    assert!(stalled.is_err());
+    assert_eq!(plugin.requests.len(), 3);
+
+    // The plugin fixes its feed and announces the change many times while it cools down.
+    plugin = plugin.answer(
+        Some("A"),
+        batch(vec![entry("a", 1, "Synthetic fixed")], "C", false),
+    );
+    let cooling = start + Duration::from_secs(1);
+    for _ in 0..10 {
+        announce(&mut feeds);
+        settle_at(
+            &mut feeds,
+            &mut plugin,
+            &store,
+            &mut index,
+            &mut catalogue,
+            cooling,
+        )
+        .expect("nothing pulled yet");
+    }
+    assert_eq!(plugin.requests.len(), 3, "the announcements wait");
+
+    // Once the cool-down ends, the next turn pulls the feed once, with no new announcement.
+    let mut sinks = Sinks {
+        store: &store,
+        index: Some(&mut index),
+        catalogue: &mut catalogue,
+        now: NOW,
+        at: start + QUIET_PACE,
+    };
+    feeds
+        .pump(&mut plugin, &mut sinks)
+        .expect("the queued feed starts");
+    settle_at(
+        &mut feeds,
+        &mut plugin,
+        &store,
+        &mut index,
+        &mut catalogue,
+        start + QUIET_PACE,
+    )
+    .expect("the fixed feed is kept");
+    assert_eq!(
+        plugin.requests.len(),
+        4,
+        "one pull for every waiting announcement"
+    );
+    assert_eq!(titles(&mut catalogue, "synthetic"), ["Synthetic fixed"]);
 }

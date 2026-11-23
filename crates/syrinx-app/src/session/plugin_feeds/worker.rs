@@ -6,18 +6,17 @@ use std::time::{Duration, Instant};
 use futures::channel::mpsc::UnboundedSender;
 use syrinx_store::Store;
 
-use super::{FeedSource, Sinks};
+use super::{FeedSource, QUIET_PACE, Sinks};
 use crate::session::{
-    BACKUP_CHECK_INTERVAL, SessionCommand, SessionError, SessionEvent, Worker, emit_recoverable,
-    utc_seconds,
+    SessionCommand, SessionError, SessionEvent, Worker, emit_recoverable, utc_seconds,
 };
 
 /// How often the session looks for a plugin's answer while a feed is being pulled.
 const ANSWER_POLL: Duration = Duration::from_millis(20);
 
-/// How long pulling may hold the session's idle work off: the pace that work keeps on its own
-/// once the session is quiet, so a busy plugin never makes it run less often than that.
-pub(super) const IDLE_BOUND: Duration = BACKUP_CHECK_INTERVAL;
+/// How long pulling may hold the session's idle work off, so a busy plugin never makes it run
+/// less often than it does on its own once the session is quiet.
+const IDLE_BOUND: Duration = QUIET_PACE;
 
 /// Since when pulling has held the session's idle work off, if it has.
 #[derive(Default)]

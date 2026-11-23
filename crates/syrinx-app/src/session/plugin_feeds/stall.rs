@@ -4,13 +4,18 @@
 use std::collections::BTreeMap;
 use std::time::{Duration, Instant};
 
-use super::worker::IDLE_BOUND;
-use super::{FeedError, FeedName};
+use super::{FeedError, FeedName, QUIET_PACE};
 
-/// How long a stalled feed's announcements are dropped. A plugin that announces its feed
-/// again at once, even from inside its own answer, would otherwise restart the loop every
-/// few wake-ups; this reuses the idle work's own pace instead of a new tuning number.
-const STALL_COOL_DOWN: Duration = IDLE_BOUND;
+/// How long a stalled feed's announcements wait before it is pulled again. A plugin that
+/// announces its feed again at once, even from inside its own answer, would otherwise restart
+/// the loop every few wake-ups; this reuses the idle work's own pace, not a new number.
+const STALL_COOL_DOWN: Duration = QUIET_PACE;
+
+/// One feed's last stall, and whether it was announced again while cooling down.
+struct Stall {
+    at: Instant,
+    announced: bool,
+}
 
 /// The cursors the pull in flight and its feed's previous budget-spent announcement asked
 /// after, and when each feed last stalled this session.
@@ -22,9 +27,9 @@ pub(super) struct CursorHistory {
     earlier: Vec<String>,
     /// The cursors of each feed waiting after spending its budget, for its next `earlier`.
     carried: BTreeMap<FeedName, Vec<String>>,
-    /// When each feed last stalled. Its first stall is shown to the owner and later ones only
-    /// logged; for `STALL_COOL_DOWN` after any of them, its announcements are dropped.
-    stalled: BTreeMap<FeedName, Instant>,
+    /// Each feed's last stall. Its first stall is shown to the owner and later ones only
+    /// logged; for `STALL_COOL_DOWN` after any of them, its announcements wait.
+    stalled: BTreeMap<FeedName, Stall>,
     /// Whether a reset has already cleared this announcement's cursors.
     reset_cleared: bool,
 }
@@ -62,21 +67,39 @@ impl CursorHistory {
     /// again, as a Notes vault switch (#36) would, may resend its offsets; one that resets
     /// every batch still stalls within the announcement.
     pub(super) fn restart(&mut self, from_start: bool, reset: bool) {
-        let first_reset = !from_start && reset && !self.reset_cleared;
-        if !from_start && !first_reset {
+        let first_reset = reset && !self.reset_cleared;
+        let begins_again = from_start || first_reset;
+        if !begins_again {
             return;
         }
-        self.reset_cleared |= first_reset;
+        self.reset_cleared |= first_reset && !from_start;
         self.asked.clear();
         self.earlier.clear();
     }
 
-    /// Whether `name` stalled less than `STALL_COOL_DOWN` before `now`, so its announcement is
-    /// dropped.
-    pub(super) fn cooling(&self, name: &FeedName, now: Instant) -> bool {
-        self.stalled
-            .get(name)
-            .is_some_and(|stalled| now.saturating_duration_since(*stalled) < STALL_COOL_DOWN)
+    /// Whether `name` stalled less than `STALL_COOL_DOWN` before `now`. If so, its announcement
+    /// waits: the feed is queued once when the cool-down ends (`take_cooled`).
+    pub(super) fn defer_if_cooling(&mut self, name: &FeedName, now: Instant) -> bool {
+        let Some(stall) = self.stalled.get_mut(name) else {
+            return false;
+        };
+        if !cooling(stall, now) {
+            return false;
+        }
+        stall.announced = true;
+        true
+    }
+
+    /// The feeds announced while cooling down whose cool-down has ended, each once.
+    pub(super) fn take_cooled(&mut self, now: Instant) -> Vec<FeedName> {
+        let mut cooled = Vec::new();
+        for (name, stall) in &mut self.stalled {
+            if stall.announced && !cooling(stall, now) {
+                stall.announced = false;
+                cooled.push(name.clone());
+            }
+        }
+        cooled
     }
 
     /// Whether any waiting feed carries cursors into its next announcement.
@@ -96,10 +119,19 @@ impl CursorHistory {
     /// plugin cannot flood the window.
     pub(super) fn report_stall(&mut self, name: FeedName, now: Instant) -> Result<(), FeedError> {
         let plugin = name.plugin.clone();
-        if self.stalled.insert(name, now).is_none() {
+        let stall = Stall {
+            at: now,
+            announced: false,
+        };
+        if self.stalled.insert(name, stall).is_none() {
             return Err(FeedError::Stalled { plugin });
         }
         eprintln!("Syrinx: plugin {plugin}: a search feed went round again and was stopped");
         Ok(())
     }
+}
+
+/// Whether `stall` was less than `STALL_COOL_DOWN` before `now`.
+fn cooling(stall: &Stall, now: Instant) -> bool {
+    now.saturating_duration_since(stall.at) < STALL_COOL_DOWN
 }

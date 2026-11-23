@@ -156,6 +156,18 @@ fn settle_with(
     index: &mut dyn FeedIndex,
     catalogue: &mut Catalogue,
 ) -> Result<(), FeedError> {
+    settle_at(feeds, source, store, index, catalogue, Instant::now())
+}
+
+/// `settle_with`, with the loop's clock at `at`.
+fn settle_at(
+    feeds: &mut PluginFeeds,
+    source: &mut dyn FeedSource,
+    store: &dyn FeedStore,
+    index: &mut dyn FeedIndex,
+    catalogue: &mut Catalogue,
+    at: Instant,
+) -> Result<(), FeedError> {
     for _ in 0..64 {
         if !feeds.busy(true) {
             return Ok(());
@@ -165,7 +177,7 @@ fn settle_with(
             index: Some(&mut *index),
             catalogue: &mut *catalogue,
             now: NOW,
-            at: Instant::now(),
+            at,
         };
         feeds.pump(source, &mut sinks)?;
     }

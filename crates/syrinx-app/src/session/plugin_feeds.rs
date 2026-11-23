@@ -36,6 +36,9 @@ pub(super) use worker::is_typing;
 pub(super) const BATCH_CHANGES: u32 = 256;
 /// The most batches one announcement pulls before the feed waits behind every other one.
 pub(super) const BATCHES_PER_TRIGGER: u32 = 8;
+/// The pace the session's idle work keeps once it is quiet (60 s). Pulling never holds that
+/// work off for longer, and a stalled feed waits this long before it is pulled again.
+const QUIET_PACE: Duration = super::BACKUP_CHECK_INTERVAL;
 
 /// Why one pull, or one plugin's removal, did not finish. None carries a plugin's text.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -233,6 +236,10 @@ impl PluginFeeds {
         if self.typing_quiet_for(sinks.at).is_some() {
             return Ok(());
         }
+        // A feed announced while it cooled down is queued once its cool-down has ended.
+        for name in self.history.take_cooled(sinks.at) {
+            self.announce(name);
+        }
         self.forget_removed(sinks)?;
         self.sweep_once(sinks)?;
         let Some(pull) = self.pull.take() else {
@@ -269,8 +276,9 @@ impl PluginFeeds {
         let Some(name) = self.waiting.pop_front() else {
             return Ok(());
         };
-        // A feed that stalled a moment ago is not pulled again yet, however often announced.
-        if self.history.cooling(&name, sinks.at) {
+        // A feed that stalled a moment ago is not pulled again yet, however often announced;
+        // its announcement waits for the cool-down to end.
+        if self.history.defer_if_cooling(&name, sinks.at) {
             return Ok(());
         }
         let namespace = namespace(&name)?;
