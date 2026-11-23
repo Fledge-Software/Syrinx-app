@@ -323,11 +323,17 @@ impl Installer {
     }
 
     /// Withdraw, stop and forget the plugin, then delete its package folders.
-    fn uninstall(&mut self, plugin: &str) {
+    /// Hold the plugin first, so nothing runs while another flow holds it; then withdraw,
+    /// stop and forget it, and last delete its package folders under the same hold.
+    fn uninstall(&mut self, plugin: &str) -> Result<(), String> {
+        let hold = self
+            .folders
+            .hold(plugin)
+            .map_err(|error| error.to_string())?;
         self.runtime
             .uninstall(plugin, &mut self.plugins, &mut self.commands)
-            .expect("uninstalled");
-        self.folders.remove_plugin(plugin).expect("folders removed");
+            .map_err(|error| error.to_string())?;
+        hold.remove_plugin().map_err(|error| error.to_string())
     }
 
     fn record(&self) -> PluginInstall {
@@ -821,7 +827,31 @@ fn uninstall_leaves_no_install_row_grant_setting_cache_entry_or_folder() {
             .is_some()
     );
 
-    installer.uninstall("test");
+    // While an update of the plugin is under way, an uninstall changes nothing.
+    let newer = package(&scratch, v(2), "", Some(&signer));
+    let staged = stage_plugin(
+        &installer.folders,
+        &PluginOffer {
+            folder: &newer,
+            basis: Basis::Update(installed(&installer.record()).expect("a record")),
+            developer_mode: false,
+        },
+    )
+    .expect("staged");
+    let record = installer.record();
+    let grants = installer.store.plugin_grants().expect("read");
+    assert_eq!(
+        installer.uninstall("test"),
+        Err(PluginInstallError::InstallInProgress.to_string())
+    );
+    assert_eq!(installer.record(), record);
+    assert_eq!(installer.store.plugin_grants(), Ok(grants));
+    assert_eq!(installer.folders.versions("test").expect("listed"), [v(1)]);
+    installer.echo();
+    drop(staged);
+
+    // Once that flow ends, uninstall removes everything.
+    installer.uninstall("test").expect("uninstalled");
     assert_eq!(installer.store.plugin_installs(), Ok(Vec::new()));
     assert_eq!(installer.store.plugin_grants(), Ok(Vec::new()));
     assert_eq!(
