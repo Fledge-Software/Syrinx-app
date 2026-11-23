@@ -103,7 +103,41 @@ impl PluginRegistry {
         signed: SignedManifest,
         commands: &mut CommandRegistry,
     ) -> Result<&RegisteredPlugin, RegistrationError> {
-        let manifest = signed.into_manifest();
+        self.add(signed.into_manifest(), commands)
+    }
+
+    /// Withdraw a plugin in one step: its commands leave the palette's registry, and its tab
+    /// types and feeds leave with its entry, so a refused or removed plugin shows nothing and
+    /// a corrected package may take its id again. Every other command keeps its key, and the
+    /// withdrawn ones' keys name nothing from now on. `None` if it was not registered.
+    pub fn withdraw(
+        &mut self,
+        id: &str,
+        commands: &mut CommandRegistry,
+    ) -> Option<RegisteredPlugin> {
+        let withdrawn = self.plugins.remove(id)?;
+        commands.remove_plugin(id);
+        Some(withdrawn)
+    }
+
+    /// Register a withdrawn plugin again, as an update that failed rolls back to the version
+    /// it replaced; its manifest was signed when it was first registered. Its commands get new
+    /// keys.
+    #[cfg(feature = "store")]
+    pub(crate) fn reinstate(
+        &mut self,
+        withdrawn: RegisteredPlugin,
+        commands: &mut CommandRegistry,
+    ) -> Result<&RegisteredPlugin, RegistrationError> {
+        self.add(withdrawn.manifest, commands)
+    }
+
+    /// Register every command `manifest` declares, or none, under a free id.
+    fn add(
+        &mut self,
+        manifest: PluginManifest,
+        commands: &mut CommandRegistry,
+    ) -> Result<&RegisteredPlugin, RegistrationError> {
         let id = manifest.id().to_owned();
         self.check_id(&id)?;
         let declared = manifest
@@ -156,7 +190,7 @@ impl PluginRegistry {
 
     /// Refuse an id Syrinx reserves or another plugin already has.
     fn check_id(&self, id: &str) -> Result<(), RegistrationError> {
-        if RESERVED_IDS.contains(&id) {
+        if is_reserved_id(id) {
             return Err(RegistrationError::ReservedId(id.to_owned()));
         }
         if self.plugins.contains_key(id) {
@@ -164,6 +198,11 @@ impl PluginRegistry {
         }
         Ok(())
     }
+}
+
+/// Whether the id belongs to Syrinx itself, so no plugin may take it.
+pub fn is_reserved_id(id: &str) -> bool {
+    RESERVED_IDS.contains(&id)
 }
 
 /// The palette command for a declared one. The manifest already proved its id carries the

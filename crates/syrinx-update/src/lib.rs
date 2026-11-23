@@ -20,6 +20,7 @@ compile_error!(
 );
 mod path;
 mod payload;
+mod plugin_install;
 mod plugin_package;
 #[cfg(any(test, feature = "release-tool"))]
 mod sign;
@@ -30,6 +31,8 @@ mod version;
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tests_plugin_install;
 #[cfg(test)]
 mod tests_plugin_package;
 #[cfg(test)]
@@ -52,9 +55,15 @@ pub use manifest::{
 pub use ncrypt::{KeyStorage, StoredKey};
 pub use path::{MAX_COMPONENT_BYTES, MAX_COMPONENTS, MAX_PATH_BYTES, PackagePath};
 pub use payload::{Payload, VerifiedFile, VerifiedPayload, read_bounded};
+pub use plugin_install::{
+    Basis, Installed, ListedFile, PLUGIN_STAGING_FOLDER, PLUGINS_FOLDER, PlacedPlugin,
+    PluginFolders, PluginInstallError, PluginOffer, Publisher, StagedPlugin, UninstallHold,
+    open_installed, settle_pending_update, stage_plugin,
+};
 pub use plugin_package::{
     MAX_PLUGIN_ID_BYTES, PACKAGE_FILE, PACKAGE_SIGNATURE_FILE, PluginPackageList, PluginPayload,
-    VerifiedPluginPackage, verify_plugin_package,
+    VerifiedPluginPackage, read_unsigned_plugin_package, verify_new_plugin_package,
+    verify_plugin_package,
 };
 #[cfg(any(test, feature = "release-tool"))]
 pub use sign::{SignedRelease, Signer, StatementTerms, sign_release};

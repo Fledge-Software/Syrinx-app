@@ -281,9 +281,10 @@ impl fmt::Display for CommandError {
 impl std::error::Error for CommandError {}
 
 /// The registered commands in registration order; each gets a stable numeric key for search.
+/// A removed command leaves its slot empty, so no key ever names another command.
 #[derive(Clone, Debug, Default)]
 pub struct CommandRegistry {
-    commands: Vec<Command>,
+    slots: Vec<Option<Command>>,
 }
 
 impl CommandRegistry {
@@ -312,15 +313,15 @@ impl CommandRegistry {
     /// Adds a command and returns its key; an invalid or conflicting command changes nothing.
     pub fn register(&mut self, command: Command) -> Result<NonZeroU64, CommandError> {
         // Refuse a command past the cap before anything else is checked or stored.
-        if self.commands.len() >= Self::MAX_COMMANDS {
+        if self.len() >= Self::MAX_COMMANDS {
             return Err(CommandError::TooManyCommands);
         }
         self.validate(&command)?;
-        let key = u64::try_from(self.commands.len() + 1)
+        let key = u64::try_from(self.slots.len() + 1)
             .ok()
             .and_then(NonZeroU64::new)
             .ok_or(CommandError::TooManyCommands)?;
-        self.commands.push(command);
+        self.slots.push(Some(command));
         Ok(key)
     }
 
@@ -346,11 +347,7 @@ impl CommandRegistry {
         if title.is_empty() || command.title.chars().count() > MAX_TITLE_LENGTH {
             return Err(CommandError::InvalidTitle);
         }
-        if self
-            .commands
-            .iter()
-            .any(|existing| existing.id == command.id)
-        {
+        if self.commands().any(|existing| existing.id == command.id) {
             return Err(CommandError::DuplicateId);
         }
         let Some(shortcut) = &command.shortcut else {
@@ -361,13 +358,17 @@ impl CommandRegistry {
         }
         // One keystroke must not run two commands depending on registration order.
         if self
-            .commands
-            .iter()
+            .commands()
             .any(|existing| existing.shortcut.as_ref() == Some(shortcut))
         {
             return Err(CommandError::DuplicateShortcut);
         }
         Ok(())
+    }
+
+    /// The registered commands, skipping removed ones' empty slots.
+    fn commands(&self) -> impl Iterator<Item = &Command> {
+        self.slots.iter().flatten()
     }
 
     /// Refuse a plugin's command once that plugin holds its quota.
@@ -376,8 +377,7 @@ impl CommandRegistry {
             return Ok(());
         };
         let held = self
-            .commands
-            .iter()
+            .commands()
             .filter(|existing| existing.scope == command.scope)
             .count();
         if held >= Self::MAX_COMMANDS_PER_PLUGIN {
@@ -386,9 +386,26 @@ impl CommandRegistry {
         Ok(())
     }
 
+    /// Removes every command `plugin` registered, in one step, and returns how many went.
+    /// Their keys stay empty for good, so a key kept from before names nothing, never another
+    /// command, and every other command keeps its key.
+    pub fn remove_plugin(&mut self, plugin: &str) -> usize {
+        let mut removed = 0;
+        for slot in &mut self.slots {
+            let owned = slot.as_ref().is_some_and(|command| {
+                matches!(&command.scope, CommandScope::Plugin { plugin: owner } if owner == plugin)
+            });
+            if owned {
+                *slot = None;
+                removed += 1;
+            }
+        }
+        removed
+    }
+
     pub fn get(&self, key: NonZeroU64) -> Option<&Command> {
         let index = usize::try_from(key.get() - 1).ok()?;
-        self.commands.get(index)
+        self.slots.get(index)?.as_ref()
     }
 
     pub fn find(&self, id: &str) -> Option<(NonZeroU64, &Command)> {
@@ -396,18 +413,18 @@ impl CommandRegistry {
     }
 
     pub fn iter(&self) -> impl Iterator<Item = (NonZeroU64, &Command)> {
-        self.commands.iter().enumerate().map(|(index, command)| {
-            let key = NonZeroU64::new(index as u64 + 1).expect("index plus one is non-zero");
-            (key, command)
+        self.slots.iter().enumerate().filter_map(|(index, slot)| {
+            let key = NonZeroU64::new(index as u64 + 1)?;
+            Some((key, slot.as_ref()?))
         })
     }
 
     pub fn len(&self) -> usize {
-        self.commands.len()
+        self.commands().count()
     }
 
     pub fn is_empty(&self) -> bool {
-        self.commands.is_empty()
+        self.len() == 0
     }
 }
 
@@ -688,6 +705,41 @@ mod tests {
                 .iter()
                 .all(|(_, command)| !command.is_plugin_action())
         );
+    }
+
+    #[test]
+    fn removing_a_plugin_takes_only_its_commands_and_keeps_every_key_stable() {
+        let mut registry = CommandRegistry::browser();
+        let browser = registry.len();
+        let keys = registry
+            .register_all(vec![
+                owned_command("first", "first.one", None),
+                owned_command("second", "second.one", None),
+                owned_command("first", "first.two", None),
+            ])
+            .expect("registered");
+        assert_eq!(keys.len(), 3);
+
+        assert_eq!(registry.remove_plugin("first"), 2);
+        assert_eq!(registry.len(), browser + 1);
+        assert!(registry.find("first.one").is_none());
+        assert!(registry.find("first.two").is_none());
+        // Every key keeps naming what it named: the other plugin's its own command, the
+        // removed ones nothing at all.
+        let (key, _) = registry
+            .find("second.one")
+            .expect("the other plugin keeps its command");
+        assert_eq!(key, keys[1], "later commands keep their keys");
+        assert!(registry.get(keys[0]).is_none());
+        assert!(registry.get(keys[2]).is_none());
+        assert_eq!(registry.iter().count(), browser + 1);
+        assert_eq!(registry.remove_plugin("first"), 0, "nothing left to remove");
+
+        // A corrected package may register the same ids again, under new keys.
+        let again = registry
+            .register(owned_command("first", "first.one", None))
+            .expect("the id is free again");
+        assert!(!keys.contains(&again), "a key is never reused");
     }
 
     #[test]

@@ -73,7 +73,7 @@ fn is_allowed_byte(byte: u8) -> bool {
 }
 
 /// Match a reserved device name on the part before the first dot, in any case.
-fn is_device_name(component: &str) -> bool {
+pub(crate) fn is_device_name(component: &str) -> bool {
     let stem = component.split('.').next().unwrap_or(component);
     let upper = stem.to_ascii_uppercase();
     if DEVICE_NAMES.contains(&upper.as_str()) {

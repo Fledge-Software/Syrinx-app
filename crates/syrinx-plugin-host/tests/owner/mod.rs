@@ -19,11 +19,12 @@ use syrinx_plugin_host::session::{CallResult, Session};
 use syrinx_plugin_host::worker::{PluginStatus, StopReason};
 use syrinx_plugin_host::{HostError, PluginRegistry};
 use syrinx_store::{
-    DirectoryLease, EncodingField, FolderAccess, LocationError, PluginInstall, PluginState, Store,
-    StoreError,
+    DirectoryLease, EncodingField, FolderAccess, LocationError, PluginGrant, PluginInstall,
+    PluginState, Store, StoreError,
 };
 
 mod cache;
+mod install;
 
 use crate::lifecycle::answer;
 use crate::package::{manifest_text, register};
@@ -140,6 +141,12 @@ fn logged(runtime: &mut OwnerRuntime, plugin: &str) -> Vec<String> {
         .into_iter()
         .map(|(_, message)| message)
         .collect()
+}
+
+/// A grant's stored scope as JSON. Its key order is not part of the contract: it changes with
+/// serde_json's `preserve_order` feature, which a workspace build turns on.
+fn scope(grant: &PluginGrant) -> serde_json::Value {
+    serde_json::from_str(&grant.scope_json).expect("a stored scope is JSON")
 }
 
 /// Close the runtime, then the store, as Syrinx does when it exits.
@@ -347,8 +354,9 @@ fn a_folder_is_granted_only_under_the_folder_capability_and_outside_the_deny_lis
         fs::canonicalize(&vault).expect("canonical")
     );
     let grants = store.plugin_grants().expect("grants");
-    assert!(
-        grants[0].grant.scope_json.contains("\"writable\":true"),
+    assert_eq!(
+        scope(&grants[0].grant)["writable"],
+        true,
         "the grant keeps the manifest's scope"
     );
     close(runtime, store);
@@ -682,7 +690,9 @@ fn an_index_grant_keeps_every_feed_a_valid_manifest_asks_for() {
         .expect("a manifest Syrinx accepted is granted what it asks for");
     let stored = store.plugin_grants().expect("grants");
     assert_eq!(stored.len(), 1);
-    let scope = &stored[0].grant.scope_json;
-    assert!(feeds.iter().all(|feed| scope.contains(feed.as_str())));
+    assert_eq!(
+        scope(&stored[0].grant),
+        serde_json::json!({ "feeds": feeds })
+    );
     close(runtime, store);
 }

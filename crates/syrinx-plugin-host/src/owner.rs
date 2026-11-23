@@ -4,7 +4,9 @@
 //! the `store` feature, for `syrinx-app`.
 
 mod cache;
+mod install;
 mod services;
+mod update;
 
 use std::collections::BTreeMap;
 use std::fmt;
@@ -20,6 +22,10 @@ use syrinx_store::{
 use wasmtime::Engine;
 
 pub use cache::{CacheSetup, Sha256};
+pub use install::{
+    BUILT_IN_PLUGINS, Hasher, InstallRefusal, InstalledOffer, Offer, Plan, Reviewed,
+    UNSIGNED_PUBLISHER,
+};
 pub use services::StoreServices;
 
 use crate::grants::{DenyList, FolderRefusal, GrantSet};
@@ -339,10 +345,9 @@ impl OwnerRuntime {
     /// the search index (#141) and recovery drafts (#37) join this when they keep anything.
     pub fn remove(&mut self, plugin: &str) -> Result<(), OwnerError> {
         self.require_record(plugin)?;
-        let workers = match (self.added.remove(plugin), self.running.as_mut()) {
-            (Some(_), Some(running)) => running.plugins.uninstall(plugin),
-            _ => Ok(()),
-        };
+        let workers = self.stop(plugin);
+        // Removed, it is forgotten even if its worker did not answer; that is still reported.
+        self.added.remove(plugin);
         self.grants.forget(plugin);
         let stored = self.store.remove_plugin(plugin.to_owned());
         if let Some(cache) = self.cache.as_ref() {
@@ -392,6 +397,19 @@ impl OwnerRuntime {
         if let Some(running) = self.running.take() {
             running.plugins.shutdown();
         }
+    }
+
+    /// Stop a plugin added this session and forget it; one not added has nothing to stop.
+    /// It stays added until its worker is told, so a failure leaves it known as loaded.
+    fn stop(&mut self, plugin: &str) -> CallResult<()> {
+        if !self.added.contains_key(plugin) {
+            return Ok(());
+        }
+        if let Some(running) = self.running.as_mut() {
+            running.plugins.uninstall(plugin)?;
+        }
+        self.added.remove(plugin);
+        Ok(())
     }
 
     /// The plugin as loaded this session; otherwise whether the store knows it at all.

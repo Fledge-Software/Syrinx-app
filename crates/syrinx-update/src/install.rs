@@ -5,9 +5,9 @@
 
 mod apply;
 mod check;
-mod error;
+pub(crate) mod error;
 mod fault;
-mod files;
+pub(crate) mod files;
 mod layout;
 mod lock;
 mod records;

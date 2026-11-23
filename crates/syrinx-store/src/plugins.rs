@@ -212,6 +212,20 @@ pub(crate) enum PluginWrite {
     ForgetCompiled {
         plugin_id: String,
     },
+    NarrowFolders {
+        plugin_id: String,
+        narrowing: FolderNarrowing,
+    },
+}
+
+/// How an update that asks for less narrows the folders already granted under one grant.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct FolderNarrowing {
+    pub grant_id: i64,
+    /// Write access was dropped: every folder becomes read-only.
+    pub read_only: bool,
+    /// At most this many folders stay, the earliest granted first.
+    pub keep: Option<u32>,
 }
 
 /// What a plugin write reports: a grant's row id, or whether a row was there to remove.
@@ -323,6 +337,7 @@ pub(crate) fn validate_write(write: &PluginWrite) -> Result<(), StoreError> {
             validate_plugin_id(plugin_id)
         }
         PluginWrite::Compiled(compiled) => validate_compiled(compiled),
+        PluginWrite::NarrowFolders { plugin_id, .. } => validate_plugin_id(plugin_id),
     }
 }
 
@@ -373,7 +388,38 @@ pub(crate) fn write(
                 .map_err(write_error)?;
             Ok(PluginWritten::Removed(removed > 0))
         }
+        PluginWrite::NarrowFolders {
+            plugin_id,
+            narrowing,
+        } => narrow_folders(connection, plugin_id, *narrowing),
     }
+}
+
+/// Makes one grant's folders read-only and drops those past the kept count, in one write.
+fn narrow_folders(
+    connection: &Connection,
+    plugin_id: &str,
+    narrowing: FolderNarrowing,
+) -> Result<PluginWritten, StoreError> {
+    if narrowing.read_only {
+        connection
+            .execute(
+                "UPDATE plugin_folder SET access = ?3 WHERE plugin_id = ?1 AND grant_id = ?2",
+                params![plugin_id, narrowing.grant_id, FolderAccess::Read as i64],
+            )
+            .map_err(write_error)?;
+    }
+    if let Some(keep) = narrowing.keep {
+        connection
+            .execute(
+                "DELETE FROM plugin_folder WHERE plugin_id = ?1 AND grant_id = ?2
+                 AND rowid NOT IN (SELECT rowid FROM plugin_folder
+                     WHERE plugin_id = ?1 AND grant_id = ?2 ORDER BY rowid LIMIT ?3)",
+                params![plugin_id, narrowing.grant_id, keep],
+            )
+            .map_err(write_error)?;
+    }
+    Ok(PluginWritten::Saved)
 }
 
 /// Records a plugin's compiled artefact, replacing the one it had.

@@ -88,6 +88,20 @@ impl Store {
             .map(drop)
     }
 
+    /// Narrows the folders already granted under one of `plugin_id`'s grants, as an update
+    /// that asks for less does (#140).
+    pub fn narrow_plugin_folders(
+        &self,
+        plugin_id: String,
+        narrowing: crate::FolderNarrowing,
+    ) -> Result<(), StoreError> {
+        let write = PluginWrite::NarrowFolders {
+            plugin_id,
+            narrowing,
+        };
+        self.write_plugin(write, None).map(drop)
+    }
+
     /// Saves one key in `plugin_id`'s own settings namespace.
     pub fn save_plugin_setting(
         &self,

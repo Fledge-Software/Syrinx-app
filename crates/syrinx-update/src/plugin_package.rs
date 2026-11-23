@@ -7,7 +7,7 @@ use crate::manifest::{
     FileEntry, MAX_MANIFEST_BYTES, manifest_body, parse_file_lines, parse_version_field,
     push_file_lines,
 };
-use crate::path::PackagePath;
+use crate::path::{PackagePath, is_device_name};
 use crate::payload::{self, Payload, VerifiedPayload};
 use crate::signature::SignatureKind;
 use crate::verify_signed;
@@ -141,7 +141,9 @@ fn parse_id(line: Option<(usize, &str)>) -> Result<String, UpdateError> {
         && id.len() <= MAX_PLUGIN_ID_BYTES
         && id
             .bytes()
-            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-');
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+        // The id names the plugin's folder, which Windows refuses for a device name.
+        && !is_device_name(id);
     if !valid {
         return Err(manifest_error(number, ManifestProblem::PluginId));
     }
@@ -211,7 +213,18 @@ impl VerifiedPluginPackage {
         &self,
         payload: P,
     ) -> Result<VerifiedPayload<PluginPayload<P>>, UpdateError> {
-        payload::verify(self.list.files(), PluginPayload { inner: payload })
+        self.list.verify_payload(payload)
+    }
+}
+
+impl PluginPackageList {
+    /// Check a folder against this list, as `VerifiedPluginPackage::verify_payload` does; only
+    /// a list whose signature was checked, or a development plugin's, may be used this way.
+    pub(crate) fn verify_payload<P: Payload>(
+        &self,
+        payload: P,
+    ) -> Result<VerifiedPayload<PluginPayload<P>>, UpdateError> {
+        payload::verify(self.files(), PluginPayload { inner: payload })
     }
 }
 
@@ -240,6 +253,38 @@ pub fn verify_plugin_package(
         check_newer(&list, installed)?;
     }
     Ok(VerifiedPluginPackage { list, key_id })
+}
+
+/// `verify_plugin_package` for a first install from a folder the owner chose: no install record
+/// names a slot, so the id is the package's own and the owner confirms it before installing.
+pub fn verify_new_plugin_package(
+    package_bytes: &[u8],
+    signature_bytes: &[u8],
+    keys: &KeySet,
+) -> Result<VerifiedPluginPackage, UpdateError> {
+    let key_id = verify_signed(
+        package_bytes,
+        signature_bytes,
+        keys,
+        SignatureKind::PluginPackage,
+        ("plugin package list", MAX_MANIFEST_BYTES),
+    )?;
+    let list = PluginPackageList::parse(package_bytes)?;
+    Ok(VerifiedPluginPackage { list, key_id })
+}
+
+/// An unsigned development package's list, for the owner's developer mode only: the slot and
+/// version rules still apply when a development plugin is updated (`installed` is its record).
+pub fn read_unsigned_plugin_package(
+    package_bytes: &[u8],
+    installed: Option<(&str, Version)>,
+) -> Result<PluginPackageList, UpdateError> {
+    let list = PluginPackageList::parse(package_bytes)?;
+    if let Some((expected_id, version)) = installed {
+        check_slot(&list, expected_id)?;
+        check_newer(&list, version)?;
+    }
+    Ok(list)
 }
 
 /// Refuse a package signed for another id than the slot it was found in.

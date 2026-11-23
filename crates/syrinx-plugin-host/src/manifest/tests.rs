@@ -149,6 +149,10 @@ fn bad_plugin_ids_and_versions_are_named() {
         "notes.extra",
         "",
         "a-plugin-id-that-is-far-too-long-for-syrinx",
+        "con",
+        "nul",
+        "com1",
+        "lpt9",
     ] {
         let text = changed("id = \"notes\"", &format!("id = {id:?}"));
         let error = parse(&text).expect_err(id);
