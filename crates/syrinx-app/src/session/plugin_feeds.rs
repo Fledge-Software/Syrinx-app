@@ -492,8 +492,11 @@ fn keep_documents(
         committed(index.reset(namespace)).map_err(FeedError::Index)?;
     }
     if let Err(error) = stage_documents(index, namespace, kept.changes, now) {
-        // Half a batch must not ride on the next commit, page text's included.
-        index.discard().map_err(FeedError::Index)?;
+        // Half a batch must not ride on the next commit, page text's included. The staging
+        // error stays the one reported; a failed discard is logged by its kind as well.
+        if let Err(discard) = index.discard() {
+            eprintln!("Syrinx: a half-staged plugin feed batch could not be discarded: {discard}");
+        }
         return Err(error);
     }
     committed(index.commit()).map_err(FeedError::Index)

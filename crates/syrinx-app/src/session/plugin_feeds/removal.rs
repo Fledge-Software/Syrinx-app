@@ -15,7 +15,7 @@ pub(super) enum Sweep {
     Due,
     /// A look failed; the next idle tick makes it due again, so a failing store or index is
     /// not asked, nor reported, at every wake-up.
-    Waiting,
+    RetryAtIdle,
     Done,
 }
 
@@ -36,7 +36,7 @@ impl PluginFeeds {
     /// The session calls this at each idle tick, whatever pulls are under way.
     pub(super) fn retry_removals(&mut self) {
         self.retry_due = true;
-        if matches!(self.sweep, Sweep::Waiting) {
+        if matches!(self.sweep, Sweep::RetryAtIdle) {
             self.sweep = Sweep::Due;
         }
     }
@@ -110,7 +110,7 @@ impl PluginFeeds {
         let (Sweep::Due, Some(index)) = (&self.sweep, sinks.index.as_deref_mut()) else {
             return Ok(());
         };
-        self.sweep = Sweep::Waiting;
+        self.sweep = Sweep::RetryAtIdle;
         let installed = sinks.store.installed().map_err(FeedError::Store)?;
         let held = index.plugin_ids().map_err(FeedError::Index)?;
         for plugin in held.difference(&installed) {
