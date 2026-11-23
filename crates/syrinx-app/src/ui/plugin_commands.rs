@@ -8,7 +8,9 @@ use super::*;
 impl BrowserView {
     /// The owner chose a plugin's command in the palette.
     pub(super) fn run_plugin_command(&mut self, plugin: &str, command: &str) {
-        let call = self.plugin_commands.choose(plugin, command);
+        // Today `PaletteEvent::Run` has already ended the entry, so a form cannot be shown.
+        let in_palette = self.palette.is_some();
+        let call = self.plugin_commands.choose(plugin, command, in_palette);
         self.command(SessionCommand::Plugin(call));
     }
 
@@ -38,7 +40,8 @@ fn notice_text(notice: Notice) -> String {
         Notice::Outcome(Outcome::Uncertain(detail)) => {
             format!("This may have happened ({detail}). Check before trying again.")
         }
-        Notice::FormReady { title } => {
+        Notice::FormReady { title } => format!("{title}: fill in the form."),
+        Notice::FormNotShown { title } => {
             format!("{title} has a form, which the palette cannot show yet.")
         }
         Notice::Invalid(error) => format!("{}: {}", error.name, error.message),
@@ -88,6 +91,19 @@ mod tests {
                 Notice::Outcome(Outcome::Uncertain("timed out".to_owned())),
                 "This may have happened (timed out). Check before trying again.",
             ),
+            (
+                Notice::FormReady {
+                    title: "New item".to_owned(),
+                },
+                "New item: fill in the form.",
+            ),
+            (
+                Notice::FormNotShown {
+                    title: "New item".to_owned(),
+                },
+                "New item has a form, which the palette cannot show yet.",
+            ),
+            (Notice::Pending, "Sent; waiting for the plugin to finish."),
             (
                 Notice::Invalid(FieldError {
                     name: "name".to_owned(),

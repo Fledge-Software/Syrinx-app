@@ -89,7 +89,9 @@ impl Declarations {
         Ok(())
     }
 
-    fn command(&self, id: &str) -> Option<&DeclaredCommand> {
+    /// The declared command `id`; the one lookup behind `require_command` and the owner's
+    /// `command_has_form`.
+    pub(crate) fn command(&self, id: &str) -> Option<&DeclaredCommand> {
         self.commands.iter().find(|command| command.id == id)
     }
 }

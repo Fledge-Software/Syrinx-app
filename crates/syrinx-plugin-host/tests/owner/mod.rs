@@ -16,7 +16,7 @@ use syrinx_plugin_host::grants::{DenyList, FolderRefusal, Protected};
 use syrinx_plugin_host::manifest::{CapabilityKind, DiscoveryOptions, PluginManifest};
 use syrinx_plugin_host::owner::{OwnerError, OwnerRuntime, StoreServices};
 use syrinx_plugin_host::session::{CallResult, Session};
-use syrinx_plugin_host::worker::{PluginStatus, StopReason};
+use syrinx_plugin_host::worker::{PluginEvent, PluginStatus, StopReason};
 use syrinx_plugin_host::{HostError, PluginRegistry};
 use syrinx_store::{
     DirectoryLease, EncodingField, FolderAccess, LocationError, PluginInstall, PluginState, Store,
@@ -701,5 +701,34 @@ fn whether_a_command_has_a_form_comes_from_the_added_plugins_manifest() {
     );
     assert_eq!(runtime.command_has_form("test", "test.missing"), None);
     assert_eq!(runtime.command_has_form("other", "test.echo"), None);
+    close(runtime, store);
+}
+
+#[test]
+fn a_watch_hears_each_worker_event_as_it_is_raised_and_the_queue_still_keeps_it() {
+    let temp = TempStore::new();
+    let store = temp.open();
+    let mut runtime = start(&store);
+    let (heard, hearing) = std::sync::mpsc::channel();
+    runtime.watch_events(move |event| {
+        heard.send(event.clone()).expect("the test is listening");
+    });
+    install(&mut runtime, "test", "");
+    let trapped = call(&mut runtime, "test", |session| {
+        session.run_command("test.panic")
+    });
+    assert!(trapped.is_err(), "{trapped:?}");
+    let event = hearing
+        .recv_timeout(std::time::Duration::from_secs(60))
+        .expect("the watch heard the failure");
+    assert!(matches!(event, PluginEvent::Failed { .. }), "{event:?}");
+    // The same event is queued for the application's next look, right after the watch.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+    let mut queued = runtime.take_events();
+    while !queued.contains(&event) {
+        assert!(std::time::Instant::now() < deadline, "the event was queued");
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        queued.extend(runtime.take_events());
+    }
     close(runtime, store);
 }
