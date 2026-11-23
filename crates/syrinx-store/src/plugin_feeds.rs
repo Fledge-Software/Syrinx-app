@@ -16,12 +16,16 @@ pub(crate) const CURSOR_TABLE: &str = "CREATE TABLE plugin_feed_cursor (
     PRIMARY KEY(plugin_id, feed)
 ) STRICT";
 
-/// One tier 1 row per feed entry. Keywords are each ended by U+001F, which none may hold.
+/// One tier 1 row per feed entry. Keywords are each ended by U+001F, which none may hold. A
+/// deleted entry stays as a tombstone (`deleted` 1, its text emptied) holding its revision,
+/// so tier 1 refuses a re-create at the same or a lower revision, as the full-text index's
+/// tombstone does in tier 2.
 pub(crate) const ENTRY_TABLE: &str = "CREATE TABLE plugin_feed_entry (
     plugin_id TEXT NOT NULL REFERENCES plugin_install(plugin_id) ON DELETE CASCADE,
     feed TEXT NOT NULL CHECK(length(feed) BETWEEN 1 AND 64),
     entry_id TEXT NOT NULL CHECK(length(entry_id) BETWEEN 1 AND 512),
     revision INTEGER NOT NULL,
+    deleted INTEGER NOT NULL CHECK(deleted IN (0, 1)),
     title TEXT NOT NULL CHECK(length(title) <= 1024),
     subtitle TEXT NOT NULL CHECK(length(subtitle) <= 1024),
     icon TEXT NOT NULL CHECK(length(icon) BETWEEN 1 AND 32),
@@ -88,7 +92,7 @@ impl fmt::Debug for StoredFeedEntry {
 #[derive(Clone, Eq, PartialEq)]
 pub enum FeedRowChange {
     Upsert(PluginFeedEntry),
-    /// Removes the row with this entry id.
+    /// Removes the row with this entry id, keeping its revision as a tombstone.
     Delete(String),
 }
 
@@ -135,7 +139,7 @@ pub enum FeedRowOutcome {
     Unchanged,
     /// A newer revision is held, so the change was refused.
     Stale,
-    /// A delete of an id the feed does not hold.
+    /// A delete of an id the feed does not hold, or holds only as a tombstone.
     Absent,
 }
 
@@ -231,7 +235,8 @@ fn apply(
     Ok(outcomes)
 }
 
-/// Writes `entry` unless the feed holds the same or a newer revision of it.
+/// Writes `entry` unless the feed holds the same or a newer revision of it, a tombstone's
+/// included.
 fn upsert(
     connection: &Connection,
     (plugin_id, feed): (&str, &str),
@@ -245,9 +250,9 @@ fn upsert(
     }
     connection
         .execute(
-            "INSERT OR REPLACE INTO plugin_feed_entry(plugin_id, feed, entry_id, revision, title,
-                 subtitle, icon, last_used, keywords)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            "INSERT OR REPLACE INTO plugin_feed_entry(plugin_id, feed, entry_id, revision, deleted,
+                 title, subtitle, icon, last_used, keywords)
+             VALUES (?1, ?2, ?3, ?4, 0, ?5, ?6, ?7, ?8, ?9)",
             params![
                 plugin_id,
                 feed,
@@ -264,6 +269,7 @@ fn upsert(
     Ok(FeedRowOutcome::Applied)
 }
 
+/// Turns the held row into a tombstone at its revision; its text is not kept.
 fn delete(
     connection: &Connection,
     (plugin_id, feed): (&str, &str),
@@ -271,7 +277,9 @@ fn delete(
 ) -> Result<FeedRowOutcome, StoreError> {
     let removed = connection
         .execute(
-            "DELETE FROM plugin_feed_entry WHERE plugin_id = ?1 AND feed = ?2 AND entry_id = ?3",
+            "UPDATE plugin_feed_entry
+             SET deleted = 1, title = '', subtitle = '', last_used = NULL, keywords = ''
+             WHERE plugin_id = ?1 AND feed = ?2 AND entry_id = ?3 AND deleted = 0",
             params![plugin_id, feed, entry_id],
         )
         .map_err(write_error)?;
@@ -332,12 +340,12 @@ pub(crate) fn cursor(
         .map_err(read_error)
 }
 
-/// Every stored row of every feed, in a stable order.
+/// Every stored row of every feed, tombstones left out, in a stable order.
 pub(crate) fn entries(connection: &Connection) -> Result<Vec<StoredFeedEntry>, StoreError> {
     let mut statement = connection
         .prepare(
             "SELECT plugin_id, feed, entry_id, revision, title, subtitle, icon, last_used, keywords
-             FROM plugin_feed_entry ORDER BY plugin_id, feed, entry_id",
+             FROM plugin_feed_entry WHERE deleted = 0 ORDER BY plugin_id, feed, entry_id",
         )
         .map_err(read_error)?;
     let rows = statement

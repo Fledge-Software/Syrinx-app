@@ -791,6 +791,17 @@ fn a_feed_announced_while_cooling_down_is_pulled_once_when_the_cool_down_ends() 
         "one pull for every waiting announcement"
     );
     assert_eq!(titles(&mut catalogue, "synthetic"), ["Synthetic fixed"]);
+
+    // The held announcements were queued once: another turn pulls nothing more.
+    let mut sinks = Sinks {
+        store: &store,
+        index: Some(&mut index),
+        catalogue: &mut catalogue,
+        now: NOW,
+        at: start + QUIET_PACE,
+    };
+    feeds.pump(&mut plugin, &mut sinks).expect("nothing waits");
+    assert_eq!(plugin.requests.len(), 4, "queued once");
 }
 
 #[test]
@@ -891,4 +902,69 @@ fn a_batch_that_fails_part_way_through_staging_leaves_nothing_for_another_commit
         store.plugin_feed_cursor(PLUGIN, FEED),
         Ok(Some("c1".to_owned()))
     );
+}
+
+#[test]
+fn both_tiers_refuse_a_deleted_id_back_at_the_same_or_a_lower_revision() {
+    let folder = Folder::new();
+    let store = folder.store();
+    let mut index = folder.index("fulltext");
+    let mut catalogue = Catalogue::new();
+    let mut feeds = PluginFeeds::default();
+    let written = batch(
+        vec![
+            entry("a", 5, "Synthetic alpha"),
+            document("a", 5, "quillmark"),
+        ],
+        "c1",
+        false,
+    );
+    let deleted = batch(vec![Change::Delete("a".to_owned())], "c2", false);
+    let same = batch(
+        vec![
+            entry("a", 5, "Synthetic same"),
+            document("a", 5, "lanternfish"),
+        ],
+        "c3",
+        false,
+    );
+    let lower = batch(
+        vec![
+            entry("a", 4, "Synthetic lower"),
+            document("a", 4, "copperleaf"),
+        ],
+        "c4",
+        false,
+    );
+    let mut plugin = Scripted::default()
+        .answer(None, written)
+        .answer(Some("c1"), deleted)
+        .answer(Some("c2"), same)
+        .answer(Some("c3"), lower);
+    for _ in 0..4 {
+        announce(&mut feeds);
+        settle(&mut feeds, &mut plugin, &store, &mut index, &mut catalogue);
+    }
+    assert_eq!(plugin.requests.len(), 4);
+    // Neither tier took the id back: no palette row without text, no text without a row.
+    assert!(titles(&mut catalogue, "synthetic").is_empty());
+    assert!(kept_rows(&store).is_empty());
+    for word in ["quillmark", "lanternfish", "copperleaf"] {
+        assert!(documents(&index, word).is_empty(), "{word} is not held");
+    }
+
+    // A newer revision comes back in both.
+    let newer = batch(
+        vec![
+            entry("a", 6, "Synthetic newer"),
+            document("a", 6, "marrowbell"),
+        ],
+        "c5",
+        false,
+    );
+    plugin = plugin.answer(Some("c4"), newer);
+    announce(&mut feeds);
+    settle(&mut feeds, &mut plugin, &store, &mut index, &mut catalogue);
+    assert_eq!(titles(&mut catalogue, "synthetic"), ["Synthetic newer"]);
+    assert_eq!(documents(&index, "marrowbell"), ["a"]);
 }

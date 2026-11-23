@@ -338,3 +338,62 @@ fn diagnostics_print_no_entry_text_or_cursor() {
     assert!(!printed.contains("secret"), "{printed}");
     assert!(printed.contains(PLUGIN));
 }
+
+#[test]
+fn a_deleted_entry_keeps_its_revision_so_only_a_newer_one_comes_back() {
+    let directory = TestDirectory::new();
+    let store = installed(&directory);
+    let written = commit(vec![upsert("a", 5, "Synthetic draft")], "c1");
+    assert_eq!(
+        store.commit_plugin_feed(written),
+        Ok(vec![FeedRowOutcome::Applied])
+    );
+    let deleted = commit(vec![FeedRowChange::Delete("a".to_owned())], "c2");
+    assert_eq!(
+        store.commit_plugin_feed(deleted),
+        Ok(vec![FeedRowOutcome::Applied])
+    );
+    assert!(rows(&store).is_empty(), "a tombstone is never read back");
+
+    // The tombstone holds revision 5: the same and a lower revision stay deleted.
+    let again = commit(
+        vec![
+            upsert("a", 5, "Synthetic same"),
+            upsert("a", 4, "Synthetic lower"),
+        ],
+        "c3",
+    );
+    assert_eq!(
+        store.commit_plugin_feed(again),
+        Ok(vec![FeedRowOutcome::Unchanged, FeedRowOutcome::Stale])
+    );
+    assert!(rows(&store).is_empty());
+    let newer = commit(vec![upsert("a", 6, "Synthetic newer")], "c4");
+    assert_eq!(
+        store.commit_plugin_feed(newer),
+        Ok(vec![FeedRowOutcome::Applied])
+    );
+    assert_eq!(
+        rows(&store),
+        [("a".to_owned(), 6, "Synthetic newer".to_owned())]
+    );
+
+    // A reset forgets tombstones too, as the index's namespace reset does.
+    let tombstone = commit(vec![FeedRowChange::Delete("a".to_owned())], "c5");
+    assert_eq!(
+        store.commit_plugin_feed(tombstone),
+        Ok(vec![FeedRowOutcome::Applied])
+    );
+    let mut reset = commit(vec![upsert("a", 1, "Synthetic restarted")], "c6");
+    reset.clear_first = true;
+    assert_eq!(
+        store.commit_plugin_feed(reset),
+        Ok(vec![FeedRowOutcome::Applied])
+    );
+    assert_eq!(
+        rows(&store),
+        [("a".to_owned(), 1, "Synthetic restarted".to_owned())]
+    );
+    store.shutdown().expect("store closes");
+    directory.cleanup();
+}
