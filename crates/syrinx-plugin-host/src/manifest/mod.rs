@@ -337,15 +337,25 @@ fn plugin_info(raw: RawPlugin) -> Result<PluginInfo, ManifestError> {
 /// A plugin id is one segment of lowercase letters, digits and hyphens.
 fn check_plugin_id(id: &str) -> Result<(), ManifestError> {
     let one_segment = !id.contains('.') && id.len() <= MAX_PLUGIN_ID_BYTES;
-    if one_segment && CommandId::new(id).is_ok() {
+    if one_segment && CommandId::new(id).is_ok() && !is_device_name(id) {
         return Ok(());
     }
     Err(invalid(
         "plugin.id",
         format!(
-            "{id:?} is not lowercase letters, digits and hyphens of at most {MAX_PLUGIN_ID_BYTES} bytes"
+            "{id:?} is not lowercase letters, digits and hyphens of at most {MAX_PLUGIN_ID_BYTES} bytes, or is a Windows device name"
         ),
     ))
+}
+
+/// Whether a lowercase, dot-free id is a Windows device name, which no folder may be named.
+/// `syrinx-update` keeps the same rule for the signed package list.
+fn is_device_name(id: &str) -> bool {
+    let numbered = |prefix: &str| {
+        id.strip_prefix(prefix)
+            .is_some_and(|rest| rest.len() == 1 && rest.bytes().all(|byte| byte.is_ascii_digit()))
+    };
+    ["con", "prn", "aux", "nul"].contains(&id) || numbered("com") || numbered("lpt")
 }
 
 /// Non-blank text of at most `max` characters.

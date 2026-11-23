@@ -7,7 +7,7 @@ use crate::manifest::{
     FileEntry, MAX_MANIFEST_BYTES, manifest_body, parse_file_lines, parse_version_field,
     push_file_lines,
 };
-use crate::path::PackagePath;
+use crate::path::{PackagePath, is_device_name};
 use crate::payload::{self, Payload, VerifiedPayload};
 use crate::signature::SignatureKind;
 use crate::verify_signed;
@@ -141,7 +141,9 @@ fn parse_id(line: Option<(usize, &str)>) -> Result<String, UpdateError> {
         && id.len() <= MAX_PLUGIN_ID_BYTES
         && id
             .bytes()
-            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-');
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+        // The id names the plugin's folder, which Windows refuses for a device name.
+        && !is_device_name(id);
     if !valid {
         return Err(manifest_error(number, ManifestProblem::PluginId));
     }

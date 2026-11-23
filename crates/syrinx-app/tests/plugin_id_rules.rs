@@ -42,7 +42,7 @@ fn package_accepts(id: &str) -> bool {
 fn the_package_list_and_the_manifest_accept_the_same_plugin_ids() {
     let longest = "x".repeat(MAX_PLUGIN_ID_BYTES);
     let too_long = "x".repeat(MAX_PLUGIN_ID_BYTES + 1);
-    let table: [(&str, bool); 14] = [
+    let table: [(&str, bool); 25] = [
         ("notes", true),
         ("a", true),
         ("forge-2", true),
@@ -57,6 +57,18 @@ fn the_package_list_and_the_manifest_accept_the_same_plugin_ids() {
         ("no_tes", false),
         ("no tes", false),
         ("n\u{f6}tes", false),
+        // Windows device names cannot be folder names, whatever their case.
+        ("con", false),
+        ("prn", false),
+        ("aux", false),
+        ("nul", false),
+        ("com1", false),
+        ("com9", false),
+        ("lpt1", false),
+        ("lpt9", false),
+        ("console", true),
+        ("com10", true),
+        ("lpt-1", true),
     ];
     for (id, expected) in table {
         assert_eq!(manifest_accepts(id), expected, "manifest, {id:?}");

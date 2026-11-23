@@ -279,6 +279,14 @@ fn malformed_identity_lines_are_named() -> Result<(), UpdateError> {
             ManifestProblem::PluginId,
         ),
         (
+            "id aux\nversion 0.3.0\nworld syrinx:plugin/plugin@0.1.0\n",
+            ManifestProblem::PluginId,
+        ),
+        (
+            "id com7\nversion 0.3.0\nworld syrinx:plugin/plugin@0.1.0\n",
+            ManifestProblem::PluginId,
+        ),
+        (
             "id notes\nversion 0.3\nworld syrinx:plugin/plugin@0.1.0\n",
             ManifestProblem::Version,
         ),
