@@ -70,9 +70,9 @@ fn number_problem(value: &str, options: &NumberOptions) -> Option<String> {
     None
 }
 
-/// A finite number, written plainly.
+/// A finite number, written plainly; a space around it is sent too, so it is refused.
 fn parse_number(value: &str) -> Result<f64, String> {
-    match value.trim().parse::<f64>() {
+    match value.parse::<f64>() {
         Ok(number) if number.is_finite() => Ok(number),
         _ => Err("Enter a number.".to_owned()),
     }

@@ -271,17 +271,19 @@ impl<S: PluginHost> Worker<S> {
     /// Every event goes through here in the order it is raised: `finish` and `fail` settle the
     /// writes in flight (`Outcome`) before they report `Deactivated` or `Failed`.
     fn send(&self, event: PluginEvent) {
-        if self.events.send(event.clone()).is_err() {
-            self.shared.request_stop(StopReason::Shutdown);
-            return;
-        }
-        // Queued first, then the application hears of it at once, outside the lock.
         let watcher = self
             .watch
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .clone();
-        if let Some(watcher) = watcher {
+        // Only a watched event is kept to show after it is queued.
+        let watched = watcher.map(|watcher| (watcher, event.clone()));
+        if self.events.send(event).is_err() {
+            self.shared.request_stop(StopReason::Shutdown);
+            return;
+        }
+        // Queued first, then the application hears of it at once, outside the lock.
+        if let Some((watcher, event)) = watched {
             watcher(&event);
         }
     }

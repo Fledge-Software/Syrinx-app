@@ -343,7 +343,10 @@ fn a_submission_that_never_ran_failed_with_nothing_sent() {
     assert_eq!(spun.token, spin_token);
     assert_eq!(
         spun.reply,
-        PluginReply::Ran(Err(host_failure("The plugin stopped before it answered.")))
+        // Stopped at its deadline once it ran, so whatever it wrote may have happened.
+        PluginReply::Ran(Outcome::Uncertain(
+            "the plugin stopped while running it".to_owned()
+        ))
     );
     let never_ran = route.answer();
     let failure = host_failure("The plugin could not take the request, so nothing was sent.");
@@ -395,10 +398,12 @@ fn an_answer_reaches_the_window_ahead_of_its_own_outcome() {
     let SessionEvent::Plugin(pending) = first else {
         panic!("the submission's answer first, not {first:?}");
     };
-    assert!(matches!(
-        second,
-        SessionEvent::Plugin(PluginAnswer { token: 950, .. })
-    ));
+    // `commands.run` can write, so a trap inside it may have happened too.
+    let trapped = Outcome::Uncertain("the plugin stopped while running it".to_owned());
+    let SessionEvent::Plugin(PluginAnswer { token: 950, reply }) = second else {
+        panic!("the trapping command's answer second, not {second:?}");
+    };
+    assert_eq!(reply, PluginReply::Ran(trapped));
     let SessionEvent::PluginOutcome(late) = third else {
         panic!("the settled write next, not {third:?}");
     };
@@ -433,7 +438,7 @@ fn a_pending_outcome_reaches_its_own_form_as_soon_as_the_host_settles_it() {
     let SessionEvent::PluginStopped { plugin } = route.next_event() else {
         panic!("the stop, after the settled write");
     };
-    assert_eq!(route.commands.plugin_stopped(&plugin), None);
+    assert_eq!(route.commands.plugin_stopped(&plugin), []);
     route.close();
 }
 

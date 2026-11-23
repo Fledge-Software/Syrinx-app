@@ -675,10 +675,7 @@ fn serve_accepted(
     let started = problems
         .into_iter()
         .try_for_each(|error| emit_recoverable(events, error));
-    if let Some(plugins) = &plugins {
-        plugin_commands::watch_outcomes(&plugins.runtime, events);
-    }
-    worker.plugins = plugins;
+    worker.attach_plugins(plugins, events);
     let result = started.and_then(|()| {
         serve_counted(
             &usage,
@@ -971,6 +968,19 @@ struct Persisted {
 }
 
 impl Worker {
+    /// Give the loop the plugin runtime and let the window hear of the writes it settles and
+    /// the plugins that stop, in one step so neither is set without the other (#29).
+    fn attach_plugins(
+        &mut self,
+        plugins: Option<plugins::SessionPlugins>,
+        events: &UnboundedSender<SessionEvent>,
+    ) {
+        if let Some(plugins) = &plugins {
+            plugin_commands::watch_outcomes(&plugins.runtime, events);
+        }
+        self.plugins = plugins;
+    }
+
     fn restore(
         store: &Store,
         mut deletions: DeletionJournal,

@@ -141,7 +141,8 @@ pub struct PluginAnswer {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum PluginReply {
-    Ran(Result<(), Failure>),
+    /// `commands.run`'s outcome: uncertain when the plugin stopped while it ran.
+    Ran(Outcome),
     Form(Result<FormSpec, Failure>),
     Validated(Result<Vec<FieldError>, Failure>),
     Submitted(Submitted),
@@ -181,8 +182,9 @@ pub enum Notice {
     FormReady { title: String },
     /// The command has a form, but the palette had closed by the time it arrived.
     FormNotShown { title: String },
-    /// The first failing field, in the form's order.
-    Invalid(FieldError),
+    /// The first failing field, in the form's order: `field` is the label the owner was shown,
+    /// or the field's name for a set-aside submission, whose form is gone.
+    Invalid { field: String, message: String },
     /// Submitted; an outcome comes only if the host settles the write (see `Submitted`).
     Pending,
     /// A set-aside call was forgotten to make room for a newer one, so its result will not be
@@ -245,6 +247,12 @@ impl PluginForm {
     /// The errors last reported, in the form's order.
     pub fn errors(&self) -> &[FieldError] {
         &self.errors
+    }
+
+    /// The label of the field named `name`.
+    fn label(&self, name: &str) -> Option<&str> {
+        let index = self.index(name)?;
+        Some(&self.spec.fields[index].label)
     }
 
     fn index(&self, name: &str) -> Option<usize> {
@@ -348,7 +356,8 @@ enum Awaiting {
 }
 
 /// What a pending submission is told when its plugin stops before the host settles it.
-const STOPPED_PENDING: &str = "the plugin stopped before its outcome was known";
+/// The same words the host uses for a write it settles when its plugin stops.
+const STOPPED_PENDING: &str = "the plugin stopped before the outcome was known";
 
 /// The most set-aside calls kept for their result; the oldest is forgotten first, and the
 /// owner is told (`Notice::Forgotten`).
@@ -406,6 +415,7 @@ impl PluginCommands {
     pub fn abandon(&mut self) -> Option<Notice> {
         let current = self.current.take()?;
         let (form, awaiting) = match current.stage {
+            // A choice on its way stays current, marked closed, so a command it ran is told.
             Stage::Choosing { token, title, .. } => {
                 let closed = true;
                 let stage = Stage::Choosing {
@@ -428,15 +438,23 @@ impl PluginCommands {
         })
     }
 
-    /// A plugin's worker stopped. It settled its writes in flight before saying so, so a
+    /// A plugin's worker stopped. It settled the writes it still held before saying so, so a
     /// submission still waiting for an outcome from it, set aside or current, will never get
-    /// one. A current one is told it may have happened, since its write may have completed.
-    pub fn plugin_stopped(&mut self, plugin: &str) -> Option<Notice> {
-        self.orphans.retain(|orphan| {
-            orphan.plugin != plugin || !matches!(orphan.awaiting, Awaiting::Outcome(_))
-        });
-        let outcome = Outcome::Uncertain(STOPPED_PENDING.to_owned());
-        self.settle_current_pending(|stopped, _| stopped == plugin, outcome)
+    /// one; that happens when the plugin gave up on its request (`host.cancel`). Each is told
+    /// it may have happened, the set-aside ones by name, since a write may have completed.
+    pub fn plugin_stopped(&mut self, plugin: &str) -> Vec<Notice> {
+        let uncertain = || Outcome::Uncertain(STOPPED_PENDING.to_owned());
+        let (stopped, kept) = std::mem::take(&mut self.orphans)
+            .into_iter()
+            .partition(|orphan| {
+                orphan.plugin == plugin && matches!(orphan.awaiting, Awaiting::Outcome(_))
+            });
+        self.orphans = kept;
+        let set_aside_notices = stopped
+            .into_iter()
+            .map(|orphan: Orphan| set_aside(orphan.name, Notice::Outcome(uncertain())));
+        let current = self.settle_current_pending(|stopped, _| stopped == plugin, uncertain());
+        set_aside_notices.chain(current).collect()
     }
 
     /// The open form, while one is.
@@ -652,10 +670,10 @@ impl PluginCommands {
         }
         let orphan = self.orphans.remove(index);
         let notice = match reply {
-            PluginReply::Ran(ran) => ran_notice(ran),
+            PluginReply::Ran(outcome) => Notice::Outcome(outcome),
             PluginReply::Submitted(Submitted::Finished(outcome)) => Notice::Outcome(outcome),
             PluginReply::Submitted(Submitted::Invalid(errors)) => {
-                invalid_notice(errors.into_iter().next())
+                invalid_notice(errors.into_iter().next(), None)
             }
             PluginReply::Submitted(Submitted::Pending { .. })
             | PluginReply::Form(_)
@@ -717,7 +735,7 @@ fn answered(current: Current, answer: PluginAnswer) -> (Option<Current>, Option<
 /// palette. A reply that does not answer `Choose` is dropped.
 fn chosen(closed: bool, reply: PluginReply) -> (Option<Stage>, Option<Notice>) {
     match reply {
-        PluginReply::Ran(ran) => (None, Some(ran_notice(ran))),
+        PluginReply::Ran(outcome) => (None, Some(Notice::Outcome(outcome))),
         PluginReply::Form(Ok(spec)) if closed => {
             let title = spec.title;
             (None, Some(Notice::FormNotShown { title }))
@@ -739,7 +757,10 @@ fn chosen(closed: bool, reply: PluginReply) -> (Option<Stage>, Option<Notice>) {
 /// The plugin's validation: its errors are kept and the first named.
 fn validated(form: &mut PluginForm, result: Result<Vec<FieldError>, Failure>) -> Option<Notice> {
     match result {
-        Ok(errors) => form.report(errors).map(Notice::Invalid),
+        Ok(errors) => {
+            let first = form.report(errors)?;
+            Some(invalid_notice(Some(first), Some(form)))
+        }
         Err(failure) => Some(Notice::Failed(failure)),
     }
 }
@@ -751,7 +772,8 @@ fn submission(form: PluginForm, submitted: Submitted) -> (Option<Stage>, Notice)
         Submitted::Pending { request } => (Some(Stage::Pending { form, request }), Notice::Pending),
         Submitted::Invalid(errors) => {
             let mut form = form;
-            let notice = invalid_notice(form.report(errors));
+            let first = form.report(errors);
+            let notice = invalid_notice(first, Some(&form));
             let stage = Stage::Editing {
                 form,
                 validation: None,
@@ -775,14 +797,6 @@ fn settled(form: PluginForm, outcome: Outcome) -> (Option<Stage>, Notice) {
     (stage, Notice::Outcome(outcome))
 }
 
-/// What the owner is told of a command that ran.
-fn ran_notice(ran: Result<(), Failure>) -> Notice {
-    match ran {
-        Ok(()) => Notice::Outcome(Outcome::Done(None)),
-        Err(failure) => Notice::Outcome(Outcome::Failed(failure)),
-    }
-}
-
 /// `notice`, named for the set-aside call it is about.
 fn set_aside(command: String, notice: Notice) -> Notice {
     Notice::SetAside {
@@ -791,11 +805,16 @@ fn set_aside(command: String, notice: Notice) -> Notice {
     }
 }
 
-/// What the owner is told of a submission the plugin found invalid: its first failing field, or,
-/// when it named none, that nothing happened.
-fn invalid_notice(first: Option<FieldError>) -> Notice {
+/// What the owner is told of a form the plugin found invalid: its first failing field, by the
+/// label `form` shows when it is still open, or, when the plugin named none, that nothing
+/// happened.
+fn invalid_notice(first: Option<FieldError>, form: Option<&PluginForm>) -> Notice {
     match first {
-        Some(first) => Notice::Invalid(first),
+        Some(FieldError { name, message }) => {
+            let label = form.and_then(|form| form.label(&name));
+            let field = label.map_or(name, str::to_owned);
+            Notice::Invalid { field, message }
+        }
         None => Notice::Failed(Failure {
             kind: FailureKind::InvalidInput,
             message: "The plugin refused the form without naming a field.".to_owned(),

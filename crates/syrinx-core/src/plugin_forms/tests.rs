@@ -112,6 +112,14 @@ fn named(command: &str, notice: Notice) -> Notice {
     }
 }
 
+/// The notice naming `field`, by its label while the form is open.
+fn invalid_field(field: &str, message: &str) -> Notice {
+    Notice::Invalid {
+        field: field.to_owned(),
+        message: message.to_owned(),
+    }
+}
+
 fn uncertain() -> Outcome {
     Outcome::Uncertain("synthetic".to_owned())
 }
@@ -201,6 +209,23 @@ fn an_optional_field_of_only_spaces_is_still_checked_since_the_spaces_are_sent()
 }
 
 #[test]
+fn a_number_or_amount_with_a_space_around_it_is_refused_since_the_space_is_sent() {
+    let mut fields = vec![field("value", FieldKind::Money("USD".to_owned()))];
+    fields.push(spec_field("count"));
+    let spec = FormSpec { fields, ..spec() };
+    let spaced = [value("value", " 42"), value("count", "5 ")];
+    assert_eq!(
+        host_checks(&spec, &spaced),
+        vec![
+            error("value", "Enter a number."),
+            error("count", "Enter a number."),
+        ]
+    );
+    let plain = [value("value", "42"), value("count", "5")];
+    assert!(host_checks(&spec, &plain).is_empty());
+}
+
+#[test]
 fn a_failed_host_check_keeps_the_input_names_the_first_field_and_sends_nothing() {
     let mut commands = PluginCommands::default();
     open_form(&mut commands);
@@ -256,7 +281,7 @@ fn the_plugins_validation_reports_its_first_failing_field_in_form_order() {
     assert!(values.contains(&value("name", "Ada")));
     let errors = vec![error("source", "Pick one."), error("name", "Taken.")];
     let notice = commands.receive(answer(token(&call), PluginReply::Validated(Ok(errors))));
-    assert_eq!(notice, Some(Notice::Invalid(error("name", "Taken."))));
+    assert_eq!(notice, Some(invalid_field("NAME", "Taken.")));
     assert_eq!(
         commands.form().expect("open").errors(),
         [error("name", "Taken."), error("source", "Pick one.")]
@@ -276,7 +301,7 @@ fn an_older_validation_answer_is_dropped_once_a_newer_one_was_sent() {
     let fresh = PluginReply::Validated(Ok(vec![error("name", "Taken.")]));
     assert_eq!(
         commands.receive(answer(token(&newer), fresh)),
-        Some(Notice::Invalid(error("name", "Taken.")))
+        Some(invalid_field("NAME", "Taken."))
     );
 }
 
@@ -389,7 +414,7 @@ fn an_invalid_submission_keeps_the_input_and_can_be_sent_again() {
     let invalid = PluginReply::Submitted(Submitted::Invalid(vec![error("name", "Taken.")]));
     assert_eq!(
         commands.receive(answer(first, invalid)),
-        Some(Notice::Invalid(error("name", "Taken.")))
+        Some(invalid_field("NAME", "Taken."))
     );
     assert_eq!(commands.form().expect("open").value("name"), Some("Ada"));
     assert!(commands.submit().is_ok());
@@ -475,7 +500,7 @@ fn choosing_another_command_leaves_the_first_forms_outcome_on_the_status_line_on
     assert!(commands.form().is_none());
     // The second command's own answer still counts.
     assert_eq!(
-        commands.receive(answer(token(&other), PluginReply::Ran(Ok(())))),
+        commands.receive(answer(token(&other), PluginReply::Ran(Outcome::Done(None)))),
         Some(Notice::Outcome(Outcome::Done(None)))
     );
 }
@@ -490,7 +515,10 @@ fn a_command_that_ran_is_reported_after_the_palette_closed_but_a_form_is_not_ope
         message: "synthetic".to_owned(),
     };
     assert_eq!(
-        commands.receive(answer(token(&ran), PluginReply::Ran(Err(failure.clone())))),
+        commands.receive(answer(
+            token(&ran),
+            PluginReply::Ran(Outcome::Failed(failure.clone()))
+        )),
         Some(Notice::Outcome(Outcome::Failed(failure)))
     );
 
@@ -559,7 +587,7 @@ fn a_closed_submissions_invalid_answer_names_its_field_or_says_nothing_happened(
     let invalid = PluginReply::Submitted(Submitted::Invalid(vec![error("name", "Taken.")]));
     assert_eq!(
         commands.receive(answer(first, invalid)),
-        Some(named("New item", Notice::Invalid(error("name", "Taken."))))
+        Some(named("New item", invalid_field("name", "Taken.")))
     );
 
     let second = submitted(&mut commands);
@@ -585,14 +613,17 @@ fn a_command_run_still_waiting_when_another_is_chosen_is_still_reported_by_its_t
         .0;
     // The first's late answer arrives while the second is current, and names its command.
     assert_eq!(
-        commands.receive(answer(token(&first), PluginReply::Ran(Ok(())))),
+        commands.receive(answer(token(&first), PluginReply::Ran(Outcome::Done(None)))),
         Some(named(
             "Synthetic echo",
             Notice::Outcome(Outcome::Done(None))
         ))
     );
     assert_eq!(
-        commands.receive(answer(token(&second), PluginReply::Ran(Ok(())))),
+        commands.receive(answer(
+            token(&second),
+            PluginReply::Ran(Outcome::Done(None))
+        )),
         Some(Notice::Outcome(Outcome::Done(None)))
     );
 
@@ -611,7 +642,7 @@ fn a_command_run_still_waiting_when_another_is_chosen_is_still_reported_by_its_t
 }
 
 #[test]
-fn a_stopped_plugin_forgets_its_set_aside_submissions_that_wait_for_an_outcome() {
+fn a_stopped_plugin_tells_each_set_aside_submission_still_owed_an_outcome_by_name() {
     let mut commands = PluginCommands::default();
     let first = submitted(&mut commands);
     let pending = PluginReply::Submitted(Submitted::Pending { request: 41 });
@@ -620,8 +651,17 @@ fn a_stopped_plugin_forgets_its_set_aside_submissions_that_wait_for_an_outcome()
     // One on its way still gets its answer, which the stopped worker always sends.
     let second = submitted(&mut commands);
     commands.abandon();
-    assert_eq!(commands.plugin_stopped("other"), None);
-    assert_eq!(commands.plugin_stopped("test"), None);
+    assert_eq!(commands.plugin_stopped("other"), []);
+    // The plugin gave up on request 41 (`host.cancel`), so no settled outcome came first.
+    assert_eq!(
+        commands.plugin_stopped("test"),
+        [named(
+            "New item",
+            Notice::Outcome(Outcome::Uncertain(STOPPED_PENDING.to_owned()))
+        )]
+    );
+    // Told once: a second stop, and a stray outcome for 41, say nothing more.
+    assert_eq!(commands.plugin_stopped("test"), []);
     let late = LateOutcome {
         plugin: "test".to_owned(),
         request: 41,
@@ -641,9 +681,10 @@ fn a_current_pending_form_whose_plugin_stopped_may_have_happened_and_is_not_busy
     let first = submitted(&mut commands);
     let pending = PluginReply::Submitted(Submitted::Pending { request: 41 });
     commands.receive(answer(first, pending));
-    assert_eq!(commands.plugin_stopped("other"), None);
+    assert_eq!(commands.plugin_stopped("other"), []);
     assert!(commands.is_submitting());
-    let Some(Notice::Outcome(Outcome::Uncertain(_))) = commands.plugin_stopped("test") else {
+    let [Notice::Outcome(Outcome::Uncertain(_))] = commands.plugin_stopped("test").as_slice()
+    else {
         panic!("a pending write whose plugin stopped may have happened");
     };
     assert!(!commands.is_submitting());

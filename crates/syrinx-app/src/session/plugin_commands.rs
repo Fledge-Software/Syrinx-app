@@ -31,6 +31,8 @@ const STOPPED: &str = "The plugin stopped before it answered.";
 const CANNOT_START: &str = "The plugin could not be started.";
 /// Shown inside "This may have happened (...)": the plugin stopped once `forms.submit` began.
 const MAY_HAVE_HAPPENED: &str = "the plugin stopped while saving it";
+/// Shown inside "This may have happened (...)": the plugin stopped once `commands.run` began.
+const RUN_MAY_HAVE_HAPPENED: &str = "the plugin stopped while running it";
 
 /// Queue `call` with its plugin's worker. Its answer is sent from the plugin's thread, or at
 /// once when the plugin cannot take it.
@@ -50,7 +52,7 @@ pub(super) fn start(
         .and_then(|runtime| runtime.command_has_form(&plugin, &command));
     let asked = Asked::of(kind, has_form == Some(true));
     let failed = asked.failure();
-    let reply = Reply::new(token, failed, events.clone());
+    let reply = Reply::new(&asked, token, events.clone());
     let (Some(runtime), Some(_)) = (runtime, has_form) else {
         return reply.send(failed(host_failure(NOT_AVAILABLE)));
     };
@@ -122,6 +124,9 @@ enum Asked {
 /// How a call says it failed without effect.
 type Failed = fn(Failure) -> PluginReply;
 
+/// How a call says it stopped once its export may have begun to write.
+type Uncertain = fn() -> PluginReply;
+
 impl Asked {
     fn of(kind: CallKind, has_form: bool) -> Self {
         match kind {
@@ -135,12 +140,23 @@ impl Asked {
     /// This call's reply when it failed without effect.
     fn failure(&self) -> Failed {
         match self {
-            Self::Run => |failure| PluginReply::Ran(Err(failure)),
+            Self::Run => |failure| PluginReply::Ran(Outcome::Failed(failure)),
             Self::Form => |failure| PluginReply::Form(Err(failure)),
             Self::Validate(_) => |failure| PluginReply::Validated(Err(failure)),
             Self::Submit(_) => {
                 |failure| PluginReply::Submitted(Submitted::Finished(Outcome::Failed(failure)))
             }
+        }
+    }
+
+    /// This call's reply when its plugin stopped once it may have begun to write; only
+    /// `commands.run` and `forms.submit` write, so the others failed without effect.
+    fn uncertain(&self) -> Uncertain {
+        match self {
+            Self::Run => run_may_have_happened,
+            Self::Submit(_) => may_have_happened,
+            Self::Form => || PluginReply::Form(Err(host_failure(STOPPED))),
+            Self::Validate(_) => || PluginReply::Validated(Err(host_failure(STOPPED))),
         }
     }
 }
@@ -150,6 +166,7 @@ impl Asked {
 struct Reply {
     token: u64,
     failed: Failed,
+    uncertain: Uncertain,
     events: UnboundedSender<SessionEvent>,
     progress: Progress,
     sent: bool,
@@ -160,17 +177,18 @@ struct Reply {
 enum Progress {
     /// Never ran, as when the worker stopped first: nothing was sent.
     Queued,
-    /// Ran but never answered, which only unwinding can cause: no submission had begun.
+    /// Ran but never answered, which only unwinding can cause, before any write had begun.
     Running,
-    /// `forms.submit` had begun, so the write may have happened.
-    Submitting,
+    /// `commands.run` or `forms.submit` had begun, so a write may have happened.
+    Writing,
 }
 
 impl Reply {
-    fn new(token: u64, failed: Failed, events: UnboundedSender<SessionEvent>) -> Self {
+    fn new(asked: &Asked, token: u64, events: UnboundedSender<SessionEvent>) -> Self {
         Self {
             token,
-            failed,
+            failed: asked.failure(),
+            uncertain: asked.uncertain(),
             events,
             progress: Progress::Queued,
             sent: false,
@@ -197,12 +215,11 @@ impl Drop for Reply {
         if self.sent {
             return;
         }
-        // `Running` and `Submitting` are reached only by unwinding out of the job, which no
-        // test can cause; they are an untested safety net.
+        // `Running` and `Writing` are reached only by unwinding out of the job.
         let reply = match self.progress {
             Progress::Queued => (self.failed)(host_failure(NOT_SENT)),
             Progress::Running => (self.failed)(host_failure(STOPPED)),
-            Progress::Submitting => may_have_happened(),
+            Progress::Writing => (self.uncertain)(),
         };
         self.emit(reply);
     }
@@ -223,19 +240,24 @@ fn answer(
     reply: &mut Reply,
 ) -> PluginReply {
     match asked {
-        Asked::Run => ran(session, command),
+        Asked::Run => ran(session, command, reply),
         Asked::Form => form(session, command),
         Asked::Validate(values) => validated(session, command, &values),
         Asked::Submit(values) => submitted(session, command, &values, reply),
     }
 }
 
-/// `commands.run` for a command declared without a form.
-fn ran(session: &mut Session<StoreServices>, command: &str) -> PluginReply {
-    match session.run_command(command) {
-        Ok(ran) => PluginReply::Ran(ran.map_err(failure_from)),
-        Err(error) => PluginReply::Ran(Err(host_reason(&error, session.is_discarded()))),
-    }
+/// `commands.run` for a command declared without a form. It can write, so a stop once it
+/// began leaves its effect unknown, as for a submission.
+fn ran(session: &mut Session<StoreServices>, command: &str, reply: &mut Reply) -> PluginReply {
+    reply.progress = Progress::Writing;
+    let outcome = match session.run_command(command) {
+        Ok(Ok(())) => Outcome::Done(None),
+        Ok(Err(error)) => Outcome::Failed(failure_from(error)),
+        Err(HostError::Trap { .. }) => return run_may_have_happened(),
+        Err(error) => Outcome::Failed(host_reason(&error, session.is_discarded())),
+    };
+    PluginReply::Ran(outcome)
 }
 
 /// `forms.form-for` for a command declared with a form.
@@ -268,7 +290,7 @@ fn submitted(
     reply: &mut Reply,
 ) -> PluginReply {
     let pairs = pairs(values);
-    let failed = |failure| PluginReply::Submitted(Submitted::Finished(Outcome::Failed(failure)));
+    let failed = reply.failed;
     let errors = match session.validate_form(command, &pairs) {
         Ok(Ok(errors)) => errors,
         Ok(Err(error)) => return failed(failure_from(error)),
@@ -277,7 +299,7 @@ fn submitted(
     if !errors.is_empty() {
         return PluginReply::Submitted(Submitted::Invalid(errors_from(errors)));
     }
-    reply.progress = Progress::Submitting;
+    reply.progress = Progress::Writing;
     match session.submit(command, &pairs) {
         Ok((request, result)) => PluginReply::Submitted(submitted_from(request, result)),
         Err(HostError::SubmitStopped { .. }) => may_have_happened(),
@@ -289,6 +311,10 @@ fn submitted(
 fn may_have_happened() -> PluginReply {
     let outcome = Outcome::Uncertain(MAY_HAVE_HAPPENED.to_owned());
     PluginReply::Submitted(Submitted::Finished(outcome))
+}
+
+fn run_may_have_happened() -> PluginReply {
+    PluginReply::Ran(Outcome::Uncertain(RUN_MAY_HAVE_HAPPENED.to_owned()))
 }
 
 /// Why the host got no answer from the plugin, in the owner's words. A refusal from an
@@ -420,7 +446,37 @@ fn text_from(options: wit::TextOptions) -> TextOptions {
 
 #[cfg(test)]
 mod tests {
+    use futures::channel::mpsc::unbounded;
+
     use super::*;
+
+    /// What a reply for `asked`, dropped unsent at `progress`, tells the window.
+    fn dropped_at(asked: &Asked, progress: Progress) -> PluginReply {
+        let (events, mut heard) = unbounded();
+        let mut reply = Reply::new(asked, 7, events);
+        reply.progress = progress;
+        drop(reply);
+        let Ok(SessionEvent::Plugin(answer)) = heard.try_recv() else {
+            panic!("a dropped reply still answers");
+        };
+        assert_eq!(answer.token, 7);
+        assert!(heard.try_recv().is_err(), "it answers once");
+        answer.reply
+    }
+
+    #[test]
+    fn a_reply_dropped_unsent_says_how_far_its_job_got() {
+        let submit = Asked::Submit(Vec::new());
+        let failed = |message: &str| {
+            let failure = host_failure(message);
+            PluginReply::Submitted(Submitted::Finished(Outcome::Failed(failure)))
+        };
+        assert_eq!(dropped_at(&submit, Progress::Queued), failed(NOT_SENT));
+        assert_eq!(dropped_at(&submit, Progress::Running), failed(STOPPED));
+        assert_eq!(dropped_at(&submit, Progress::Writing), may_have_happened());
+        let run = dropped_at(&Asked::Run, Progress::Writing);
+        assert_eq!(run, run_may_have_happened());
+    }
 
     #[test]
     fn each_host_error_is_told_as_stopped_refused_or_could_not_start() {

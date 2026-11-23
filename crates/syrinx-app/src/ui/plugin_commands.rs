@@ -28,10 +28,14 @@ impl BrowserView {
         self.plugin_commands.abandon().map(notice_text)
     }
 
-    /// A plugin's worker stopped; a form still waiting on it is told so.
+    /// A plugin's worker stopped; each submission still waiting on it is told so, on one line.
     pub(super) fn plugin_stopped(&mut self, plugin: &str) {
-        let notice = self.plugin_commands.plugin_stopped(plugin);
-        self.tell_plugin_notice(notice);
+        let notices = self.plugin_commands.plugin_stopped(plugin);
+        if notices.is_empty() {
+            return;
+        }
+        let texts: Vec<String> = notices.into_iter().map(notice_text).collect();
+        self.message = texts.join(" ");
     }
 
     fn tell_plugin_notice(&mut self, notice: Option<Notice>) {
@@ -68,11 +72,11 @@ fn notice_text(notice: Notice) -> String {
         Notice::FormNotShown { title } => {
             format!("{title} has a form, which the palette cannot show yet.")
         }
-        Notice::Invalid(error) => format!("{}: {}", error.name, error.message),
+        Notice::Invalid { field, message } => format!("{field}: {message}"),
         Notice::Pending => "Sent; waiting for the plugin to finish.".to_owned(),
         Notice::Forgotten {
             may_have_written: true,
-        } => "It may have happened; check before trying again.".to_owned(),
+        } => "This may have happened. Check before trying again.".to_owned(),
         Notice::Forgotten {
             may_have_written: false,
         } => "Its result can no longer be shown.".to_owned(),
@@ -97,8 +101,6 @@ fn failure_text(failure: &Failure) -> String {
 
 #[cfg(test)]
 mod tests {
-    use syrinx_core::plugin_forms::FieldError;
-
     use super::*;
 
     #[test]
@@ -142,7 +144,7 @@ mod tests {
                         may_have_written: true,
                     }),
                 },
-                "New item: It may have happened; check before trying again.",
+                "New item: This may have happened. Check before trying again.",
             ),
             (
                 Notice::SetAside {
@@ -161,11 +163,11 @@ mod tests {
                 "test.echo: Done.",
             ),
             (
-                Notice::Invalid(FieldError {
-                    name: "name".to_owned(),
+                Notice::Invalid {
+                    field: "Name".to_owned(),
                     message: "Required.".to_owned(),
-                }),
-                "name: Required.",
+                },
+                "Name: Required.",
             ),
         ];
         for (notice, expected) in cases {

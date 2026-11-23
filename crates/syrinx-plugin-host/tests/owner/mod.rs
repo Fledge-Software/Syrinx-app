@@ -722,14 +722,8 @@ fn a_watch_hears_each_worker_event_as_it_is_raised_and_the_queue_still_keeps_it(
         .recv_timeout(std::time::Duration::from_secs(60))
         .expect("the watch heard the failure");
     assert!(matches!(event, PluginEvent::Failed { .. }), "{event:?}");
-    // The same event is queued for the application's next look, right after the watch.
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
-    let mut queued = runtime.take_events();
-    while !queued.contains(&event) {
-        assert!(std::time::Instant::now() < deadline, "the event was queued");
-        std::thread::sleep(std::time::Duration::from_millis(10));
-        queued.extend(runtime.take_events());
-    }
+    // The event was queued for the application's next look before the watch heard it.
+    assert!(runtime.take_events().contains(&event), "queued first");
     close(runtime, store);
 }
 
