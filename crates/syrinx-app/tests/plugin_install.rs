@@ -1,8 +1,10 @@
 //! "Install plugin from folder…" end to end without the review sheet (#140): the real full
 //! fixture signed with keys generated in this run, staged and verified by `syrinx-update`,
-//! reviewed and installed by the plugin host, updated, held and uninstalled.
+//! reviewed and installed by the plugin host, updated, held across a restart and uninstalled.
 //!
-//! `Installer` below is the order the review sheet's slice calls these steps in.
+//! `Installer` below is the order the review sheet's slice calls these steps in. It lives here
+//! because `syrinx-app` is a binary: code nothing calls yet would fail Clippy, and the menu
+//! item that calls it belongs with the sheet.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -11,16 +13,20 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use syrinx_core::CommandRegistry;
-use syrinx_plugin_host::PluginRegistry;
-use syrinx_plugin_host::SignedIdentity;
 use syrinx_plugin_host::grants::DenyList;
-use syrinx_plugin_host::manifest::{CapabilityKind, MANIFEST_FILE};
-use syrinx_plugin_host::owner::{CacheSetup, InstallRefusal, Offer, OwnerRuntime, Plan, Reviewed};
-use syrinx_store::{DirectoryLease, LocationError, Store};
+use syrinx_plugin_host::manifest::{
+    CapabilityKind, DiscoveryOptions, MANIFEST_FILE, PluginManifest,
+};
+use syrinx_plugin_host::owner::{
+    CacheSetup, Offer, OwnerRuntime, Plan, Reviewed, UNSIGNED_PUBLISHER,
+};
+use syrinx_plugin_host::{PluginRegistry, SignedIdentity};
+use syrinx_store::{DirectoryLease, LocationError, PluginInstall, Store};
 use syrinx_update::{
-    DetachedSignature, FileEntry, Installed, KeyId, PACKAGE_FILE, PACKAGE_SIGNATURE_FILE,
-    PackagePath, PinnedKey, PluginFolders, PluginInstallError, PluginOffer, PluginPackageList,
-    Publisher, SignatureKind, StagedPlugin, TestKeyPair, Version, sha256, stage_plugin,
+    Basis, DetachedSignature, FileEntry, Installed, KeyId, PACKAGE_FILE, PACKAGE_SIGNATURE_FILE,
+    PackagePath, PinnedKey, PlacedPlugin, PluginFolders, PluginInstallError, PluginOffer,
+    PluginPackageList, Publisher, SignatureKind, StagedPlugin, TestKeyPair, Version,
+    find_pending_update, open_installed, sha256, stage_plugin,
 };
 
 #[path = "support/plugin_fixture.rs"]
@@ -41,6 +47,22 @@ fn full_component() -> &'static [u8] {
     plugin_fixture::full_component(&Path::new(env!("CARGO_TARGET_TMPDIR")).join("plugin-fixtures"))
 }
 
+/// The full fixture's component with a custom section naming `version`: other bytes, the same
+/// interfaces, so each version has its own module hash.
+fn component(version: Version) -> Vec<u8> {
+    let name = b"syrinx-test-version";
+    let payload = version.to_string().into_bytes();
+    let mut body = vec![name.len() as u8];
+    body.extend_from_slice(name);
+    body.extend_from_slice(&payload);
+    let mut bytes = full_component().to_vec();
+    // Custom section id 0, then its size as one LEB128 byte (the body is well under 128).
+    bytes.push(0);
+    bytes.push(body.len() as u8);
+    bytes.extend_from_slice(&body);
+    bytes
+}
+
 /// A fresh folder for one test, with the data folder Syrinx always has, removed afterwards.
 struct Scratch(PathBuf);
 
@@ -57,6 +79,10 @@ impl Scratch {
 
     fn data(&self) -> PathBuf {
         self.0.join("data")
+    }
+
+    fn database(&self) -> PathBuf {
+        self.data().join("syrinx.db")
     }
 }
 
@@ -81,13 +107,13 @@ impl DirectoryLease for Lease {
     }
 }
 
-/// Write the full fixture as `version` of plugin `test`, asking for storage and
-/// `capabilities`, into a new folder, signed by `signer`.
+/// Write `version` of plugin `test`, asking for storage and `capabilities`, into a new folder,
+/// signed by `signer`, or unsigned for developer mode.
 fn package(
     scratch: &Scratch,
     version: Version,
     capabilities: &str,
-    signer: &TestKeyPair,
+    signer: Option<&TestKeyPair>,
 ) -> PathBuf {
     let folder = scratch
         .0
@@ -102,7 +128,7 @@ fn package(
         + STORAGE
         + capabilities;
     let files = [
-        (MODULE_FILE, full_component().to_vec()),
+        (MODULE_FILE, component(version)),
         (MANIFEST_FILE, manifest.into_bytes()),
     ];
     let mut entries = Vec::new();
@@ -115,17 +141,56 @@ fn package(
     let list = PluginPackageList::new("test", version, WORLD, entries)
         .expect("a list")
         .to_bytes();
+    fs::write(folder.join(PACKAGE_FILE), &list).expect("package");
+    let Some(signer) = signer else {
+        return folder;
+    };
     let point = signer.public_point().expect("a point");
     let value = signer.sign_message(&list).expect("signed");
     let id = KeyId::of(&point).expect("an id");
     let signature = DetachedSignature::new(SignatureKind::PluginPackage, id, value);
-    fs::write(folder.join(PACKAGE_FILE), &list).expect("package");
     fs::write(folder.join(PACKAGE_SIGNATURE_FILE), signature.to_bytes()).expect("package.sig");
     folder
 }
 
-fn compiled_sha256(bytes: &[u8]) -> Result<[u8; 32], String> {
+fn app_sha256(bytes: &[u8]) -> Result<[u8; 32], String> {
     sha256(bytes).map_err(|error| error.to_string())
+}
+
+/// The host's view of a staged or placed package: its manifest, then the module the manifest
+/// names, each read from its checked file.
+fn host_offer(
+    read: impl Fn(&str) -> Result<Vec<u8>, PluginInstallError>,
+    list: &PluginPackageList,
+    publisher: Publisher,
+) -> Result<Offer, String> {
+    let text = |error: PluginInstallError| error.to_string();
+    let manifest = read(MANIFEST_FILE).map_err(text)?;
+    let options = DiscoveryOptions {
+        developer_mode: publisher == Publisher::Unsigned,
+    };
+    let parsed = PluginManifest::parse(&manifest, options).map_err(|error| error.to_string())?;
+    let component = read(&parsed.entry().module).map_err(text)?;
+    let signed =
+        SignedIdentity::from_signed_lines(list.id(), &list.version().to_string(), list.world());
+    Offer::new(
+        signed,
+        manifest,
+        Arc::from(component),
+        publisher.to_record(),
+        app_sha256,
+    )
+    .map_err(|error| error.to_string())
+}
+
+fn staged_offer(staged: &StagedPlugin) -> Result<Offer, String> {
+    let read = |path: &str| staged.read_listed(path, READ_LIMIT).map(|file| file.bytes);
+    host_offer(read, staged.list(), staged.publisher())
+}
+
+fn placed_offer(placed: &PlacedPlugin) -> Result<Offer, String> {
+    let read = |path: &str| placed.read_listed(path, READ_LIMIT).map(|file| file.bytes);
+    host_offer(read, placed.list(), placed.publisher())
 }
 
 /// What the application holds: the store, the runtime, the registry and the palette's
@@ -137,47 +202,63 @@ struct Installer {
     commands: CommandRegistry,
     folders: PluginFolders,
     cache: PathBuf,
+    developer_mode: bool,
 }
 
 impl Installer {
+    /// Open the store and load every installed plugin from its version folder, verified again
+    /// against its record, as Syrinx does at start-up.
     fn start(scratch: &Scratch) -> Self {
-        let lease = Arc::new(Lease(scratch.data().join("syrinx.db")));
+        let lease = Arc::new(Lease(scratch.database()));
         let store = Arc::new(Store::open(lease).expect("a synthetic store"));
         let cache = scratch.data().join("PluginCache");
         let setup = CacheSetup {
             folder: cache.clone(),
-            sha256: compiled_sha256,
+            sha256: app_sha256,
         };
         let runtime =
             OwnerRuntime::start(Arc::clone(&store), "0.1.0", DenyList::new(), Some(setup))
                 .expect("starts");
-        Self {
+        let mut installer = Self {
             store,
             runtime,
             plugins: PluginRegistry::new(),
             commands: CommandRegistry::browser(),
             folders: PluginFolders::new(&scratch.data()),
             cache,
+            developer_mode: false,
+        };
+        for record in installer.store.plugin_installs().expect("read") {
+            installer.load_installed(&record).expect("loaded");
         }
+        installer
+    }
+
+    fn load_installed(&mut self, record: &PluginInstall) -> Result<(), String> {
+        let placed = open_installed(&self.folders, installed(record)?, self.developer_mode)
+            .map_err(|error| error.to_string())?;
+        let offer = placed_offer(&placed)?;
+        self.runtime
+            .load_installed(offer, &mut self.plugins, &mut self.commands)
+            .map_err(|error| error.to_string())
     }
 
     /// Stage, review, place, install; any failure leaves no folder, record or registration.
     fn install(
         &mut self,
         folder: &Path,
-        trusted: PinnedKey,
+        trusted: Option<PinnedKey>,
         granted: &[CapabilityKind],
     ) -> Result<(), String> {
         let offer = PluginOffer {
             folder,
-            installed: None,
-            first_use: Some(trusted),
-            developer_mode: false,
+            basis: Basis::New { trusted },
+            developer_mode: self.developer_mode,
         };
         let staged = stage_plugin(&self.folders, &offer).map_err(|error| error.to_string())?;
         let reviewed = self
             .runtime
-            .review(host_offer(&staged)?, None)
+            .review(staged_offer(&staged)?, None)
             .map_err(|error| error.to_string())?;
         let placed = staged
             .place(&self.folders)
@@ -189,38 +270,35 @@ impl Installer {
         Ok(())
     }
 
-    /// Stage and review an update of `plugin` from its install record; a held one keeps its
-    /// placed folder beside the running version until the owner answers.
-    fn offer_update(&mut self, plugin: &str, folder: &Path) -> Result<Reviewed, String> {
-        let record = self
-            .store
-            .plugin_installs()
-            .expect("read")
-            .into_iter()
-            .find(|record| record.plugin_id == plugin)
-            .ok_or("not installed")?;
-        let installed = Installed {
-            id: &record.plugin_id,
-            version: Version::parse(&record.version).ok_or("a damaged version")?,
-            publisher: Publisher::from_record(&record.signer_key)
-                .map_err(|error| error.to_string())?,
-        };
+    /// Stage, review and place an update of `test` from its install record. The placed
+    /// folder is kept: a held update waits there, beside the running version, for the owner.
+    fn offer_update(&mut self, folder: &Path) -> Result<Reviewed, String> {
+        let record = self.record();
         let offer = PluginOffer {
             folder,
-            installed: Some(installed),
-            first_use: None,
-            developer_mode: false,
+            basis: Basis::Update(installed(&record)?),
+            developer_mode: self.developer_mode,
         };
         let staged = stage_plugin(&self.folders, &offer).map_err(|error| error.to_string())?;
         let reviewed = self
             .runtime
-            .review(host_offer(&staged)?, Some(plugin))
+            .review(staged_offer(&staged)?, Some("test"))
             .map_err(|error| error.to_string())?;
         staged
             .place(&self.folders)
             .map_err(|error| error.to_string())?
             .keep();
         Ok(reviewed)
+    }
+
+    /// The update waiting for the owner, found again from its folder, reviewed afresh.
+    fn pending_update(&mut self) -> Option<Reviewed> {
+        let record = self.record();
+        let basis = installed(&record).expect("a readable record");
+        let placed =
+            find_pending_update(&self.folders, basis, self.developer_mode).expect("looked")?;
+        let offer = placed_offer(&placed).expect("an offer");
+        Some(self.runtime.review(offer, Some("test")).expect("reviewed"))
     }
 
     fn update(&mut self, reviewed: Reviewed, granted: &[CapabilityKind]) -> Result<(), String> {
@@ -237,6 +315,10 @@ impl Installer {
         self.folders.remove_plugin(plugin).expect("folders removed");
     }
 
+    fn record(&self) -> PluginInstall {
+        self.store.plugin_installs().expect("read").remove(0)
+    }
+
     fn echo(&mut self) {
         let pending = self
             .runtime
@@ -246,12 +328,14 @@ impl Installer {
         assert_eq!(answer, Ok(Ok(())));
     }
 
-    /// The compiled-code record for `plugin` once the background compile has written it.
-    fn wait_for_compiled(&self, plugin: &str) -> [u8; 32] {
+    /// The compiled-code record for `plugin` once the background compile has written one
+    /// naming `module`.
+    fn wait_for_compiled(&self, plugin: &str, module: [u8; 32]) {
         let deadline = Instant::now() + Duration::from_secs(120);
         loop {
-            if let Some(compiled) = self.store.plugin_compiled(plugin).expect("read") {
-                return compiled.module_sha256;
+            let compiled = self.store.plugin_compiled(plugin).expect("read");
+            if compiled.is_some_and(|compiled| compiled.module_sha256 == module) {
+                return;
             }
             assert!(
                 Instant::now() < deadline,
@@ -259,6 +343,10 @@ impl Installer {
             );
             std::thread::sleep(Duration::from_millis(50));
         }
+    }
+
+    fn cache_entries(&self) -> usize {
+        fs::read_dir(&self.cache).expect("the cache folder").count()
     }
 
     fn close(self) {
@@ -270,28 +358,12 @@ impl Installer {
     }
 }
 
-/// The host's view of a staged package, read from its checked files.
-fn host_offer(staged: &StagedPlugin) -> Result<Offer, String> {
-    let list = staged.list();
-    let manifest = staged
-        .read_listed(MANIFEST_FILE, READ_LIMIT)
-        .map_err(|error| error.to_string())?;
-    let module = staged
-        .read_listed(MODULE_FILE, READ_LIMIT)
-        .map_err(|error| error.to_string())?;
-    let publisher = staged.publisher();
-    Ok(Offer {
-        signed: SignedIdentity::from_signed_lines(
-            list.id(),
-            &list.version().to_string(),
-            list.world(),
-        ),
-        manifest: manifest.bytes,
-        manifest_sha256: manifest.sha256,
-        component: Arc::from(module.bytes),
-        module_sha256: module.sha256,
-        publisher: publisher.to_record(),
-        unsigned: publisher == Publisher::Unsigned,
+/// The record's installed version, as `syrinx-update` checks against it.
+fn installed(record: &PluginInstall) -> Result<Installed<'_>, String> {
+    Ok(Installed {
+        id: &record.plugin_id,
+        version: Version::parse(&record.version).ok_or("a damaged version")?,
+        publisher: Publisher::from_record(&record.signer_key).map_err(|error| error.to_string())?,
     })
 }
 
@@ -299,72 +371,99 @@ fn v(minor: u32) -> Version {
     Version::new(0, minor, 0)
 }
 
+fn key(signer: &TestKeyPair) -> PinnedKey {
+    PinnedKey::new(signer.public_point().expect("a point"))
+}
+
+fn module_hash(version: Version) -> [u8; 32] {
+    sha256(&component(version)).expect("hashed")
+}
+
 #[test]
 fn the_test_plugin_installs_from_a_signed_folder_and_records_what_loads() {
     let scratch = Scratch::new("install");
     let signer = TestKeyPair::generate().expect("a key");
-    let key = PinnedKey::new(signer.public_point().expect("a point"));
     let mut installer = Installer::start(&scratch);
-    let folder = package(&scratch, v(1), "", &signer);
+    let folder = package(&scratch, v(1), "", Some(&signer));
     installer
-        .install(&folder, key, &[CapabilityKind::Storage])
+        .install(&folder, Some(key(&signer)), &[CapabilityKind::Storage])
         .expect("installed");
 
     assert!(installer.commands.find("test.echo").is_some());
     installer.echo();
-    let record = &installer.store.plugin_installs().expect("read")[0];
-    let module = sha256(full_component()).expect("hashed");
-    assert_eq!(record.module_sha256, module, "the bytes that load");
-    assert_eq!(record.signer_key, Publisher::Key(key).to_record());
-    assert_eq!(installer.wait_for_compiled("test"), module);
-    let placed = installer.folders.version_folder("test", v(1));
-    assert!(placed.join(MODULE_FILE).is_file());
+    let record = installer.record();
+    assert_eq!(
+        record.module_sha256,
+        module_hash(v(1)),
+        "the bytes that load"
+    );
+    assert_eq!(record.signer_key, Publisher::Key(key(&signer)).to_record());
+    installer.wait_for_compiled("test", module_hash(v(1)));
     assert_eq!(installer.folders.versions("test").expect("listed"), [v(1)]);
     installer.close();
 }
 
 #[test]
-fn a_widened_update_is_held_while_the_old_version_runs_and_declining_keeps_it() {
+fn an_unsigned_folder_installs_only_in_developer_mode_with_its_label() {
+    assert_eq!(Publisher::Unsigned.to_record(), UNSIGNED_PUBLISHER);
+    let scratch = Scratch::new("developer");
+    let mut installer = Installer::start(&scratch);
+    let folder = package(&scratch, v(1), "", None);
+    let refused = installer.install(&folder, None, &[CapabilityKind::Storage]);
+    assert_eq!(refused, Err(PluginInstallError::Unsigned.to_string()));
+    assert_eq!(installer.store.plugin_installs(), Ok(Vec::new()));
+
+    installer.developer_mode = true;
+    installer
+        .install(&folder, None, &[CapabilityKind::Storage])
+        .expect("installed as a development plugin");
+    assert_eq!(installer.record().signer_key, UNSIGNED_PUBLISHER);
+    installer.echo();
+    installer.close();
+}
+
+#[test]
+fn a_held_update_survives_a_restart_while_the_old_version_runs_and_can_be_accepted() {
     let scratch = Scratch::new("held");
     let signer = TestKeyPair::generate().expect("a key");
-    let key = PinnedKey::new(signer.public_point().expect("a point"));
     let mut installer = Installer::start(&scratch);
-    let first = package(&scratch, v(1), "", &signer);
+    let first = package(&scratch, v(1), "", Some(&signer));
     installer
-        .install(&first, key, &[CapabilityKind::Storage])
+        .install(&first, Some(key(&signer)), &[CapabilityKind::Storage])
         .expect("installed");
+    installer.wait_for_compiled("test", module_hash(v(1)));
 
-    let wider = package(&scratch, v(2), FOLDER, &signer);
-    let held = installer.offer_update("test", &wider).expect("reviewed");
+    let wider = package(&scratch, v(2), FOLDER, Some(&signer));
+    let held = installer.offer_update(&wider).expect("reviewed");
     assert!(
         matches!(held.plan(), Plan::Held(changes) if changes.added == [CapabilityKind::Folder])
     );
+    drop(held);
+    // Offering it again before answering finds no stuck folder.
+    drop(installer.offer_update(&wider).expect("offered again"));
+    installer.close();
+
+    // After a restart the old version runs, untouched, and the held one is found again.
+    let mut installer = Installer::start(&scratch);
+    installer.echo();
+    assert_eq!(installer.record().version, "0.1.0");
     assert_eq!(
         installer.folders.versions("test").expect("listed"),
         [v(1), v(2)]
     );
-    assert_eq!(
-        installer.store.plugin_installs().expect("read")[0].version,
-        "0.1.0"
-    );
-    installer.echo();
+    let held = installer.pending_update().expect("still held");
+    assert!(matches!(held.plan(), Plan::Held(_)));
 
-    // Declining keeps the old version and deletes the held one's folder.
-    drop(held);
-    installer
-        .folders
-        .remove_version("test", v(2))
-        .expect("declined");
-    assert_eq!(installer.folders.versions("test").expect("listed"), [v(1)]);
-
-    // Accepting replaces it; once it has run, the old version's folder goes.
-    let held = installer.offer_update("test", &wider).expect("reviewed");
+    // Accepted: the new version replaces it, and only its compiled code stays warm.
     installer
         .update(held.accept(), &[CapabilityKind::Folder])
         .expect("updated");
     installer.echo();
-    let record = &installer.store.plugin_installs().expect("read")[0];
+    let record = installer.record();
     assert_eq!(record.version, "0.2.0");
+    assert_eq!(record.module_sha256, module_hash(v(2)));
+    installer.wait_for_compiled("test", module_hash(v(2)));
+    assert_eq!(installer.cache_entries(), 1, "one version warm");
     installer
         .folders
         .remove_older_versions("test", v(2))
@@ -374,29 +473,78 @@ fn a_widened_update_is_held_while_the_old_version_runs_and_declining_keeps_it() 
 }
 
 #[test]
+fn a_held_update_declined_after_a_restart_leaves_the_old_version_alone() {
+    let scratch = Scratch::new("declined");
+    let signer = TestKeyPair::generate().expect("a key");
+    let mut installer = Installer::start(&scratch);
+    let first = package(&scratch, v(1), "", Some(&signer));
+    installer
+        .install(&first, Some(key(&signer)), &[CapabilityKind::Storage])
+        .expect("installed");
+    let wider = package(&scratch, v(2), FOLDER, Some(&signer));
+    drop(installer.offer_update(&wider).expect("held"));
+    installer.close();
+
+    let mut installer = Installer::start(&scratch);
+    drop(installer.pending_update().expect("still held"));
+    installer
+        .folders
+        .remove_version("test", v(2))
+        .expect("declined");
+    assert!(installer.pending_update().is_none());
+    assert_eq!(installer.folders.versions("test").expect("listed"), [v(1)]);
+    installer.echo();
+    installer.close();
+}
+
+#[test]
 fn an_update_signed_by_a_different_publisher_is_refused_and_leaves_nothing() {
     let scratch = Scratch::new("publisher");
     let signer = TestKeyPair::generate().expect("a key");
     let stranger = TestKeyPair::generate().expect("a key");
-    let key = PinnedKey::new(signer.public_point().expect("a point"));
     let mut installer = Installer::start(&scratch);
-    let first = package(&scratch, v(1), "", &signer);
+    let first = package(&scratch, v(1), "", Some(&signer));
     installer
-        .install(&first, key, &[CapabilityKind::Storage])
+        .install(&first, Some(key(&signer)), &[CapabilityKind::Storage])
         .expect("installed");
 
-    let foreign = package(&scratch, v(2), "", &stranger);
-    let refusal = installer.offer_update("test", &foreign).err();
+    let foreign = package(&scratch, v(2), "", Some(&stranger));
+    let refusal = installer.offer_update(&foreign).err();
     assert_eq!(
         refusal.as_deref(),
         Some("This update is signed by a different publisher")
     );
-    assert_eq!(
-        PluginInstallError::DifferentPublisher.to_string(),
-        InstallRefusal::DifferentPublisher.to_string(),
-        "both checks speak with one voice"
-    );
     assert_eq!(installer.folders.versions("test").expect("listed"), [v(1)]);
+    installer.echo();
+    installer.close();
+}
+
+#[test]
+fn an_update_that_cannot_be_written_puts_the_old_version_back() {
+    let scratch = Scratch::new("busy");
+    let signer = TestKeyPair::generate().expect("a key");
+    let mut installer = Installer::start(&scratch);
+    let first = package(&scratch, v(1), "", Some(&signer));
+    installer
+        .install(&first, Some(key(&signer)), &[CapabilityKind::Storage])
+        .expect("installed");
+    let before = installer.record();
+    let newer = package(&scratch, v(2), "", Some(&signer));
+    let reviewed = installer.offer_update(&newer).expect("reviewed");
+
+    // Another connection holds the database's write lock while the update writes its record.
+    let blocker = rusqlite::Connection::open(scratch.database()).expect("a second connection");
+    blocker
+        .execute_batch("BEGIN IMMEDIATE")
+        .expect("the write lock");
+    assert!(installer.update(reviewed, &[]).is_err());
+    blocker.execute_batch("ROLLBACK").expect("released");
+    drop(blocker);
+
+    assert_eq!(installer.record(), before);
+    let registered = installer.plugins.get("test").expect("registered again");
+    assert_eq!(registered.manifest().version(), "0.1.0");
+    assert!(installer.commands.find("test.echo").is_some());
     installer.echo();
     installer.close();
 }
@@ -405,14 +553,13 @@ fn an_update_signed_by_a_different_publisher_is_refused_and_leaves_nothing() {
 fn uninstall_leaves_no_install_row_grant_setting_cache_entry_or_folder() {
     let scratch = Scratch::new("uninstall");
     let signer = TestKeyPair::generate().expect("a key");
-    let key = PinnedKey::new(signer.public_point().expect("a point"));
     let mut installer = Installer::start(&scratch);
-    let folder = package(&scratch, v(1), "", &signer);
+    let folder = package(&scratch, v(1), "", Some(&signer));
     installer
-        .install(&folder, key, &[CapabilityKind::Storage])
+        .install(&folder, Some(key(&signer)), &[CapabilityKind::Storage])
         .expect("installed");
     installer.echo();
-    installer.wait_for_compiled("test");
+    installer.wait_for_compiled("test", module_hash(v(1)));
     assert!(
         installer
             .store
@@ -429,10 +576,7 @@ fn uninstall_leaves_no_install_row_grant_setting_cache_entry_or_folder() {
         Ok(None)
     );
     assert_eq!(installer.store.plugin_compiled("test"), Ok(None));
-    let cached: Vec<_> = fs::read_dir(&installer.cache)
-        .expect("the cache folder")
-        .collect();
-    assert!(cached.is_empty(), "no compiled code is left");
+    assert_eq!(installer.cache_entries(), 0, "no compiled code is left");
     assert!(
         installer
             .folders
