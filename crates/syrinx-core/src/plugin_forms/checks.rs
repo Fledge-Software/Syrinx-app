@@ -42,9 +42,9 @@ fn field_problem(field: &Field, value: &str) -> Option<String> {
 
 /// Text longer than `max_length` characters.
 fn too_long(value: &str, max_length: u32) -> Option<String> {
-    let length = value.chars().count();
-    let limit = usize::try_from(max_length).unwrap_or(usize::MAX);
-    (length > limit).then(|| format!("At most {max_length} characters."))
+    // Counted as u64, which holds any character count and any `u32` limit.
+    let length = value.chars().count() as u64;
+    (length > u64::from(max_length)).then(|| format!("At most {max_length} characters."))
 }
 
 /// A number that does not parse, or lies outside the field's range.

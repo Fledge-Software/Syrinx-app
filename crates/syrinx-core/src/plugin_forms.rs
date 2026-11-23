@@ -9,7 +9,7 @@ mod tests;
 pub use checks::host_checks;
 
 /// A form as its plugin described it (`forms.form-spec`), after the host checked its bounds.
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct FormSpec {
     pub title: String,
     pub fields: Vec<Field>,
@@ -114,28 +114,22 @@ pub enum Outcome {
 /// A call the palette asks the session to make. `token` names it, so its answer is matched to
 /// the command and form that asked and to nothing else.
 #[derive(Clone, Debug, PartialEq)]
-pub enum PluginCall {
+pub struct PluginCall {
+    pub token: u64,
+    pub plugin: String,
+    pub command: String,
+    pub kind: CallKind,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum CallKind {
     /// Run a command declared without a form, or fetch the form of one declared with one; the
     /// host decides from the manifest and never calls `commands.run` for a form command.
-    Choose {
-        token: u64,
-        plugin: String,
-        command: String,
-    },
+    Choose,
     /// `forms.validate` as fields change; no side effects.
-    Validate {
-        token: u64,
-        plugin: String,
-        command: String,
-        values: Vec<FieldValue>,
-    },
+    Validate(Vec<FieldValue>),
     /// `forms.validate`, then `forms.submit` if the plugin found nothing wrong.
-    Submit {
-        token: u64,
-        plugin: String,
-        command: String,
-        values: Vec<FieldValue>,
-    },
+    Submit(Vec<FieldValue>),
 }
 
 /// The session's answer to the call `token` named.
@@ -157,7 +151,9 @@ pub enum PluginReply {
 #[derive(Clone, Debug, PartialEq)]
 pub enum Submitted {
     Finished(Outcome),
-    /// The outcome arrives later, as a `LateOutcome` for this request.
+    /// The plugin will learn the outcome through `events.deliver`. The palette hears of it only
+    /// if the host settles the write itself (`uncertain` once the plugin stops), as a
+    /// `LateOutcome` for this request: no service completes a pending write yet.
     Pending {
         request: u64,
     },
@@ -165,7 +161,8 @@ pub enum Submitted {
     Invalid(Vec<FieldError>),
 }
 
-/// The outcome of a submission that answered pending, arriving after it.
+/// The outcome of a submission that answered pending, arriving after it. Today only the host
+/// settles such a write, when its plugin stops.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct LateOutcome {
     pub plugin: String,
@@ -180,12 +177,13 @@ pub enum Notice {
     Outcome(Outcome),
     /// The plugin could not answer a call that has no effect; a form keeps its input.
     Failed(Failure),
-    FormReady {
-        title: String,
-    },
+    /// The form is open in the palette.
+    FormReady { title: String },
+    /// The command has a form, but the palette had closed by the time it arrived.
+    FormNotShown { title: String },
     /// The first failing field, in the form's order.
     Invalid(FieldError),
-    /// Submitted; the outcome is still to come.
+    /// Submitted; an outcome comes only if the host settles the write (see `Submitted`).
     Pending,
 }
 
@@ -205,7 +203,7 @@ pub enum Refusal {
 }
 
 /// A form's fields with the owner's values and the errors last reported.
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct PluginForm {
     spec: FormSpec,
     /// One value per field, in the form's order.
@@ -260,6 +258,17 @@ impl PluginForm {
         self.errors = errors;
         self.errors.first().cloned()
     }
+
+    /// The form's values once the host's checks pass; otherwise the errors are kept and the
+    /// first is returned.
+    fn checked_values(&mut self) -> Result<Vec<FieldValue>, Refusal> {
+        let values = self.field_values();
+        let errors = host_checks(&self.spec, &values);
+        match self.report(errors) {
+            Some(first) => Err(Refusal::Invalid(first)),
+            None => Ok(values),
+        }
+    }
 }
 
 /// A toggle starts off; any other field starts with its initial value, or empty.
@@ -276,8 +285,8 @@ fn initial_value(field: &Field) -> String {
 /// Where the current command is.
 #[derive(Debug)]
 enum Stage {
-    /// `Choose` was sent. If the palette closed since, a form that arrives is dropped, while a
-    /// command that ran is still reported.
+    /// `Choose` was sent. If the palette was closed then or since, a form that arrives is
+    /// reported on the status line instead of opened.
     Choosing { token: u64, closed: bool },
     /// The form is open; `validation` is the newest `Validate` still unanswered.
     Editing {
@@ -286,7 +295,7 @@ enum Stage {
     },
     /// One submission is on its way to the plugin.
     Submitting { form: PluginForm, token: u64 },
-    /// The plugin answered pending; its outcome arrives as a `LateOutcome` for `request`.
+    /// The plugin answered pending; see `Submitted::Pending` for when it resolves.
     Pending { form: PluginForm, request: u64 },
     /// The submission may have happened; the form stays but never submits again.
     Uncertain { form: PluginForm },
@@ -299,11 +308,31 @@ struct Current {
     stage: Stage,
 }
 
+/// A submission whose form was closed while it was on its way or pending. Its own outcome is
+/// still reported, since the write may have happened; there is no form left to update.
+#[derive(Debug)]
+struct Orphan {
+    plugin: String,
+    awaiting: Awaiting,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+enum Awaiting {
+    /// The answer to the submission with this token.
+    Answer(u64),
+    /// The outcome of this request, which answered pending.
+    Outcome(u64),
+}
+
+/// The most closed submissions kept for their outcome; the oldest is forgotten first.
+const MAX_ORPHANS: usize = 16;
+
 /// The palette's one plugin command at a time, and the tokens that tie answers to it.
 #[derive(Debug)]
 pub struct PluginCommands {
     next_token: u64,
     current: Option<Current>,
+    orphans: Vec<Orphan>,
 }
 
 impl Default for PluginCommands {
@@ -311,40 +340,54 @@ impl Default for PluginCommands {
         Self {
             next_token: 1,
             current: None,
+            orphans: Vec::new(),
         }
     }
 }
 
 impl PluginCommands {
-    /// The owner chose a plugin command. Whatever was current is abandoned, so its late answers
-    /// are dropped.
-    pub fn choose(&mut self, plugin: &str, command: &str) -> PluginCall {
+    /// The owner chose a plugin command; `in_palette` says whether the palette is still open to
+    /// show a form. Whatever was current is abandoned, as closing the palette abandons it.
+    pub fn choose(&mut self, plugin: &str, command: &str, in_palette: bool) -> PluginCall {
+        self.abandon();
         let token = self.token();
+        let stage = Stage::Choosing {
+            token,
+            closed: !in_palette,
+        };
         self.current = Some(Current {
             plugin: plugin.to_owned(),
             command: command.to_owned(),
-            stage: Stage::Choosing {
-                token,
-                closed: false,
-            },
+            stage,
         });
-        PluginCall::Choose {
+        PluginCall {
             token,
             plugin: plugin.to_owned(),
             command: command.to_owned(),
+            kind: CallKind::Choose,
         }
     }
 
-    /// The palette closed: the open form and any submission are abandoned locally, so a late
-    /// answer or outcome updates nothing. A command already sent to `commands.run` is still
-    /// reported, since its result goes to the status line, not the palette.
+    /// The palette closed: the open form is dropped, so a late answer cannot update it. A
+    /// command already sent to `commands.run` and a submission on its way or pending are still
+    /// reported, since their results go to the status line and a write may have happened.
     pub fn abandon(&mut self) {
-        let Some(current) = &mut self.current else {
+        let Some(current) = self.current.take() else {
             return;
         };
-        match &mut current.stage {
-            Stage::Choosing { closed, .. } => *closed = true,
-            _ => self.current = None,
+        match current.stage {
+            Stage::Choosing { token, .. } => {
+                let closed = true;
+                let stage = Stage::Choosing { token, closed };
+                self.current = Some(Current { stage, ..current });
+            }
+            Stage::Submitting { token, .. } => {
+                self.keep_orphan(current.plugin, Awaiting::Answer(token));
+            }
+            Stage::Pending { request, .. } => {
+                self.keep_orphan(current.plugin, Awaiting::Outcome(request));
+            }
+            Stage::Editing { .. } | Stage::Uncertain { .. } => {}
         }
     }
 
@@ -369,55 +412,76 @@ impl PluginCommands {
     }
 
     /// The owner changed a field. Only an editable form takes input; the field's last error is
-    /// cleared until it is checked again.
+    /// cleared, and a validation still on its way no longer counts, since it checked older input.
     pub fn set_value(&mut self, name: &str, value: &str) -> Result<(), Refusal> {
-        let form = self.editing_form()?;
-        let index = form.index(name).ok_or(Refusal::UnknownField)?;
-        form.values[index] = value.to_owned();
-        form.errors.retain(|error| error.name != name);
-        Ok(())
+        let (plugin, command, mut form) = self.take_editing()?;
+        let changed = match form.index(name) {
+            Some(index) => {
+                form.values[index] = value.to_owned();
+                form.errors.retain(|error| error.name != name);
+                Ok(())
+            }
+            None => Err(Refusal::UnknownField),
+        };
+        self.put_editing(plugin, command, form, None);
+        changed
     }
 
     /// The host's checks, then `forms.validate` as fields change. A failed host check is
     /// reported here and nothing is sent.
     pub fn validate(&mut self) -> Result<PluginCall, Refusal> {
-        let token = self.token();
-        let current = self.current.as_mut().ok_or(Refusal::NoForm)?;
-        let Stage::Editing { form, validation } = &mut current.stage else {
-            return Err(refusal(&current.stage));
+        let (plugin, command, mut form) = self.take_editing()?;
+        let values = match form.checked_values() {
+            Ok(values) => values,
+            Err(refusal) => {
+                self.put_editing(plugin, command, form, None);
+                return Err(refusal);
+            }
         };
-        let values = checked_values(form)?;
-        *validation = Some(token);
-        Ok(PluginCall::Validate {
+        let token = self.token();
+        let call = PluginCall {
             token,
-            plugin: current.plugin.clone(),
-            command: current.command.clone(),
-            values,
-        })
+            plugin: plugin.clone(),
+            command: command.clone(),
+            kind: CallKind::Validate(values),
+        };
+        self.put_editing(plugin, command, form, Some(token));
+        Ok(call)
     }
 
-    /// Enter: the host's checks, then one submission. While one is pending, or after one that
-    /// may have happened, Enter does nothing.
+    /// Enter: the host's checks, then one submission. While one is on its way or pending, or
+    /// after one that may have happened, Enter does nothing.
     pub fn submit(&mut self) -> Result<PluginCall, Refusal> {
-        let token = self.token();
-        let current = self.current.as_mut().ok_or(Refusal::NoForm)?;
-        let Stage::Editing { form, .. } = &mut current.stage else {
-            return Err(refusal(&current.stage));
+        let (plugin, command, mut form) = self.take_editing()?;
+        let values = match form.checked_values() {
+            Ok(values) => values,
+            Err(refusal) => {
+                self.put_editing(plugin, command, form, None);
+                return Err(refusal);
+            }
         };
-        let values = checked_values(form)?;
-        let form = std::mem::take(form);
-        current.stage = Stage::Submitting { form, token };
-        Ok(PluginCall::Submit {
+        let token = self.token();
+        let call = PluginCall {
             token,
-            plugin: current.plugin.clone(),
-            command: current.command.clone(),
-            values,
-        })
+            plugin: plugin.clone(),
+            command: command.clone(),
+            kind: CallKind::Submit(values),
+        };
+        let stage = Stage::Submitting { form, token };
+        self.current = Some(Current {
+            plugin,
+            command,
+            stage,
+        });
+        Ok(call)
     }
 
-    /// An answer from the session. One for another command, a superseded call or an abandoned
-    /// form is dropped and returns `None`.
+    /// An answer from the session. One for another command, a superseded call or a closed form
+    /// is dropped and returns `None`; a closed submission's own outcome is still reported.
     pub fn receive(&mut self, answer: PluginAnswer) -> Option<Notice> {
+        if let Some(index) = self.orphan_with_token(answer.token) {
+            return self.orphan_answered(index, answer.reply);
+        }
         let current = self.current.take()?;
         let (next, notice) = answered(current, answer);
         self.current = next;
@@ -425,8 +489,17 @@ impl PluginCommands {
     }
 
     /// An outcome that arrived after its submission answered pending. It counts only for the
-    /// current submission's plugin and request; any other is dropped.
+    /// current or a closed submission with the same plugin and request; any other is dropped.
     pub fn receive_outcome(&mut self, late: LateOutcome) -> Option<Notice> {
+        let awaited = Awaiting::Outcome(late.request);
+        let orphan = self
+            .orphans
+            .iter()
+            .position(|orphan| orphan.plugin == late.plugin && orphan.awaiting == awaited);
+        if let Some(index) = orphan {
+            self.orphans.remove(index);
+            return Some(Notice::Outcome(late.outcome));
+        }
         let current = self.current.take()?;
         match current.stage {
             Stage::Pending { form, request }
@@ -443,11 +516,76 @@ impl PluginCommands {
         }
     }
 
-    fn editing_form(&mut self) -> Result<&mut PluginForm, Refusal> {
-        let current = self.current.as_mut().ok_or(Refusal::NoForm)?;
-        match &mut current.stage {
-            Stage::Editing { form, .. } => Ok(form),
-            stage => Err(refusal(stage)),
+    /// The editable form, taken out to be changed; anything else is put back and refused.
+    fn take_editing(&mut self) -> Result<(String, String, PluginForm), Refusal> {
+        let Current {
+            plugin,
+            command,
+            stage,
+        } = self.current.take().ok_or(Refusal::NoForm)?;
+        let refusal = match stage {
+            Stage::Editing { form, .. } => return Ok((plugin, command, form)),
+            Stage::Choosing { .. } => Refusal::NoForm,
+            Stage::Submitting { .. } | Stage::Pending { .. } => Refusal::Busy,
+            Stage::Uncertain { .. } => Refusal::Uncertain,
+        };
+        self.current = Some(Current {
+            plugin,
+            command,
+            stage,
+        });
+        Err(refusal)
+    }
+
+    fn put_editing(
+        &mut self,
+        plugin: String,
+        command: String,
+        form: PluginForm,
+        validation: Option<u64>,
+    ) {
+        let stage = Stage::Editing { form, validation };
+        self.current = Some(Current {
+            plugin,
+            command,
+            stage,
+        });
+    }
+
+    fn keep_orphan(&mut self, plugin: String, awaiting: Awaiting) {
+        if self.orphans.len() == MAX_ORPHANS {
+            self.orphans.remove(0);
+        }
+        self.orphans.push(Orphan { plugin, awaiting });
+    }
+
+    /// A closed submission still waiting for the answer to `token`.
+    fn orphan_with_token(&self, token: u64) -> Option<usize> {
+        let awaited = Awaiting::Answer(token);
+        self.orphans
+            .iter()
+            .position(|orphan| orphan.awaiting == awaited)
+    }
+
+    /// A closed submission's answer: its outcome is reported, a pending one waits on.
+    fn orphan_answered(&mut self, index: usize, reply: PluginReply) -> Option<Notice> {
+        let PluginReply::Submitted(submitted) = reply else {
+            self.orphans.remove(index);
+            return None;
+        };
+        match submitted {
+            Submitted::Pending { request } => {
+                self.orphans[index].awaiting = Awaiting::Outcome(request);
+                None
+            }
+            Submitted::Finished(outcome) => {
+                self.orphans.remove(index);
+                Some(Notice::Outcome(outcome))
+            }
+            Submitted::Invalid(errors) => {
+                self.orphans.remove(index);
+                errors.into_iter().next().map(Notice::Invalid)
+            }
         }
     }
 
@@ -455,27 +593,6 @@ impl PluginCommands {
         let token = self.next_token;
         self.next_token = token.checked_add(1).expect("plugin call tokens exhausted");
         token
-    }
-}
-
-/// Why a stage other than editing refuses input or a submission.
-fn refusal(stage: &Stage) -> Refusal {
-    match stage {
-        Stage::Choosing { .. } => Refusal::NoForm,
-        Stage::Submitting { .. } | Stage::Pending { .. } => Refusal::Busy,
-        Stage::Uncertain { .. } => Refusal::Uncertain,
-        Stage::Editing { .. } => unreachable!("an editable form is never refused"),
-    }
-}
-
-/// The form's values once the host's checks pass; otherwise the errors are kept and the first
-/// is returned.
-fn checked_values(form: &mut PluginForm) -> Result<Vec<FieldValue>, Refusal> {
-    let values = form.field_values();
-    let errors = host_checks(&form.spec, &values);
-    match form.report(errors) {
-        Some(first) => Err(Refusal::Invalid(first)),
-        None => Ok(values),
     }
 }
 
@@ -521,13 +638,16 @@ fn answered(current: Current, answer: PluginAnswer) -> (Option<Current>, Option<
     (current, notice)
 }
 
-/// The answer to `Choose`: a command that ran, or its form. A form for a closed palette, or a
-/// reply that does not answer `Choose`, is dropped.
+/// The answer to `Choose`: a command that ran, or its form, which opens only in an open
+/// palette. A reply that does not answer `Choose` is dropped.
 fn chosen(closed: bool, reply: PluginReply) -> (Option<Stage>, Option<Notice>) {
     match reply {
         PluginReply::Ran(Ok(())) => (None, Some(Notice::Outcome(Outcome::Done(None)))),
         PluginReply::Ran(Err(failure)) => (None, Some(Notice::Outcome(Outcome::Failed(failure)))),
-        PluginReply::Form(_) if closed => (None, None),
+        PluginReply::Form(Ok(spec)) if closed => {
+            let title = spec.title;
+            (None, Some(Notice::FormNotShown { title }))
+        }
         PluginReply::Form(Ok(spec)) => {
             let title = spec.title.clone();
             let form = PluginForm::new(spec);
@@ -557,8 +677,7 @@ fn submission(form: PluginForm, submitted: Submitted) -> (Option<Stage>, Notice)
         Submitted::Pending { request } => (Some(Stage::Pending { form, request }), Notice::Pending),
         Submitted::Invalid(errors) => {
             let mut form = form;
-            let first = form.report(errors);
-            let notice = match first {
+            let notice = match form.report(errors) {
                 Some(first) => Notice::Invalid(first),
                 // Invalid with no field the form has: nothing happened, and nothing to point at.
                 None => Notice::Failed(Failure {

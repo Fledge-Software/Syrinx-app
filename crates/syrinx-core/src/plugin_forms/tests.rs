@@ -73,16 +73,12 @@ fn answer(token: u64, reply: PluginReply) -> PluginAnswer {
 }
 
 fn token(call: &PluginCall) -> u64 {
-    match call {
-        PluginCall::Choose { token, .. }
-        | PluginCall::Validate { token, .. }
-        | PluginCall::Submit { token, .. } => *token,
-    }
+    call.token
 }
 
 /// The synthetic plugin's form, open and editable.
 fn open_form(commands: &mut PluginCommands) {
-    let chosen = commands.choose("test", "test.new-item");
+    let chosen = commands.choose("test", "test.new-item", true);
     let notice = commands.receive(answer(token(&chosen), PluginReply::Form(Ok(spec()))));
     assert_eq!(
         notice,
@@ -191,7 +187,7 @@ fn a_failed_host_check_keeps_the_input_names_the_first_field_and_sends_nothing()
 #[test]
 fn a_form_starts_with_its_initial_values_and_toggles_off() {
     let mut commands = PluginCommands::default();
-    let chosen = commands.choose("test", "test.new-item");
+    let chosen = commands.choose("test", "test.new-item", true);
     let mut with_initial = spec();
     with_initial.fields[0].initial = Some("Grace".to_owned());
     commands.receive(answer(token(&chosen), PluginReply::Form(Ok(with_initial))));
@@ -211,7 +207,7 @@ fn the_plugins_validation_reports_its_first_failing_field_in_form_order() {
     open_form(&mut commands);
     commands.set_value("name", "Ada").expect("editable");
     let call = commands.validate().expect("sent");
-    let PluginCall::Validate { values, .. } = &call else {
+    let CallKind::Validate(values) = &call.kind else {
         panic!("a validation: {call:?}");
     };
     assert!(values.contains(&value("name", "Ada")));
@@ -234,8 +230,30 @@ fn an_older_validation_answer_is_dropped_once_a_newer_one_was_sent() {
     let stale = PluginReply::Validated(Ok(vec![error("name", "Old.")]));
     assert_eq!(commands.receive(answer(token(&older), stale)), None);
     assert!(commands.form().expect("open").errors().is_empty());
-    let fresh = PluginReply::Validated(Ok(Vec::new()));
-    assert_eq!(commands.receive(answer(token(&newer), fresh)), None);
+    let fresh = PluginReply::Validated(Ok(vec![error("name", "Taken.")]));
+    assert_eq!(
+        commands.receive(answer(token(&newer), fresh)),
+        Some(Notice::Invalid(error("name", "Taken.")))
+    );
+}
+
+#[test]
+fn an_edit_after_validation_was_sent_makes_its_answer_stale() {
+    let mut commands = PluginCommands::default();
+    open_form(&mut commands);
+    commands.set_value("name", "Ada").expect("editable");
+    let sent = commands.validate().expect("sent");
+    commands.set_value("name", "Grace").expect("editable");
+    let stale = PluginReply::Validated(Ok(vec![error("name", "Ada is taken.")]));
+    assert_eq!(commands.receive(answer(token(&sent), stale)), None);
+    assert!(commands.form().expect("open").errors().is_empty());
+
+    // A validation the host's checks refuse also leaves an earlier one stale.
+    let sent = commands.validate().expect("sent");
+    commands.set_value("count", "99").expect("editable");
+    assert!(commands.validate().is_err());
+    let stale = PluginReply::Validated(Ok(vec![error("source", "Old.")]));
+    assert_eq!(commands.receive(answer(token(&sent), stale)), None);
 }
 
 #[test]
@@ -260,10 +278,10 @@ fn the_submission_carries_the_owners_values_for_the_chosen_command() {
     open_form(&mut commands);
     commands.set_value("name", "Ada").expect("editable");
     let call = commands.submit().expect("sent");
-    let PluginCall::Submit {
+    let PluginCall {
         plugin,
         command,
-        values,
+        kind: CallKind::Submit(values),
         ..
     } = call
     else {
@@ -356,35 +374,62 @@ fn a_pending_outcome_counts_only_for_its_own_plugin_and_request() {
 }
 
 #[test]
-fn closing_the_palette_abandons_a_form_so_its_late_answer_and_outcome_update_nothing() {
+fn closing_the_palette_drops_the_form_but_still_reports_its_submissions_outcome() {
     let mut commands = PluginCommands::default();
+    // Closed while the submission is on its way: its answer is still told, with no form.
     let first = submitted(&mut commands);
     commands.abandon();
-    let reply = PluginReply::Submitted(Submitted::Pending { request: 41 });
-    assert_eq!(commands.receive(answer(first, reply)), None);
+    assert!(commands.form().is_none());
+    let reply = PluginReply::Submitted(Submitted::Finished(uncertain()));
+    assert_eq!(
+        commands.receive(answer(first, reply)),
+        Some(Notice::Outcome(uncertain()))
+    );
     assert!(commands.form().is_none());
 
-    // A pending submission abandoned later: its outcome is dropped too.
+    // Closed while pending: the host's uncertain outcome is still told.
     let second = submitted(&mut commands);
     let reply = PluginReply::Submitted(Submitted::Pending { request: 42 });
     commands.receive(answer(second, reply));
     commands.abandon();
-    let late = LateOutcome {
+    let late = |request| LateOutcome {
         plugin: "test".to_owned(),
-        request: 42,
+        request,
         outcome: uncertain(),
     };
-    assert_eq!(commands.receive_outcome(late), None);
+    assert_eq!(commands.receive_outcome(late(41)), None);
+    assert_eq!(
+        commands.receive_outcome(late(42)),
+        Some(Notice::Outcome(uncertain()))
+    );
+    assert!(commands.form().is_none());
+    // Told once.
+    assert_eq!(commands.receive_outcome(late(42)), None);
+}
+
+#[test]
+fn closing_the_palette_drops_an_unsent_form_and_its_validation() {
+    let mut commands = PluginCommands::default();
+    open_form(&mut commands);
+    commands.set_value("name", "Ada").expect("editable");
+    let sent = commands.validate().expect("sent");
+    commands.abandon();
+    let reply = PluginReply::Validated(Ok(vec![error("name", "Taken.")]));
+    assert_eq!(commands.receive(answer(token(&sent), reply)), None);
     assert!(commands.form().is_none());
 }
 
 #[test]
-fn choosing_another_command_drops_the_late_answer_of_the_first() {
+fn choosing_another_command_leaves_the_first_forms_outcome_on_the_status_line_only() {
     let mut commands = PluginCommands::default();
     let first = submitted(&mut commands);
-    let other = commands.choose("test", "test.echo");
+    let other = commands.choose("test", "test.echo", true);
     let reply = PluginReply::Submitted(Submitted::Finished(Outcome::Done(None)));
-    assert_eq!(commands.receive(answer(first, reply)), None);
+    assert_eq!(
+        commands.receive(answer(first, reply)),
+        Some(Notice::Outcome(Outcome::Done(None)))
+    );
+    assert!(commands.form().is_none());
     // The second command's own answer still counts.
     assert_eq!(
         commands.receive(answer(token(&other), PluginReply::Ran(Ok(())))),
@@ -395,7 +440,7 @@ fn choosing_another_command_drops_the_late_answer_of_the_first() {
 #[test]
 fn a_command_that_ran_is_reported_after_the_palette_closed_but_a_form_is_not_opened() {
     let mut commands = PluginCommands::default();
-    let ran = commands.choose("test", "test.echo");
+    let ran = commands.choose("test", "test.echo", true);
     commands.abandon();
     let failure = Failure {
         kind: FailureKind::Host,
@@ -406,13 +451,29 @@ fn a_command_that_ran_is_reported_after_the_palette_closed_but_a_form_is_not_ope
         Some(Notice::Outcome(Outcome::Failed(failure)))
     );
 
-    let form = commands.choose("test", "test.new-item");
+    let form = commands.choose("test", "test.new-item", true);
     commands.abandon();
+    let title = "New item".to_owned();
     assert_eq!(
         commands.receive(answer(token(&form), PluginReply::Form(Ok(spec())))),
-        None
+        Some(Notice::FormNotShown { title })
     );
     assert!(commands.form().is_none());
+}
+
+#[test]
+fn a_form_chosen_after_the_palette_entry_ended_is_told_not_opened() {
+    // The real order today: `PaletteEvent::Run` ends the entry, then the command is chosen.
+    let mut commands = PluginCommands::default();
+    commands.abandon();
+    let chosen = commands.choose("test", "test.new-item", false);
+    let title = "New item".to_owned();
+    assert_eq!(
+        commands.receive(answer(token(&chosen), PluginReply::Form(Ok(spec())))),
+        Some(Notice::FormNotShown { title })
+    );
+    assert!(commands.form().is_none());
+    assert_eq!(commands.submit(), Err(Refusal::NoForm));
 }
 
 #[test]
