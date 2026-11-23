@@ -23,7 +23,8 @@ use wasmtime::Engine;
 
 pub use cache::{CacheSetup, Sha256};
 pub use install::{
-    BUILT_IN_PLUGINS, Hasher, InstallRefusal, Offer, Plan, Reviewed, UNSIGNED_PUBLISHER,
+    BUILT_IN_PLUGINS, Hasher, InstallRefusal, InstalledOffer, Offer, Plan, Reviewed,
+    UNSIGNED_PUBLISHER,
 };
 pub use services::StoreServices;
 
@@ -345,6 +346,8 @@ impl OwnerRuntime {
     pub fn remove(&mut self, plugin: &str) -> Result<(), OwnerError> {
         self.require_record(plugin)?;
         let workers = self.stop(plugin);
+        // Removed, it is forgotten even if its worker did not answer; that is still reported.
+        self.added.remove(plugin);
         self.grants.forget(plugin);
         let stored = self.store.remove_plugin(plugin.to_owned());
         if let Some(cache) = self.cache.as_ref() {

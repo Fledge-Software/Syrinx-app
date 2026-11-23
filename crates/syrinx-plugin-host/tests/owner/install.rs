@@ -13,7 +13,8 @@ use syrinx_plugin_host::bindings::syrinx::plugin::types::PluginError;
 use syrinx_plugin_host::grants::DenyList;
 use syrinx_plugin_host::manifest::CapabilityKind;
 use syrinx_plugin_host::owner::{
-    CacheSetup, Hasher, InstallRefusal, Offer, OwnerRuntime, Plan, Reviewed, UNSIGNED_PUBLISHER,
+    CacheSetup, Hasher, InstallRefusal, InstalledOffer, Offer, OwnerRuntime, Plan, Reviewed,
+    UNSIGNED_PUBLISHER,
 };
 use syrinx_plugin_host::worker::PluginEvent;
 use syrinx_plugin_host::{PluginRegistry, SignedIdentity};
@@ -53,7 +54,7 @@ impl Installer {
     }
 
     fn install(&mut self, offer: Offer, granted: &[CapabilityKind]) -> Result<(), InstallRefusal> {
-        let reviewed = self.runtime.review(offer, None)?;
+        let reviewed = self.runtime.review_new(offer)?;
         self.runtime
             .install_reviewed(reviewed, granted, &mut self.plugins, &mut self.commands, 20)
     }
@@ -69,7 +70,9 @@ impl Installer {
 
     /// Review `offer` as an update of the installed version that `base` reproduces.
     fn review_update(&self, offer: Offer, base: Offer) -> Reviewed {
-        self.runtime.review(offer, Some(base)).expect("reviewed")
+        self.runtime
+            .review_update(offer, InstalledOffer::new(base))
+            .expect("reviewed")
     }
 
     fn has_command(&self, id: &str) -> bool {
@@ -108,7 +111,13 @@ fn offer(plugin: &str, version: &str, capabilities: &str) -> Offer {
 }
 
 fn refusal(installer: &Installer, offer: Offer, base: Option<Offer>) -> InstallRefusal {
-    match installer.runtime.review(offer, base) {
+    let reviewed = match base {
+        None => installer.runtime.review_new(offer),
+        Some(base) => installer
+            .runtime
+            .review_update(offer, InstalledOffer::new(base)),
+    };
+    match reviewed {
         Ok(_) => panic!("the offer was accepted"),
         Err(refusal) => refusal,
     }

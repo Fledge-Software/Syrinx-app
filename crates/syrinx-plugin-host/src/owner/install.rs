@@ -94,6 +94,16 @@ impl Offer {
     }
 }
 
+/// The installed version of a plugin, read again from its own version folder, which an update
+/// is reviewed against. Its own type, so it cannot be swapped with the update's offer.
+pub struct InstalledOffer(Offer);
+
+impl InstalledOffer {
+    pub fn new(offer: Offer) -> Self {
+        Self(offer)
+    }
+}
+
 /// What installing an offer would do.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Plan {
@@ -245,24 +255,32 @@ impl From<RegistrationError> for InstallRefusal {
 }
 
 impl OwnerRuntime {
-    /// Check an offer without running anything: its manifest against its signed lines, the
-    /// Syrinx version it needs and its capabilities. For a new plugin (`base` is `None`) its id
-    /// must be free. For an update, `base` is the installed version read again from its own
-    /// folder: it must be exactly what the install record names, and the offer is compared
-    /// with it, whether or not that version is running.
-    pub fn review(&self, offer: Offer, base: Option<Offer>) -> Result<Reviewed, InstallRefusal> {
+    /// Check a new plugin's offer without running anything: its manifest against its signed
+    /// lines, the Syrinx version it needs, its capabilities, and that no install record, built-in
+    /// or Syrinx name already has its id.
+    pub fn review_new(&self, offer: Offer) -> Result<Reviewed, InstallRefusal> {
         let signed = offer.vouched()?;
         self.check_installable(signed.manifest())?;
-        let Some(base) = base else {
-            self.check_new_id(signed.manifest().id())?;
-            return Ok(Reviewed {
-                signed,
-                offer,
-                plan: Plan::Install,
-                base: None,
-            });
-        };
-        let (plan, base) = self.plan_update(&offer, signed.manifest(), base)?;
+        self.check_new_id(signed.manifest().id())?;
+        Ok(Reviewed {
+            signed,
+            offer,
+            plan: Plan::Install,
+            base: None,
+        })
+    }
+
+    /// Check an update's offer the same way, then against `installed`: that version must be
+    /// exactly what the install record names, and the offer is compared with it, whether or not
+    /// that version is running.
+    pub fn review_update(
+        &self,
+        offer: Offer,
+        installed: InstalledOffer,
+    ) -> Result<Reviewed, InstallRefusal> {
+        let signed = offer.vouched()?;
+        self.check_installable(signed.manifest())?;
+        let (plan, base) = self.plan_update(&offer, signed.manifest(), installed.0)?;
         Ok(Reviewed {
             signed,
             offer,
@@ -388,10 +406,10 @@ impl OwnerRuntime {
         &self,
         offer: &Offer,
         manifest: &PluginManifest,
-        base: Offer,
+        installed: Offer,
     ) -> Result<(Plan, Base), InstallRefusal> {
-        let installed = base.vouched()?;
-        let record = self.recorded(&base, installed.manifest())?;
+        let vouched = installed.vouched()?;
+        let record = self.recorded(&installed, vouched.manifest())?;
         if manifest.id() != record.plugin_id {
             return Err(InstallRefusal::WrongPlugin {
                 expected: record.plugin_id,
@@ -405,7 +423,7 @@ impl OwnerRuntime {
         if !is_newer(manifest.version(), &record.version) {
             return Err(InstallRefusal::NotNewer);
         }
-        let changes = compare(installed.manifest(), manifest);
+        let changes = compare(vouched.manifest(), manifest);
         let plan = if changes.needs_consent() {
             Plan::Held(changes)
         } else {
@@ -413,7 +431,7 @@ impl OwnerRuntime {
         };
         let base = Base {
             record,
-            component: base.component,
+            component: installed.component,
         };
         Ok((plan, base))
     }

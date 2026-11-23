@@ -42,9 +42,9 @@ impl OwnerRuntime {
     /// the old version's registration, record, grants and folders are put back, and it is
     /// loaded again if it was loaded.
     ///
-    /// The old version's compiled code is deleted before the new one loads. The cache already
-    /// keeps one entry per plugin, so this is defence in depth: no moment exists in which the
-    /// old code is warm under the new record.
+    /// The old version's compiled code is deleted before the new one loads, so the new version
+    /// never starts from the old code. The cache already keeps one entry per plugin and checks
+    /// it against the record, so this is defence in depth.
     pub fn update_reviewed(
         &mut self,
         reviewed: Reviewed,
@@ -96,6 +96,7 @@ impl OwnerRuntime {
         if !same_install(&base.record, &current) {
             return Err(InstallRefusal::Stale);
         }
+        // Defence in depth: the review already refused an update that is not newer.
         if !is_newer(offered, &current.version) {
             return Err(InstallRefusal::NotNewer);
         }
@@ -217,7 +218,8 @@ impl OwnerRuntime {
         Ok(())
     }
 
-    /// The new version is in place: the grants the workers check follow the store.
+    /// The new version is in place: the grants the workers check follow the store. No worker
+    /// needs telling: `load` added the new version fresh, so no instance holds an old grant.
     fn commit_grants(&mut self, plugin: &str, new_grants: &[CapabilityKind]) {
         let Ok(added) = self.added(plugin) else {
             return;
