@@ -10,6 +10,7 @@ use std::sync::Arc;
 use syrinx_platform::CacheFolder;
 use syrinx_plugin_host::bindings::syrinx::plugin::types::Outcome;
 use syrinx_plugin_host::grants::{DenyList, Protected};
+use syrinx_plugin_host::manifest::is_plugin_id;
 use syrinx_plugin_host::owner::{CacheSetup, OwnerRuntime};
 use syrinx_plugin_host::worker::{PluginEvent, StopReason};
 use syrinx_plugin_host::{CacheError, Failure, Refusal};
@@ -186,12 +187,10 @@ fn describe(event: &PluginEvent) -> String {
     }
 }
 
-/// The plugin's id when it is one plain segment, as a manifest's is; an id the cache read
-/// back from a damaged store row may not be, and is then replaced.
+/// The plugin's id when it is one a manifest may declare; an id the cache read back from a
+/// damaged store row may not be, and is then replaced.
 fn shown(plugin: &str) -> &str {
-    let plain =
-        |byte: u8| byte.is_ascii_lowercase() || byte.is_ascii_digit() || b"-_".contains(&byte);
-    if !plugin.is_empty() && plugin.len() <= 64 && plugin.bytes().all(plain) {
+    if is_plugin_id(plugin) {
         return plugin;
     }
     "(an id that cannot be shown)"

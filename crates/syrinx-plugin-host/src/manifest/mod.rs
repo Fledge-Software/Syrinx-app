@@ -332,6 +332,12 @@ fn plugin_info(raw: RawPlugin) -> Result<PluginInfo, ManifestError> {
     })
 }
 
+/// Whether `id` is a plugin id a manifest may declare, for a caller that must not show any
+/// other text, such as an id read back from the store.
+pub fn is_plugin_id(id: &str) -> bool {
+    check_plugin_id(id).is_ok()
+}
+
 /// A plugin id is one segment of lowercase letters, digits and hyphens.
 fn check_plugin_id(id: &str) -> Result<(), ManifestError> {
     let one_segment = !id.contains('.') && id.len() <= MAX_PLUGIN_ID_BYTES;
