@@ -23,14 +23,16 @@ use plugin_fixture::fixture_workspace;
 
 /// The full fixture's component, built into the folder the integration tests use
 /// (`<target>/tmp/plugin-fixtures`); this test binary is `<target>/<profile>/deps/<name>`.
-fn full_component() -> &'static [u8] {
+pub(super) fn full_component() -> &'static [u8] {
     let executable = std::env::current_exe().expect("the test binary's path");
     let target = executable.ancestors().nth(3).expect("the target folder");
     plugin_fixture::full_component(&target.join("tmp").join("plugin-fixtures"))
 }
 
 /// The full fixture's real manifest, asking for `storage`, registered with matching lines.
-fn registered_fixture(registry: &mut PluginRegistry) -> &syrinx_plugin_host::RegisteredPlugin {
+pub(super) fn registered_fixture(
+    registry: &mut PluginRegistry,
+) -> &syrinx_plugin_host::RegisteredPlugin {
     let mut text = fs::read_to_string(fixture_workspace().join("full").join(MANIFEST_FILE))
         .expect("the fixture's manifest");
     text.push_str(
@@ -45,7 +47,7 @@ fn registered_fixture(registry: &mut PluginRegistry) -> &syrinx_plugin_host::Reg
         .expect("registers")
 }
 
-fn install_record() -> PluginInstall {
+pub(super) fn install_record() -> PluginInstall {
     PluginInstall {
         plugin_id: "test".to_owned(),
         version: "0.1.0".to_owned(),
@@ -60,7 +62,7 @@ fn install_record() -> PluginInstall {
 
 /// The session's store and plugin runtime over the fixture's folder, with the cache folder
 /// beside the database, as `serve_accepted` starts them.
-fn started(fixture: &Fixture) -> (Arc<Store>, plugins::SessionPlugins) {
+pub(super) fn started(fixture: &Fixture) -> (Arc<Store>, plugins::SessionPlugins) {
     let lease = Arc::new(WindowsDirectoryLease::prepare(&fixture.0).expect("the synthetic folder"));
     let store = Arc::new(Store::open(lease.clone()).expect("the synthetic store"));
     let cache_folder = lease.cache_folder(plugins::CACHE_FOLDER);
@@ -177,7 +179,7 @@ fn compiled_code_is_kept_under_its_sha256_and_loaded_after_a_restart() {
 }
 
 /// Starts and stops a fresh worker, so the database exists at the current schema.
-fn create_database(fixture: &Fixture) {
+pub(super) fn create_database(fixture: &Fixture) {
     let (handle, mut events) = fixture.start();
     state(&mut events);
     stop(handle, &mut events);

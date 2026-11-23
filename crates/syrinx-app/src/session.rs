@@ -7,6 +7,7 @@ mod history;
 mod history_repair;
 mod page_text;
 mod page_text_setting;
+mod plugin_commands;
 mod plugins;
 mod preferences;
 mod recovery;
@@ -38,6 +39,7 @@ use std::{
 
 use futures::channel::mpsc::{UnboundedReceiver, UnboundedSender, unbounded};
 use history::{HistoryRecorder, Observation};
+use syrinx_core::plugin_forms::{LateOutcome, PluginAnswer, PluginCall};
 use syrinx_core::usage::{ErrorCategory, Feature, ReportPeriod, Timing, UsageDate, UsageRecorder};
 use syrinx_core::{
     Activation, BookmarkImport, DestinationEdit, DestinationError, DestinationSurface,
@@ -230,6 +232,8 @@ pub enum SessionCommand {
     /// refused save is retried until it is kept.
     SavePageTextSetting(PageTextSetting),
     /// Earlier commands finish first; commands sent after this are not accepted.
+    /// A plugin command or form call from the palette, answered by `SessionEvent::Plugin` (#29).
+    Plugin(PluginCall),
     Shutdown,
 }
 
@@ -355,6 +359,10 @@ pub enum SessionEvent {
     },
     /// Connections have closed before this event; joining the worker is now safe.
     Stopped,
+    /// The answer to `SessionCommand::Plugin`, named by the call's token (#29).
+    Plugin(PluginAnswer),
+    /// A write the host settled after its submission answered pending (#29).
+    PluginOutcome(LateOutcome),
 }
 
 /// Saved zoom levels by host (#90). Hosts are browsing data, so `Debug` shows only a count.
@@ -663,6 +671,7 @@ fn serve_accepted(
     let started = problems
         .into_iter()
         .try_for_each(|error| emit_recoverable(events, error));
+    worker.plugins = plugins;
     let result = started.and_then(|()| {
         serve_counted(
             &usage,
@@ -675,6 +684,7 @@ fn serve_accepted(
         )
     });
     worker.survival.finish();
+    let plugins = worker.plugins.take();
     if let Err(error) = &result {
         stop::keep_stop(data_dir, error);
     }
@@ -936,6 +946,9 @@ struct Worker {
     unsaved: unsaved::Unsaved,
     /// Whether the window missed the zoom levels a clear applied; an idle tick resends them (#196).
     zoom_levels: zoom_levels::ZoomLevelsReport,
+    /// The plugin runtime while the loop serves, and the palette's calls still awaiting it (#29).
+    plugins: Option<plugins::SessionPlugins>,
+    plugin_calls: plugin_commands::PluginCalls,
 }
 
 /// The tabs a command created, and those of them that put back an earlier tab's page.
@@ -1018,6 +1031,8 @@ impl Worker {
             survival: stop::Survival::new(),
             unsaved: unsaved::Unsaved::default(),
             zoom_levels: zoom_levels::ZoomLevelsReport::default(),
+            plugins: None,
+            plugin_calls: plugin_commands::PluginCalls::default(),
         })
     }
 
@@ -1059,7 +1074,17 @@ impl Worker {
                 Some(retry) => wait.min(retry),
                 None => wait,
             };
+            // While a plugin's answer is still to come, the worker looks again soon (#29).
+            let polling = self.plugin_calls.is_waiting() && plugin_commands::ANSWER_POLL < wait;
+            let wait = if polling {
+                plugin_commands::ANSWER_POLL
+            } else {
+                wait
+            };
             let received = commands.recv_timeout(wait);
+            self.survival.operation = ANSWERING_PLUGIN_CALLS;
+            let served = self.serve_plugins(events);
+            self.survival.result(served, events)?;
             // The worker's existing wake-ups carry the five-minute usage write; it adds none,
             // and reads no clock unless a write is waiting.
             if usage.pending()
@@ -1104,6 +1129,8 @@ impl Worker {
                     self.report_page_text(events)?;
                     delay = IDLE_DELAY;
                 }
+                // A wake-up only to look for plugin answers does none of the idle work.
+                Err(mpsc::RecvTimeoutError::Timeout) if polling => {}
                 Err(mpsc::RecvTimeoutError::Timeout) if self.history.has_pending_titles() => {
                     // A due tab retry runs here too, so a passed retry time cannot zero the wait.
                     self.survival.operation = "saving the tabs";
@@ -1119,6 +1146,19 @@ impl Worker {
                 }
             }
         }
+    }
+
+    /// Sends the plugin answers that arrived and the writes the host settled since the last
+    /// wake-up (#29).
+    fn serve_plugins(
+        &mut self,
+        events: &UnboundedSender<SessionEvent>,
+    ) -> Result<(), SessionError> {
+        self.plugin_calls.collect(events)?;
+        let Some(plugins) = &self.plugins else {
+            return Ok(());
+        };
+        plugin_commands::forward_outcomes(&plugins.runtime.take_events(), events)
     }
 
     /// The idle wake-up: retries a refused tab save, expires old history, takes the backup.
@@ -1241,6 +1281,10 @@ impl Worker {
             SessionCommand::StorePageText(page) => {
                 self.page_text.store(page, utc_seconds()?);
                 return Ok(());
+            }
+            SessionCommand::Plugin(call) => {
+                let runtime = self.plugins.as_mut().map(|plugins| &mut plugins.runtime);
+                return self.plugin_calls.start(runtime, call, events);
             }
             SessionCommand::SavePageTextSetting(setting) => {
                 let now = utc_seconds()?;
@@ -1878,6 +1922,7 @@ fn reopens_a_page(command: &SessionCommand) -> bool {
         | SessionCommand::UsageReport { .. }
         | SessionCommand::StorePageText(_)
         | SessionCommand::SavePageTextSetting(_)
+        | SessionCommand::Plugin(_)
         | SessionCommand::Shutdown => false,
     }
 }
@@ -1900,6 +1945,8 @@ fn erase_what_the_setting_forbids(
 
 /// What a refused page-text setting is retried as, while idle and at shutdown.
 const SAVING_PAGE_TEXT_SETTING_AGAIN: &str = "saving the page text setting again";
+/// The operation a failure while forwarding plugin answers is reported under (#29).
+const ANSWERING_PLUGIN_CALLS: &str = "answering a plugin command";
 
 fn apply_model(model: &mut TabModel, command: SessionCommand) -> Result<(), SessionError> {
     match command {
@@ -2056,6 +2103,7 @@ fn apply_model(model: &mut TabModel, command: SessionCommand) -> Result<(), Sess
         | SessionCommand::UsageReport { .. }
         | SessionCommand::StorePageText(_)
         | SessionCommand::SavePageTextSetting(_)
+        | SessionCommand::Plugin(_)
         | SessionCommand::Shutdown => {}
     }
     Ok(())

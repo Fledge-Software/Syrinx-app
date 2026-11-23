@@ -695,7 +695,10 @@ fn whether_a_command_has_a_form_comes_from_the_added_plugins_manifest() {
     assert_eq!(runtime.command_has_form("test", "test.echo"), None);
     install(&mut runtime, "test", "");
     assert_eq!(runtime.command_has_form("test", "test.echo"), Some(false));
-    assert_eq!(runtime.command_has_form("test", "test.new-item"), Some(true));
+    assert_eq!(
+        runtime.command_has_form("test", "test.new-item"),
+        Some(true)
+    );
     assert_eq!(runtime.command_has_form("test", "test.missing"), None);
     assert_eq!(runtime.command_has_form("other", "test.echo"), None);
     close(runtime, store);
