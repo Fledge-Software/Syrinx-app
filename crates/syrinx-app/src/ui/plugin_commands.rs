@@ -10,7 +10,14 @@ impl BrowserView {
     pub(super) fn run_plugin_command(&mut self, plugin: &str, command: &str) {
         // Today `PaletteEvent::Run` has already ended the entry, so a form cannot be shown.
         let in_palette = self.palette.is_some();
-        let (call, forgotten) = self.plugin_commands.choose(plugin, command, in_palette);
+        // The title the palette showed names the command if it is set aside later.
+        let title = self
+            .commands
+            .find(command)
+            .map_or_else(|| command.to_owned(), |(_, found)| found.title.clone());
+        let (call, forgotten) = self
+            .plugin_commands
+            .choose(plugin, command, &title, in_palette);
         self.tell_plugin_notice(forgotten);
         self.command(SessionCommand::Plugin(call));
     }

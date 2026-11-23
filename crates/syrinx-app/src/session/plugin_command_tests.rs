@@ -105,7 +105,10 @@ impl Route {
 
     /// Choose the test plugin's form command in an open palette and see its form open.
     fn open_form(&mut self) {
-        let call = self.commands.choose("test", "test.new-item", true).0;
+        let call = self
+            .commands
+            .choose("test", "test.new-item", "test.new-item", true)
+            .0;
         let notice = self.exchange(call);
         let title = "New item".to_owned();
         assert_eq!(notice, Some(Notice::FormReady { title }));
@@ -173,7 +176,10 @@ fn validate(token: u64, values: Vec<FieldValue>) -> PluginCall {
 #[test]
 fn a_command_without_a_form_runs_and_one_with_a_form_opens_it() {
     let mut route = Route::new();
-    let call = route.commands.choose("test", "test.echo", true).0;
+    let call = route
+        .commands
+        .choose("test", "test.echo", "test.echo", true)
+        .0;
     assert_eq!(
         route.exchange(call),
         Some(Notice::Outcome(Outcome::Done(None)))
@@ -183,7 +189,10 @@ fn a_command_without_a_form_runs_and_one_with_a_form_opens_it() {
     let form = route.commands.form().expect("open");
     assert_eq!(form.spec().fields.len(), 10);
     assert_eq!(form.spec().submit_label, "Create");
-    let call = route.commands.choose("test", "test.fail", true).0;
+    let call = route
+        .commands
+        .choose("test", "test.fail", "test.fail", true)
+        .0;
     let failure = Failure {
         kind: FailureKind::InvalidInput,
         message: "synthetic failure".to_owned(),
@@ -200,7 +209,10 @@ fn a_form_chosen_after_the_palette_closed_is_told_on_the_status_line() {
     let mut route = Route::new();
     // `PaletteEvent::Run` ends the entry before the command is chosen.
     route.commands.abandon();
-    let call = route.commands.choose("test", "test.new-item", false).0;
+    let call = route
+        .commands
+        .choose("test", "test.new-item", "test.new-item", false)
+        .0;
     let title = "New item".to_owned();
     assert_eq!(route.exchange(call), Some(Notice::FormNotShown { title }));
     assert!(route.commands.form().is_none());
@@ -417,6 +429,11 @@ fn a_pending_outcome_reaches_its_own_form_as_soon_as_the_host_settles_it() {
         panic!("the pending form is told it may have happened: {notice:?}");
     };
     assert!(route.commands.form().is_some(), "kept, never resubmitted");
+    // The stop that follows tells nothing more: one uncertain notice in all.
+    let SessionEvent::PluginStopped { plugin } = route.next_event() else {
+        panic!("the stop, after the settled write");
+    };
+    assert_eq!(route.commands.plugin_stopped(&plugin), None);
     route.close();
 }
 
@@ -425,7 +442,10 @@ fn a_pending_outcome_after_another_command_was_chosen_reaches_only_the_status_li
     let mut route = Route::new();
     route.pending();
     // The owner moves on to another command before the outcome arrives.
-    let other = route.commands.choose("test", "test.echo", true).0;
+    let other = route
+        .commands
+        .choose("test", "test.echo", "test.echo", true)
+        .0;
     route.runtime().remove("test").expect("removed");
     let SessionEvent::PluginOutcome(late) = route.next_event() else {
         panic!("the settled write");
@@ -473,7 +493,7 @@ fn a_plugin_command_reaches_the_session_and_fails_plainly_when_its_plugin_is_not
     let (handle, mut events) = fixture.start();
     state(&mut events);
     let mut commands = PluginCommands::default();
-    let call = commands.choose("test", "test.echo", false).0;
+    let call = commands.choose("test", "test.echo", "test.echo", false).0;
     send(&handle, SessionCommand::Plugin(call));
     let answer = loop {
         match next_any_event(&mut events) {
@@ -538,7 +558,7 @@ fn a_call_refused_before_it_was_queued_is_told_the_hosts_reason() {
         .expect("installed");
     let (sender, mut receiver) = unbounded();
     let mut commands = PluginCommands::default();
-    let (call, _) = commands.choose("test", "test.echo", true);
+    let (call, _) = commands.choose("test", "test.echo", "test.echo", true);
     plugin_commands::start(Some(&mut plugins.runtime), call, &sender);
     let Ok(SessionEvent::Plugin(answer)) = receiver.try_recv() else {
         panic!("the refusal is answered at once, on the session's thread");

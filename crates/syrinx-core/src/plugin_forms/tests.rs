@@ -78,7 +78,9 @@ fn token(call: &PluginCall) -> u64 {
 
 /// The synthetic plugin's form, open and editable.
 fn open_form(commands: &mut PluginCommands) {
-    let chosen = commands.choose("test", "test.new-item", true).0;
+    let chosen = commands
+        .choose("test", "test.new-item", "test.new-item", true)
+        .0;
     let notice = commands.receive(answer(token(&chosen), PluginReply::Form(Ok(spec()))));
     assert_eq!(
         notice,
@@ -195,7 +197,9 @@ fn a_failed_host_check_keeps_the_input_names_the_first_field_and_sends_nothing()
 #[test]
 fn a_form_starts_with_its_initial_values_and_toggles_off() {
     let mut commands = PluginCommands::default();
-    let chosen = commands.choose("test", "test.new-item", true).0;
+    let chosen = commands
+        .choose("test", "test.new-item", "test.new-item", true)
+        .0;
     let mut with_initial = spec();
     with_initial.fields[0].initial = Some("Grace".to_owned());
     commands.receive(answer(token(&chosen), PluginReply::Form(Ok(with_initial))));
@@ -431,7 +435,7 @@ fn closing_the_palette_drops_an_unsent_form_and_its_validation() {
 fn choosing_another_command_leaves_the_first_forms_outcome_on_the_status_line_only() {
     let mut commands = PluginCommands::default();
     let first = submitted(&mut commands);
-    let other = commands.choose("test", "test.echo", true).0;
+    let other = commands.choose("test", "test.echo", "test.echo", true).0;
     let reply = PluginReply::Submitted(Submitted::Finished(Outcome::Done(None)));
     assert_eq!(
         commands.receive(answer(first, reply)),
@@ -448,7 +452,7 @@ fn choosing_another_command_leaves_the_first_forms_outcome_on_the_status_line_on
 #[test]
 fn a_command_that_ran_is_reported_after_the_palette_closed_but_a_form_is_not_opened() {
     let mut commands = PluginCommands::default();
-    let ran = commands.choose("test", "test.echo", true).0;
+    let ran = commands.choose("test", "test.echo", "test.echo", true).0;
     commands.abandon();
     let failure = Failure {
         kind: FailureKind::Host,
@@ -459,7 +463,9 @@ fn a_command_that_ran_is_reported_after_the_palette_closed_but_a_form_is_not_ope
         Some(Notice::Outcome(Outcome::Failed(failure)))
     );
 
-    let form = commands.choose("test", "test.new-item", true).0;
+    let form = commands
+        .choose("test", "test.new-item", "test.new-item", true)
+        .0;
     commands.abandon();
     let title = "New item".to_owned();
     assert_eq!(
@@ -474,7 +480,9 @@ fn a_form_chosen_after_the_palette_entry_ended_is_told_not_opened() {
     // The real order today: `PaletteEvent::Run` ends the entry, then the command is chosen.
     let mut commands = PluginCommands::default();
     commands.abandon();
-    let chosen = commands.choose("test", "test.new-item", false).0;
+    let chosen = commands
+        .choose("test", "test.new-item", "test.new-item", false)
+        .0;
     let title = "New item".to_owned();
     assert_eq!(
         commands.receive(answer(token(&chosen), PluginReply::Form(Ok(spec())))),
@@ -536,14 +544,21 @@ fn a_closed_submissions_invalid_answer_names_its_field_or_says_nothing_happened(
 }
 
 #[test]
-fn a_command_run_still_waiting_when_another_is_chosen_is_still_reported_by_name() {
+fn a_command_run_still_waiting_when_another_is_chosen_is_still_reported_by_its_title() {
     let mut commands = PluginCommands::default();
-    let first = commands.choose("test", "test.echo", true).0;
-    let second = commands.choose("test", "test.recall", true).0;
+    let first = commands
+        .choose("test", "test.echo", "Synthetic echo", true)
+        .0;
+    let second = commands
+        .choose("test", "test.recall", "test.recall", true)
+        .0;
     // The first's late answer arrives while the second is current, and names its command.
     assert_eq!(
         commands.receive(answer(token(&first), PluginReply::Ran(Ok(())))),
-        Some(named("test.echo", Notice::Outcome(Outcome::Done(None))))
+        Some(named(
+            "Synthetic echo",
+            Notice::Outcome(Outcome::Done(None))
+        ))
     );
     assert_eq!(
         commands.receive(answer(token(&second), PluginReply::Ran(Ok(())))),
@@ -551,8 +566,10 @@ fn a_command_run_still_waiting_when_another_is_chosen_is_still_reported_by_name(
     );
 
     // A form for a command set aside the same way is dropped: nobody can see it.
-    let form = commands.choose("test", "test.new-item", true).0;
-    let (superseding, forgotten) = commands.choose("test", "test.echo", true);
+    let form = commands
+        .choose("test", "test.new-item", "test.new-item", true)
+        .0;
+    let (superseding, forgotten) = commands.choose("test", "test.echo", "test.echo", true);
     assert_eq!(forgotten, None);
     assert_ne!(superseding.token, form.token);
     assert_eq!(
@@ -635,7 +652,7 @@ fn a_forgotten_choice_is_not_said_to_have_written() {
     let mut forgotten = None;
     for _ in 0..=MAX_ORPHANS + 1 {
         forgotten = commands
-            .choose("test", "test.new-item", true)
+            .choose("test", "test.new-item", "test.new-item", true)
             .1
             .or(forgotten);
     }
