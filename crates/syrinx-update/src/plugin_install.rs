@@ -553,8 +553,10 @@ pub fn open_installed(
 /// so is every older waiting folder once a newer one is offered, so none is left stuck. An
 /// unsigned folder while developer mode is off is kept and skipped: an older waiting folder may
 /// then be offered instead. A failure to read or check a folder is returned and removes
-/// nothing. The update offered holds the id until it is accepted (`keep`) or declined, so no
-/// other flow touches the plugin meanwhile.
+/// nothing. An entry Syrinx did not make stops settling for that plugin and is returned as an
+/// error, so the review sheet shows it instead of retrying silently. The update offered holds
+/// the id until it is accepted (`keep`) or declined, so no other flow touches the plugin
+/// meanwhile.
 pub fn settle_pending_update(
     folders: &PluginFolders,
     installed: Installed<'_>,
@@ -639,6 +641,8 @@ fn files_refused(error: &InstallError) -> bool {
         | InstallError::NotInstalled
         | InstallError::Busy
         | InstallError::TimedOut { .. }
+        // An entry Syrinx did not make may be the owner's: it stops settling for that plugin
+        // and is returned as an error, so the review sheet shows it instead of retrying.
         | InstallError::UnexpectedEntry { .. }
         | InstallError::Record { .. }
         | InstallError::MissingProgramFile { .. }
