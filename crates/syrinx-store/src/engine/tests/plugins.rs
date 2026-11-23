@@ -96,7 +96,7 @@ fn version_7_upgrades_to_8_keeping_the_session_with_no_plugin_installed() {
 
     let connection = directory.connection();
     assert_eq!(user_version(&connection), schema::SCHEMA_VERSION);
-    assert_eq!(schema::SCHEMA_VERSION, 9);
+    assert_eq!(schema::SCHEMA_VERSION, 10);
     close(connection);
     directory.cleanup();
 }

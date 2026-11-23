@@ -26,6 +26,7 @@ use crate::replay::{self, AppliedDeletions};
 use crate::{BackupOutcome, DirectoryLease, ShutdownState};
 use crate::{backup, records, schema};
 
+mod plugin_feeds;
 mod plugins;
 mod session;
 
@@ -497,6 +498,11 @@ enum WriterRequest {
         reply: mpsc::SyncSender<Result<(), StoreError>>,
     },
     History(HistoryRequest),
+    /// One plugin search feed batch's tier 1 rows and cursor, in one transaction (#141).
+    PluginFeed {
+        commit: crate::PluginFeedCommit,
+        reply: mpsc::SyncSender<Result<Vec<crate::FeedRowOutcome>, StoreError>>,
+    },
 }
 
 struct WriterHandle {
@@ -612,6 +618,10 @@ fn serve_writes(
                 limit,
                 reply,
             } => serve_plugin_write(&writer.connection, &write, limit, &reply)?,
+            WriterRequest::PluginFeed { commit, reply } => {
+                let result = crate::plugin_feeds::commit(&mut writer.connection, &commit);
+                reply.send(result).map_err(|_| StoreError::ReplyAbandoned)?;
+            }
             WriterRequest::Deletions { requests, reply } => {
                 let result = replay::apply_live(&mut writer.connection, &requests);
                 reply.send(result).map_err(|_| StoreError::ReplyAbandoned)?;

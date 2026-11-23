@@ -9,7 +9,7 @@ use crate::ShutdownState;
 use crate::error::{StoreError, StoreOperation, database_error, with_cleanup};
 
 pub(crate) const APPLICATION_ID: i64 = 0x5359_5258;
-pub(crate) const SCHEMA_VERSION: i64 = 9;
+pub(crate) const SCHEMA_VERSION: i64 = 10;
 
 /// The record layout of a recognized Syrinx database, by `user_version`.
 /// Declared in version order, so later generations compare greater.
@@ -33,9 +33,11 @@ pub(crate) enum SchemaGeneration {
     Plugins,
     /// Version 9 (#137): adds the compiled-code cache's record of each plugin's native code.
     PluginCache,
+    /// Version 10 (#141): adds each plugin search feed's cursor and its tier 1 rows.
+    PluginFeeds,
 }
 
-pub(crate) const CURRENT_GENERATION: SchemaGeneration = SchemaGeneration::PluginCache;
+pub(crate) const CURRENT_GENERATION: SchemaGeneration = SchemaGeneration::PluginFeeds;
 
 impl SchemaGeneration {
     /// Whether this generation (version 2 or later) stores saved pages as a folder tree.
@@ -76,6 +78,11 @@ impl SchemaGeneration {
     /// Whether this generation (version 9 or later) records compiled plugin code.
     fn has_plugin_cache(self) -> bool {
         self >= Self::PluginCache
+    }
+
+    /// Whether this generation (version 10 or later) keeps plugin search feeds' cursors.
+    fn has_plugin_feeds(self) -> bool {
+        self >= Self::PluginFeeds
     }
 }
 
@@ -355,6 +362,7 @@ fn inspect_identity(connection: &Connection) -> Result<Identity, StoreError> {
         7 => Ok(Identity::Syrinx(SchemaGeneration::SiteZoom)),
         8 => Ok(Identity::Syrinx(SchemaGeneration::Plugins)),
         9 => Ok(Identity::Syrinx(SchemaGeneration::PluginCache)),
+        10 => Ok(Identity::Syrinx(SchemaGeneration::PluginFeeds)),
         version if version > SCHEMA_VERSION => Err(StoreError::FutureSchema { version }),
         _ => Err(StoreError::SchemaMismatch),
     }
@@ -425,6 +433,16 @@ pub(crate) fn plugin_cache_migration() -> String {
     format!("{};", crate::plugins::COMPILED_TABLE)
 }
 
+/// Version 10: adds the empty feed cursor and tier 1 row tables; every feed is pulled from
+/// its start once.
+pub(crate) fn plugin_feeds_migration() -> String {
+    format!(
+        "{}; {};",
+        crate::plugin_feeds::CURSOR_TABLE,
+        crate::plugin_feeds::ENTRY_TABLE
+    )
+}
+
 /// Owns the migration SQL that `rusqlite_migration` borrows, numbered by position.
 pub(crate) struct MigrationScripts {
     initial: String,
@@ -436,6 +454,7 @@ pub(crate) struct MigrationScripts {
     site_zoom: String,
     plugins: String,
     plugin_cache: String,
+    plugin_feeds: String,
 }
 
 impl MigrationScripts {
@@ -450,6 +469,7 @@ impl MigrationScripts {
             site_zoom: site_zoom_migration(),
             plugins: plugins_migration(),
             plugin_cache: plugin_cache_migration(),
+            plugin_feeds: plugin_feeds_migration(),
         }
     }
 
@@ -464,6 +484,7 @@ impl MigrationScripts {
             M::up_with_hook(&self.site_zoom, check_migrated_site_zoom),
             M::up_with_hook(&self.plugins, check_migrated_plugins).foreign_key_check(),
             M::up_with_hook(&self.plugin_cache, check_migrated_plugin_cache).foreign_key_check(),
+            M::up_with_hook(&self.plugin_feeds, check_migrated_plugin_feeds).foreign_key_check(),
         ])
     }
 }
@@ -525,6 +546,15 @@ pub(crate) fn check_migrated_plugin_cache(transaction: &Transaction<'_>) -> Hook
     match crate::plugins::compiled_count(transaction) {
         Ok(0) => Ok(()),
         Ok(_) => Err(HookError::Hook("unexpected compiled-code rows".to_owned())),
+        Err(error) => Err(HookError::Hook(error.to_string())),
+    }
+}
+
+pub(crate) fn check_migrated_plugin_feeds(transaction: &Transaction<'_>) -> HookResult {
+    // The new tables must start empty: no feed is assumed to have been pulled (#141).
+    match crate::plugin_feeds::count(transaction) {
+        Ok(0) => Ok(()),
+        Ok(_) => Err(HookError::Hook("unexpected plugin feed rows".to_owned())),
         Err(error) => Err(HookError::Hook(error.to_string())),
     }
 }
@@ -644,8 +674,14 @@ const PLUGIN_ADDED_OBJECTS: &[SchemaObject] = &[
 const PLUGIN_CACHE_ADDED_OBJECTS: &[SchemaObject] =
     &[table("plugin_compiled", crate::plugins::COMPILED_TABLE)];
 
+/// Version 10 adds the plugin search feed tables to version 9.
+const PLUGIN_FEED_ADDED_OBJECTS: &[SchemaObject] = &[
+    table("plugin_feed_cursor", crate::plugin_feeds::CURSOR_TABLE),
+    table("plugin_feed_entry", crate::plugin_feeds::ENTRY_TABLE),
+];
+
 /// Objects of each generation, sorted by name as `sqlite_schema` lists them.
-/// Versions 5 to 9 each add their objects on top of every earlier version's.
+/// Versions 5 to 10 each add their objects on top of every earlier version's.
 fn expected_objects(generation: SchemaGeneration) -> Vec<&'static SchemaObject> {
     let base = match generation {
         SchemaGeneration::FlatSaved => FLAT_OBJECTS,
@@ -656,7 +692,8 @@ fn expected_objects(generation: SchemaGeneration) -> Vec<&'static SchemaObject> 
         | SchemaGeneration::Permissions
         | SchemaGeneration::SiteZoom
         | SchemaGeneration::Plugins
-        | SchemaGeneration::PluginCache => HISTORY_OBJECTS,
+        | SchemaGeneration::PluginCache
+        | SchemaGeneration::PluginFeeds => HISTORY_OBJECTS,
     };
     let additions = [
         (generation.has_deletion_state(), DELETION_ADDED_OBJECTS),
@@ -664,6 +701,7 @@ fn expected_objects(generation: SchemaGeneration) -> Vec<&'static SchemaObject> 
         (generation.has_site_zoom(), SITE_ZOOM_ADDED_OBJECTS),
         (generation.has_plugins(), PLUGIN_ADDED_OBJECTS),
         (generation.has_plugin_cache(), PLUGIN_CACHE_ADDED_OBJECTS),
+        (generation.has_plugin_feeds(), PLUGIN_FEED_ADDED_OBJECTS),
     ];
     let added = additions
         .into_iter()
