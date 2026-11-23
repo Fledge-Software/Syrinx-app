@@ -298,6 +298,20 @@ impl StagedPlugin {
         read_listed(&self.folder, &self.list, path, limit)
     }
 
+    /// A new plugin's copy, placed once the plugin host found no install record for its id
+    /// (`OwnerRuntime::review_new`): any `Plugins/<id>/` left without a record, as by a crash
+    /// between placing and recording, is cleared first, so it never blocks the install.
+    pub fn place_unrecorded(
+        self,
+        folders: &PluginFolders,
+    ) -> Result<PlacedPlugin, PluginInstallError> {
+        if self.installed.is_some() {
+            return Err(PluginInstallError::InstalledVersion);
+        }
+        folders.remove_plugin(self.list.id())?;
+        self.place(folders)
+    }
+
     /// Move the staged copy to `Plugins/<id>/<version>/`, replacing a folder an earlier offer of
     /// this same update left there. It never touches the installed version's folder: a new
     /// plugin whose id already has a version folder is refused, and so is an update whose
@@ -308,6 +322,7 @@ impl StagedPlugin {
             None if !folders.versions(&id)?.is_empty() => {
                 return Err(PluginInstallError::AlreadyInstalled);
             }
+            // Defence in depth: staging already refuses an update that is not newer.
             Some(installed) if installed == version => {
                 return Err(PluginInstallError::InstalledVersion);
             }
@@ -428,8 +443,9 @@ pub fn open_installed(
 /// It survives a restart because it is its own signed folder; nothing about it is recorded
 /// until the owner accepts. A newer folder whose contents are refused (signature, hash, slot,
 /// version or publisher) is removed, and so is every older waiting folder once a newer one is
-/// offered, so none is left stuck. An unsigned folder while developer mode is off is kept but
-/// not offered. A failure to read a folder is returned and removes nothing.
+/// offered, so none is left stuck. An unsigned folder while developer mode is off is kept and
+/// skipped: an older waiting folder may then be offered instead. A failure to read or check a
+/// folder is returned and removes nothing.
 pub fn settle_pending_update(
     folders: &PluginFolders,
     installed: Installed<'_>,
@@ -463,16 +479,53 @@ pub fn settle_pending_update(
 /// for a failure to read it.
 fn is_content_refusal(error: &PluginInstallError) -> bool {
     match error {
-        PluginInstallError::Package(UpdateError::Read { .. }) => false,
-        PluginInstallError::Package(_)
-        | PluginInstallError::DifferentPublisher
-        | PluginInstallError::NotRecordedVersion { .. } => true,
+        PluginInstallError::Package(error) => is_refused_content(error),
+        PluginInstallError::DifferentPublisher | PluginInstallError::NotRecordedVersion { .. } => {
+            true
+        }
         PluginInstallError::Files(_)
         | PluginInstallError::Unsigned
         | PluginInstallError::NoPublisherKey
         | PluginInstallError::RecordedPublisher
         | PluginInstallError::AlreadyInstalled
         | PluginInstallError::InstalledVersion => false,
+    }
+}
+
+/// Whether the verifier refused what a folder holds (its signature, list, files, slot or
+/// version) rather than failing to read or check it. Every variant is named, so a new one is
+/// classified before it compiles.
+fn is_refused_content(error: &UpdateError) -> bool {
+    match error {
+        UpdateError::TooLarge { .. }
+        | UpdateError::SignatureLength { .. }
+        | UpdateError::SignatureFormat
+        | UpdateError::UnknownKey
+        | UpdateError::BadSignature
+        | UpdateError::Manifest { .. }
+        | UpdateError::NotNewer { .. }
+        | UpdateError::InstalledTooOld { .. }
+        | UpdateError::UnlistedFile { .. }
+        | UpdateError::MissingFile { .. }
+        | UpdateError::SizeMismatch { .. }
+        | UpdateError::HashMismatch { .. }
+        | UpdateError::UnsafeEntry { .. }
+        | UpdateError::WrongPlugin { .. } => true,
+        // The environment, a key, or the update statement's rules, which a plugin folder
+        // never reaches: report, never delete.
+        UpdateError::Read { .. }
+        | UpdateError::Crypto { .. }
+        | UpdateError::InvalidKey { .. }
+        | UpdateError::DuplicateKey
+        | UpdateError::Statement { .. }
+        | UpdateError::StatementExpired { .. }
+        | UpdateError::StatementIssuedAhead { .. }
+        | UpdateError::StatementReplayed { .. }
+        | UpdateError::StatementSerialReused { .. }
+        | UpdateError::ManifestNotStated
+        | UpdateError::StatementVersionMismatch { .. }
+        | UpdateError::Clock
+        | UpdateError::UnsuitableSigningKey => false,
     }
 }
 

@@ -449,6 +449,25 @@ fn a_new_plugin_never_replaces_an_installed_one() -> Result<(), UpdateError> {
 }
 
 #[test]
+fn a_folder_left_without_a_record_never_blocks_a_new_install() -> Result<(), UpdateError> {
+    let scratch = Scratch::new();
+    let signer = TestKeyPair::generate()?;
+    let folders = scratch.folders();
+    // A crash between placing and recording leaves the version folder and no record.
+    place_new(&scratch, &folders, v(1), &signer)?;
+
+    let source = scratch.0.join("again");
+    write_package(&source, "sample", v(2), Some(&signer))?;
+    stage_plugin(&folders, &first_install(&source, key(&signer)?))
+        .expect("staged")
+        .place_unrecorded(&folders)
+        .expect("placed over the leftover")
+        .keep();
+    assert_eq!(folders.versions("sample").expect("listed"), [v(2)]);
+    Ok(())
+}
+
+#[test]
 fn of_two_waiting_updates_the_newer_is_offered_and_the_older_removed() -> Result<(), UpdateError> {
     let scratch = Scratch::new();
     let signer = TestKeyPair::generate()?;
