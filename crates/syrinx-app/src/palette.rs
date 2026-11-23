@@ -184,10 +184,8 @@ impl PaletteView {
         self.active_this_entry = false;
         self.context = entry.context;
         self.opening = Some(entry.opened);
-        self.choices.reset();
         // A registry problem stands for the whole entry, so the first height includes it.
-        self.choices
-            .show_registry_problem(self.command_problem.clone());
+        self.choices.reset(self.command_problem.clone());
         self.chip = Chip::default();
         self.scopes_shown = false;
         self.view = View::Everything;
@@ -557,7 +555,7 @@ impl Render for PaletteView {
         let bar = render::bar(&self.input);
         let chips = self.scopes_shown.then(|| render::chips(self, cx));
         let list = render::list(self, cx);
-        let notice = render::notice(&self.choices.status_line());
+        let notice = render::notice(&self.choices);
         crate::controls::watch_pointer(div())
             .id("palette")
             .role(gpui::Role::Dialog)
@@ -708,7 +706,7 @@ mod tests {
         assert!(fitted.changed_to(drawn(&choices)), "one row shrinks it");
 
         // A new entry forgets the old height: the popup is shown afresh at the bar's.
-        choices.reset();
+        choices.reset(None);
         choices.query_scoped("", true);
         fitted.reset(drawn(&choices));
         assert!(!fitted.changed_to(drawn(&choices)));

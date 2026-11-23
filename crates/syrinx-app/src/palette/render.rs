@@ -54,7 +54,7 @@ pub(super) fn height(scopes_shown: bool, choices: &PaletteChoices, view: View) -
     if list > 0. {
         height += LIST_DIVIDER + list.min(LIST_MAX_HEIGHT);
     }
-    if !choices.status_line().is_empty() {
+    if choices.has_status_line() {
         height += NOTICE_HEIGHT;
     }
     height
@@ -478,10 +478,8 @@ fn empty_state(view: View) -> Option<Div> {
 }
 
 /// One quiet line for a problem or a wait; routine progress is not shown at all.
-pub(super) fn notice(status: &str) -> Option<Div> {
-    if status.is_empty() {
-        return None;
-    }
+pub(super) fn notice(choices: &PaletteChoices) -> Option<Div> {
+    let status = notice_text(choices)?;
     let tokens = theme::current();
     Some(
         div()
@@ -496,8 +494,13 @@ pub(super) fn notice(status: &str) -> Option<Div> {
             .text_color(rgba(tokens.text_muted))
             .overflow_hidden()
             .whitespace_nowrap()
-            .child(status.to_owned()),
+            .child(status),
     )
+}
+
+/// The status line's text, or nothing when the line is not drawn.
+fn notice_text(choices: &PaletteChoices) -> Option<String> {
+    choices.has_status_line().then(|| choices.status_line())
 }
 
 fn key_hint(label: &str) -> Div {
@@ -556,13 +559,21 @@ mod tests {
             bar + NOTICE_HEIGHT,
             "a status line"
         );
-        choices.status.clear();
-        choices.show_registry_problem(Some("Commands are unavailable: synthetic".to_owned()));
+        choices.reset(Some("Commands are unavailable: synthetic".to_owned()));
         assert_eq!(
             height(false, &choices, View::Everything),
             bar + NOTICE_HEIGHT,
             "a registry problem alone keeps the status line (#273)"
         );
+    }
+
+    #[test]
+    fn the_notice_shows_a_registry_problem_on_its_own() {
+        let problem = "Commands are unavailable: synthetic";
+        let mut choices = PaletteChoices::default();
+        assert_eq!(notice_text(&choices), None, "nothing to say, no line");
+        choices.reset(Some(problem.to_owned()));
+        assert_eq!(notice_text(&choices).as_deref(), Some(problem));
     }
 
     #[test]
