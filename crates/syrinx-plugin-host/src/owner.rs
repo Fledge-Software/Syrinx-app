@@ -21,7 +21,7 @@ use syrinx_store::{
 use wasmtime::Engine;
 
 pub use cache::{CacheSetup, Sha256};
-pub use install::{BUILT_IN_PLUGINS, InstallRefusal, Offer, Plan, Reviewed};
+pub use install::{BUILT_IN_PLUGINS, InstallRefusal, Offer, Plan, Reviewed, UNSIGNED_PUBLISHER};
 pub use services::StoreServices;
 
 use crate::grants::{DenyList, FolderRefusal, GrantSet};
@@ -341,10 +341,7 @@ impl OwnerRuntime {
     /// the search index (#141) and recovery drafts (#37) join this when they keep anything.
     pub fn remove(&mut self, plugin: &str) -> Result<(), OwnerError> {
         self.require_record(plugin)?;
-        let workers = match (self.added.remove(plugin), self.running.as_mut()) {
-            (Some(_), Some(running)) => running.plugins.uninstall(plugin),
-            _ => Ok(()),
-        };
+        let workers = self.stop(plugin);
         self.grants.forget(plugin);
         let stored = self.store.remove_plugin(plugin.to_owned());
         if let Some(cache) = self.cache.as_ref() {
@@ -393,6 +390,14 @@ impl OwnerRuntime {
     pub fn shutdown(mut self) {
         if let Some(running) = self.running.take() {
             running.plugins.shutdown();
+        }
+    }
+
+    /// Stop a plugin added this session and forget it; one not added has nothing to stop.
+    fn stop(&mut self, plugin: &str) -> CallResult<()> {
+        match (self.added.remove(plugin), self.running.as_mut()) {
+            (Some(_), Some(running)) => running.plugins.uninstall(plugin),
+            _ => Ok(()),
         }
     }
 

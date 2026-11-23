@@ -1,23 +1,34 @@
 //! Installing, updating and uninstalling the test plugin from offers (#140): which ids a new
 //! plugin may take, an update that asks for more held while the old version runs, one that
-//! asks for less narrowing its grants, and an uninstall that leaves nothing behind.
+//! asks for less narrowing its grants, a failed update putting the old version back in full,
+//! a refused component withdrawn, and an uninstall that leaves nothing behind.
 
+use std::fs;
+use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
-use syrinx_core::CommandRegistry;
+use syrinx_core::{Command, CommandAction, CommandId, CommandRegistry, CommandScope, Enablement};
 use syrinx_plugin_host::bindings::syrinx::plugin::types::PluginError;
 use syrinx_plugin_host::grants::DenyList;
 use syrinx_plugin_host::manifest::CapabilityKind;
-use syrinx_plugin_host::owner::{InstallRefusal, Offer, OwnerRuntime, Plan};
+use syrinx_plugin_host::owner::{
+    CacheSetup, InstallRefusal, Offer, OwnerRuntime, Plan, Reviewed, UNSIGNED_PUBLISHER,
+};
+use syrinx_plugin_host::worker::PluginEvent;
 use syrinx_plugin_host::{PluginRegistry, SignedIdentity};
-use syrinx_store::{PluginState, Store};
+use syrinx_store::{FolderAccess, PluginInstall, PluginState, Store};
 
 use super::{FOLDER, READ_ONE_FOLDER, REQUIRED_STORAGE, STORAGE, TempStore, close, echo};
 use crate::package::manifest_text;
-use crate::support::{self, FULL};
+use crate::support::sha256::sha256;
+use crate::support::{self, FULL, Fixture, variant};
 
 const WORLD: &str = "syrinx:plugin/plugin@0.1.0";
 const PUBLISHER: &str = "synthetic-publisher";
+const TWO_FOLDERS: &str = "[[capabilities]]\nkind = \"folder\"\naccess = \"read-write\"\ncount = 2\nreason = \"Reads two synthetic vaults.\"\nrequired = false\n";
+const EXTRA_COMMAND: &str =
+    "[[contributes.commands]]\nid = \"test.extra\"\ntitle = \"Synthetic test.extra\"\n";
 
 /// The runtime, the registry and the palette's commands, as the application holds them.
 struct Installer {
@@ -28,7 +39,11 @@ struct Installer {
 
 impl Installer {
     fn start(store: &Arc<Store>) -> Self {
-        let runtime = OwnerRuntime::start(Arc::clone(store), "0.1.0-owner", DenyList::new(), None)
+        Self::start_with(store, None)
+    }
+
+    fn start_with(store: &Arc<Store>, cache: Option<CacheSetup>) -> Self {
+        let runtime = OwnerRuntime::start(Arc::clone(store), "0.1.0-owner", DenyList::new(), cache)
             .expect("starts");
         Self {
             runtime,
@@ -43,30 +58,48 @@ impl Installer {
             .install_reviewed(reviewed, granted, &mut self.plugins, &mut self.commands, 20)
     }
 
+    fn update(
+        &mut self,
+        reviewed: Reviewed,
+        granted: &[CapabilityKind],
+    ) -> Result<(), InstallRefusal> {
+        self.runtime
+            .update_reviewed(reviewed, granted, &mut self.plugins, &mut self.commands, 30)
+    }
+
+    fn review_update(&self, offer: Offer) -> Reviewed {
+        self.runtime.review(offer, Some("test")).expect("reviewed")
+    }
+
     fn has_command(&self, id: &str) -> bool {
         self.commands.find(id).is_some()
     }
 }
 
-/// `plugin` at `version`, asking for `capabilities`, from `publisher`; `seed` marks its hashes.
-fn offer_from(plugin: &str, version: &str, capabilities: &str, publisher: &str, seed: u8) -> Offer {
+/// `plugin` at `version` with `extra` manifest text, from `publisher`, with `component`.
+fn offer_of(
+    plugin: &str,
+    version: &str,
+    extra: &str,
+    publisher: &str,
+    component: Fixture,
+) -> Offer {
     let text = manifest_text(plugin).replace(
         "\nversion = \"0.1.0\"",
         &format!("\nversion = \"{version}\""),
-    ) + capabilities;
-    Offer {
-        signed: SignedIdentity::from_signed_lines(plugin, version, WORLD),
-        manifest: text.into_bytes(),
-        manifest_sha256: [seed; 32],
-        component: Arc::from(support::bytes(FULL)),
-        module_sha256: [seed.wrapping_add(1); 32],
-        publisher: publisher.to_owned(),
-        unsigned: false,
-    }
+    ) + extra;
+    Offer::new(
+        SignedIdentity::from_signed_lines(plugin, version, WORLD),
+        text.into_bytes(),
+        Arc::from(support::bytes(component)),
+        publisher.to_owned(),
+        sha256,
+    )
+    .expect("an offer")
 }
 
 fn offer(plugin: &str, version: &str, capabilities: &str) -> Offer {
-    offer_from(plugin, version, capabilities, PUBLISHER, 1)
+    offer_of(plugin, version, capabilities, PUBLISHER, FULL)
 }
 
 fn refusal(installer: &Installer, offer: Offer, updating: Option<&str>) -> InstallRefusal {
@@ -76,29 +109,69 @@ fn refusal(installer: &Installer, offer: Offer, updating: Option<&str>) -> Insta
     }
 }
 
+fn record(store: &Store) -> PluginInstall {
+    store.plugin_installs().expect("read").remove(0)
+}
+
+fn grant_names(store: &Store) -> Vec<String> {
+    store
+        .plugin_grants()
+        .expect("read")
+        .into_iter()
+        .map(|stored| stored.grant.capability)
+        .collect()
+}
+
 #[test]
-fn a_new_plugin_installs_with_what_the_owner_granted_and_records_its_hashes() {
+fn a_new_plugin_installs_with_what_the_owner_granted_and_records_the_bytes_it_loads() {
     let temp = TempStore::new();
     let store = temp.open();
     let mut installer = Installer::start(&store);
+    let offer = offer("test", "0.1.0", STORAGE);
+    let manifest = (manifest_text("test") + STORAGE).into_bytes();
     installer
-        .install(offer("test", "0.1.0", STORAGE), &[CapabilityKind::Storage])
+        .install(offer, &[CapabilityKind::Storage])
         .expect("installed");
 
     assert!(installer.has_command("test.echo"));
     assert_eq!(echo(&mut installer.runtime, "test"), Ok(Ok(())));
-    let record = &store.plugin_installs().expect("read")[0];
+    let record = record(&store);
     assert_eq!(record.version, "0.1.0");
     assert_eq!(
-        record.module_sha256, [2; 32],
+        record.module_sha256,
+        sha256(&support::bytes(FULL)).expect("hashed"),
         "the hash of the bytes that load"
     );
-    assert_eq!(record.manifest_sha256, [1; 32]);
+    assert_eq!(record.manifest_sha256, sha256(&manifest).expect("hashed"));
     assert_eq!(record.signer_key, PUBLISHER);
     assert_eq!(record.state, PluginState::Enabled);
-    let grants = store.plugin_grants().expect("read");
-    assert_eq!(grants.len(), 1);
-    assert_eq!(grants[0].grant.capability, "storage");
+    assert_eq!(grant_names(&store), ["storage"]);
+    close(installer.runtime, store);
+}
+
+#[test]
+fn an_offer_hashed_by_anything_but_sha256_is_refused() {
+    fn not_sha256(_: &[u8]) -> Result<[u8; 32], String> {
+        Ok([0; 32])
+    }
+    let refused = Offer::new(
+        SignedIdentity::from_signed_lines("test", "0.1.0", WORLD),
+        Vec::new(),
+        Arc::from(Vec::new()),
+        PUBLISHER.to_owned(),
+        not_sha256,
+    );
+    assert!(matches!(refused, Err(InstallRefusal::Hash(_))));
+}
+
+#[test]
+fn an_unsigned_development_plugin_records_its_label() {
+    let temp = TempStore::new();
+    let store = temp.open();
+    let mut installer = Installer::start(&store);
+    let unsigned = offer_of("test", "0.1.0", "", UNSIGNED_PUBLISHER, FULL);
+    installer.install(unsigned, &[]).expect("installed");
+    assert_eq!(record(&store).signer_key, "unsigned-development");
     close(installer.runtime, store);
 }
 
@@ -140,11 +213,15 @@ fn full_trust_a_newer_syrinx_and_a_declined_required_capability_install_nothing(
         InstallRefusal::FullTrust(CapabilityKind::Terminal)
     );
 
-    let mut future = offer("test", "0.1.0", "");
-    future.manifest = String::from_utf8(future.manifest)
-        .expect("text")
-        .replace("min-syrinx = \"0.1.0\"", "min-syrinx = \"9.0.0\"")
-        .into_bytes();
+    let text = manifest_text("test").replace("min-syrinx = \"0.1.0\"", "min-syrinx = \"9.0.0\"");
+    let future = Offer::new(
+        SignedIdentity::from_signed_lines("test", "0.1.0", WORLD),
+        text.into_bytes(),
+        Arc::from(support::bytes(FULL)),
+        PUBLISHER.to_owned(),
+        sha256,
+    )
+    .expect("an offer");
     assert_eq!(
         refusal(&installer, future, None),
         InstallRefusal::NeedsNewerSyrinx("9.0.0".to_owned())
@@ -168,105 +245,105 @@ fn a_widened_update_is_held_while_the_old_version_runs_until_accepted() {
     installer
         .install(offer("test", "0.1.0", STORAGE), &[CapabilityKind::Storage])
         .expect("installed");
+    let installed = record(&store);
 
-    let wider = offer_from("test", "0.2.0", &format!("{STORAGE}{FOLDER}"), PUBLISHER, 7);
-    let held = installer
-        .runtime
-        .review(wider, Some("test"))
-        .expect("reviewed");
+    let wider = || offer("test", "0.2.0", &format!("{STORAGE}{FOLDER}"));
+    let held = installer.review_update(wider());
     let Plan::Held(changes) = held.plan().clone() else {
         panic!("not held: {:?}", held.plan());
     };
     assert_eq!(changes.added, [CapabilityKind::Folder]);
 
     // Not accepted yet: nothing changes and the old version keeps running.
-    let Installer {
-        runtime,
-        plugins,
-        commands,
-    } = &mut installer;
-    let attempt = runtime.update_reviewed(held, &[], plugins, commands, 30);
-    assert_eq!(attempt, Err(InstallRefusal::NeedsConsent));
-    let record = &store.plugin_installs().expect("read")[0];
-    assert_eq!(record.version, "0.1.0");
     assert_eq!(
-        record.module_sha256, [2; 32],
+        installer.update(held, &[]),
+        Err(InstallRefusal::NeedsConsent)
+    );
+    assert_eq!(
+        record(&store),
+        installed,
         "no hash recorded for a held update"
     );
     assert_eq!(echo(&mut installer.runtime, "test"), Ok(Ok(())));
 
     // Accepted, with the new folder capability granted: the new version replaces it.
-    let wider = offer_from("test", "0.2.0", &format!("{STORAGE}{FOLDER}"), PUBLISHER, 7);
-    let accepted = installer
-        .runtime
-        .review(wider, Some("test"))
-        .expect("reviewed")
-        .accept();
-    let Installer {
-        runtime,
-        plugins,
-        commands,
-    } = &mut installer;
-    runtime
-        .update_reviewed(accepted, &[CapabilityKind::Folder], plugins, commands, 30)
+    let accepted = installer.review_update(wider()).accept();
+    installer
+        .update(accepted, &[CapabilityKind::Folder])
         .expect("updated");
-    let record = &store.plugin_installs().expect("read")[0];
-    assert_eq!(
-        (record.version.as_str(), record.module_sha256),
-        ("0.2.0", [8; 32])
-    );
-    assert_eq!(record.installed_at, 20, "the first install's time is kept");
-    let kinds: Vec<String> = store
-        .plugin_grants()
-        .expect("read")
-        .into_iter()
-        .map(|stored| stored.grant.capability)
-        .collect();
-    assert_eq!(kinds, ["folder", "storage"]);
+    let updated = record(&store);
+    assert_eq!(updated.version, "0.2.0");
+    assert_eq!(updated.installed_at, 20, "the first install's time is kept");
+    assert_ne!(updated.manifest_sha256, installed.manifest_sha256);
+    assert_eq!(grant_names(&store), ["folder", "storage"]);
     assert_eq!(echo(&mut installer.runtime, "test"), Ok(Ok(())));
     close(installer.runtime, store);
 }
 
 #[test]
-fn a_narrower_update_replaces_at_once_narrows_grants_and_deletes_dropped_ones() {
+fn an_update_reviewed_against_an_older_record_is_refused() {
     let temp = TempStore::new();
     let store = temp.open();
     let mut installer = Installer::start(&store);
     installer
+        .install(offer("test", "0.1.0", STORAGE), &[CapabilityKind::Storage])
+        .expect("installed");
+    let late = installer.review_update(offer("test", "0.2.0", STORAGE));
+    let early = installer.review_update(offer("test", "0.3.0", STORAGE));
+    installer
+        .update(early, &[])
+        .expect("updated to version 0.3.0");
+
+    // Applied now, the review against version 0.1.0 would downgrade version 0.3.0.
+    assert_eq!(installer.update(late, &[]), Err(InstallRefusal::Stale));
+    assert_eq!(record(&store).version, "0.3.0");
+    assert_eq!(echo(&mut installer.runtime, "test"), Ok(Ok(())));
+    close(installer.runtime, store);
+}
+
+#[test]
+fn a_narrower_update_narrows_grants_and_folders_and_deletes_dropped_grants() {
+    let temp = TempStore::new();
+    let vaults: Vec<PathBuf> = ["first", "second"]
+        .iter()
+        .map(|name| temp.folder.join(name))
+        .collect();
+    for vault in &vaults {
+        fs::create_dir(vault).expect("a synthetic folder");
+    }
+    let store = temp.open();
+    let mut installer = Installer::start(&store);
+    installer
         .install(
-            offer("test", "0.1.0", &format!("{STORAGE}{FOLDER}")),
+            offer("test", "0.1.0", &format!("{STORAGE}{TWO_FOLDERS}")),
             &[CapabilityKind::Storage, CapabilityKind::Folder],
         )
         .expect("installed");
+    for vault in &vaults {
+        installer
+            .runtime
+            .grant_folder("test", vault, FolderAccess::ReadWrite)
+            .expect("granted");
+    }
 
-    let narrower = offer_from("test", "0.2.0", READ_ONE_FOLDER, PUBLISHER, 7);
-    let reviewed = installer
-        .runtime
-        .review(narrower, Some("test"))
-        .expect("reviewed");
+    let reviewed = installer.review_update(offer("test", "0.2.0", READ_ONE_FOLDER));
     let Plan::Update(changes) = reviewed.plan().clone() else {
         panic!("held: {:?}", reviewed.plan());
     };
     assert_eq!(changes.removed, [CapabilityKind::Storage]);
-    let Installer {
-        runtime,
-        plugins,
-        commands,
-    } = &mut installer;
-    runtime
-        .update_reviewed(reviewed, &[], plugins, commands, 30)
-        .expect("updated");
+    installer.update(reviewed, &[]).expect("updated");
 
     let grants = store.plugin_grants().expect("read");
     assert_eq!(grants.len(), 1, "the storage grant went with its request");
     let folder = &grants[0].grant;
-    assert_eq!(folder.capability, "folder");
     assert_eq!(
         folder.scope_json, "{\"count\":1,\"watch\":false,\"writable\":false}",
         "the scope the new version asks for"
     );
-    assert_eq!(folder.granted_for_manifest, [7; 32]);
     assert_eq!(folder.granted_at, 20, "narrowing is not a new grant");
+    let folders = store.plugin_folders("test").expect("read");
+    assert_eq!(folders.len(), 1, "only as many folders as it now asks for");
+    assert_eq!(folders[0].access, FolderAccess::Read);
     // The new version runs, and the storage it no longer asks for is no longer granted.
     assert!(matches!(
         echo(&mut installer.runtime, "test"),
@@ -275,8 +352,141 @@ fn a_narrower_update_replaces_at_once_narrows_grants_and_deletes_dropped_ones() 
     close(installer.runtime, store);
 }
 
+/// The old version, everything kept for it and its commands, as a failed update must leave it.
+fn assert_old_version_back(installer: &mut Installer, store: &Store, before: &PluginInstall) {
+    assert_eq!(&record(store), before);
+    assert_eq!(grant_names(store), ["storage"]);
+    let registered = installer.plugins.get("test").expect("registered again");
+    assert_eq!(registered.manifest().version(), "0.1.0");
+    assert!(installer.has_command("test.echo"));
+    assert!(!installer.has_command("test.extra"));
+    assert_eq!(echo(&mut installer.runtime, "test"), Ok(Ok(())));
+}
+
+/// Register synthetic commands until only `free` slots remain in the palette's registry.
+fn fill_commands(commands: &mut CommandRegistry, free: usize) {
+    let mut number = 0;
+    while commands.len() + free < CommandRegistry::MAX_COMMANDS {
+        let plugin = format!(
+            "filler{}",
+            number / CommandRegistry::MAX_COMMANDS_PER_PLUGIN
+        );
+        let id = format!("{plugin}.n{number}");
+        let command = Command {
+            id: CommandId::new(&id).expect("a synthetic id"),
+            title: "Synthetic filler".into(),
+            keywords: String::new(),
+            scope: CommandScope::Plugin {
+                plugin: plugin.clone(),
+            },
+            enablement: Enablement::Always,
+            action: CommandAction::Plugin { plugin, action: id },
+            shortcut: None,
+        };
+        commands.register(command).expect("fits");
+        number += 1;
+    }
+}
+
 #[test]
-fn an_update_from_another_publisher_or_for_another_plugin_is_refused() {
+fn an_update_refused_at_registration_or_by_its_component_puts_the_old_version_back() {
+    let temp = TempStore::new();
+    let store = temp.open();
+    let mut installer = Installer::start(&store);
+    installer
+        .install(offer("test", "0.1.0", STORAGE), &[CapabilityKind::Storage])
+        .expect("installed");
+    let before = record(&store);
+
+    // Registration: the new version declares one command more than the registry has room for.
+    fill_commands(&mut installer.commands, 0);
+    let bigger =
+        installer.review_update(offer("test", "0.2.0", &format!("{EXTRA_COMMAND}{STORAGE}")));
+    assert!(matches!(
+        installer.update(bigger, &[]),
+        Err(InstallRefusal::Registration(_))
+    ));
+    assert_old_version_back(&mut installer, &store, &before);
+
+    // The component: it imports a capability its manifest does not request.
+    let refused = offer_of(
+        "test",
+        "0.2.0",
+        STORAGE,
+        PUBLISHER,
+        variant("imports-documents"),
+    );
+    let reviewed = installer.review_update(refused);
+    assert!(matches!(
+        installer.update(reviewed, &[]),
+        Err(InstallRefusal::Owner(_))
+    ));
+    assert_old_version_back(&mut installer, &store, &before);
+    close(installer.runtime, store);
+}
+
+#[test]
+fn a_plugin_whose_background_compile_is_refused_is_withdrawn() {
+    let temp = TempStore::new();
+    let store = temp.open();
+    // Plugins compile in the background only with a compiled-code cache.
+    let cache = temp.folder.join("PluginCache");
+    fs::create_dir(&cache).expect("a synthetic cache folder");
+    let setup = CacheSetup {
+        folder: cache,
+        sha256,
+    };
+    let mut installer = Installer::start_with(&store, Some(setup));
+    let refused = offer_of("test", "0.1.0", "", PUBLISHER, variant("imports-documents"));
+    installer.install(refused, &[]).expect("installed");
+    assert!(
+        installer.has_command("test.echo"),
+        "listed before any compile"
+    );
+
+    let deadline = Instant::now() + Duration::from_secs(120);
+    let withdrawn = loop {
+        let events = installer.runtime.take_events();
+        let Installer {
+            runtime,
+            plugins,
+            commands,
+        } = &mut installer;
+        if let Some(plugin) = events
+            .iter()
+            .find_map(|event| runtime.withdraw_refused(event, plugins, commands))
+        {
+            break plugin;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "the background compile never failed"
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    };
+    assert_eq!(withdrawn, "test");
+    assert!(!installer.has_command("test.echo"));
+    assert!(installer.plugins.get("test").is_none());
+    // The record stays, so the owner can see why and update or uninstall it.
+    assert_eq!(record(&store).plugin_id, "test");
+    let unrelated = PluginEvent::Deactivated {
+        plugin: "test".into(),
+        reason: syrinx_plugin_host::worker::StopReason::Uninstalled,
+    };
+    let Installer {
+        runtime,
+        plugins,
+        commands,
+    } = &mut installer;
+    assert_eq!(
+        runtime.withdraw_refused(&unrelated, plugins, commands),
+        None
+    );
+    close(installer.runtime, store);
+}
+
+#[test]
+fn an_update_offered_by_another_publisher_or_for_another_plugin_is_refused() {
     let temp = TempStore::new();
     let store = temp.open();
     let mut installer = Installer::start(&store);
@@ -284,10 +494,10 @@ fn an_update_from_another_publisher_or_for_another_plugin_is_refused() {
         .install(offer("test", "0.1.0", ""), &[])
         .expect("installed");
 
-    let stranger = offer_from("test", "0.2.0", "", "another-publisher", 7);
+    let stranger = offer_of("test", "0.2.0", "", "another-publisher", FULL);
     assert_eq!(
         refusal(&installer, stranger, Some("test")),
-        InstallRefusal::DifferentPublisher
+        InstallRefusal::NotCheckedAgainstRecord
     );
     assert_eq!(
         refusal(&installer, offer("other", "0.2.0", ""), Some("test")),
@@ -340,4 +550,40 @@ fn uninstalling_withdraws_the_plugin_and_leaves_no_record_grant_or_setting() {
         .install(offer("test", "0.1.0", ""), &[])
         .expect("installed again");
     close(installer.runtime, store);
+}
+
+#[test]
+fn an_installed_plugin_loads_at_start_only_as_its_record_names_it() {
+    let temp = TempStore::new();
+    let store = temp.open();
+    let mut installer = Installer::start(&store);
+    installer
+        .install(offer("test", "0.1.0", STORAGE), &[CapabilityKind::Storage])
+        .expect("installed");
+    installer.runtime.shutdown();
+
+    // At the next start, other bytes than the recorded ones are refused.
+    let mut restarted = Installer::start(&store);
+    let changed = offer_of(
+        "test",
+        "0.1.0",
+        STORAGE,
+        PUBLISHER,
+        variant("version-0-2-0"),
+    );
+    let Installer {
+        runtime,
+        plugins,
+        commands,
+    } = &mut restarted;
+    assert_eq!(
+        runtime.load_installed(changed, plugins, commands),
+        Err(InstallRefusal::NotRecorded)
+    );
+    assert!(plugins.is_empty());
+    runtime
+        .load_installed(offer("test", "0.1.0", STORAGE), plugins, commands)
+        .expect("loaded as recorded");
+    assert_eq!(echo(&mut restarted.runtime, "test"), Ok(Ok(())));
+    close(restarted.runtime, store);
 }
