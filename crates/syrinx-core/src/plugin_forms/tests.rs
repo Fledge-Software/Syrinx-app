@@ -54,6 +54,13 @@ fn spec() -> FormSpec {
     }
 }
 
+/// The field of `spec()` named `name`.
+fn spec_field(name: &str) -> Field {
+    let fields = spec().fields;
+    let found = fields.into_iter().find(|field| field.name == name);
+    found.expect("spec() has the field")
+}
+
 fn value(name: &str, value: &str) -> FieldValue {
     FieldValue {
         name: name.to_owned(),
@@ -171,16 +178,22 @@ fn money_must_be_a_number_and_dates_are_left_to_the_plugin() {
 
 #[test]
 fn an_optional_field_of_only_spaces_is_still_checked_since_the_spaces_are_sent() {
-    let spec = FormSpec {
-        fields: vec![text_field("note", false, 3), spec().fields[2].clone()],
-        ..spec()
-    };
-    let errors = host_checks(&spec, &[value("note", "     "), value("source", " ")]);
+    let mut fields = vec![text_field("note", false, 3)];
+    fields.extend(["count", "source", "urgent"].map(spec_field));
+    let spec = FormSpec { fields, ..spec() };
+    let spaces = [
+        value("note", "     "),
+        value("count", " "),
+        value("source", " "),
+        value("urgent", " "),
+    ];
     assert_eq!(
-        errors,
+        host_checks(&spec, &spaces),
         vec![
             error("note", "At most 3 characters."),
+            error("count", "Enter a number."),
             error("source", "Choose one of the options."),
+            error("urgent", "Choose on or off."),
         ]
     );
     // An optional field left empty is still fine.
