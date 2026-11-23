@@ -2,8 +2,11 @@
 
 #[path = "controls/find_observation.rs"]
 mod find_observation;
+#[path = "controls/overlap_observation.rs"]
+mod overlap_observation;
 
 use find_observation::FindObservation;
+use overlap_observation::{OVERLAP, OverlapObservation};
 
 use super::{
     fixture::{Fixture, LIMIT, reserve_profile},
@@ -46,8 +49,25 @@ document.addEventListener('selectionchange',()=>{
 });
 </script>"#;
 
+/// Reports every selected occurrence itself, so overlapping Find needs no armed key or focus.
+const OVERLAP_PAGE: &str = r#"<!doctype html><title>overlap-ready</title><link rel=icon href=data:,>
+<p><span data-occurrence=1>overlapneedle</span>
+<span data-occurrence=2>overlapneedle</span>
+<span data-occurrence=3>OVERLAPNEEDLE</span></p><p>oo ova</p><script>
+document.addEventListener('selectionchange',()=>{
+  const selection=getSelection();
+  if(!selection||selection.toString().toLowerCase()!=='overlapneedle')return;
+  const owner=selection.anchorNode?.parentElement?.closest('[data-occurrence]');
+  if(owner)document.title='overlap-selected:'+owner.dataset.occurrence;
+});
+</script>"#;
+
 pub fn response(route: &str) -> Option<&'static str> {
-    (route == "/controls").then_some(PAGE)
+    match route {
+        "/controls" => Some(PAGE),
+        "/controls-overlap" => Some(OVERLAP_PAGE),
+        _ => None,
+    }
 }
 
 pub fn run() -> Result<(), String> {
@@ -79,10 +99,11 @@ pub fn run() -> Result<(), String> {
     }
     mute_states(&mut fixture)?;
     cancel_print(&mut fixture)?;
+    overlapping_find(&mut fixture, &server)?;
     fixture.stop(Duration::from_secs(5))?;
     server.finish()?;
     println!(
-        "Linux controls: Find counts/steps/wrap/chrome focus, zoom, shown/hidden mute and print cancellation passed."
+        "Linux controls: Find counts/steps/wrap/overlap/chrome focus, zoom, shown/hidden mute and print cancellation passed."
     );
     Ok(())
 }
@@ -211,6 +232,96 @@ fn find_result(
     fixture.wait_checked("native Find result", |event, _| observed.observe(event))
 }
 
+/// Send Find operations in one burst; WebKit's replies must reach only their own request (#245).
+fn overlapping_find(fixture: &mut Fixture, server: &Server) -> Result<(), String> {
+    fixture.create(OVERLAP, server.url("/controls-overlap"))?;
+    fixture.loaded(OVERLAP)?;
+    let find = |request, text: &str, case_sensitive| PageAction::Find {
+        request,
+        text: text.into(),
+        case_sensitive,
+    };
+    let only = [find(50, "OVERLAPNEEDLE", true)];
+    burst(fixture, only, 50, &[(1, 1)], Some(&[3]), &[])?;
+    // A step sent before the new search answers steps through the new query's three matches.
+    unselect(fixture)?;
+    let early_next = [find(51, "overlapneedle", false), PageAction::FindNext];
+    burst(
+        fixture,
+        early_next,
+        51,
+        &[(3, 1), (3, 2)],
+        Some(&[1, 2]),
+        &[],
+    )?;
+    // Typing faster than WebKit answers, through a query with no match, ends on the last query.
+    // WebKit starts each search from the current selection and GTK drops its index, so no
+    // occurrence is asserted; each query's count differs, so a misplaced reply shows.
+    let typing = [
+        find(52, "o", false),
+        find(53, "ov", false),
+        find(54, "overlapx", false),
+        find(55, "overlap", false),
+    ];
+    let earlier = [(52, 6), (53, 4), (54, 0)];
+    burst(fixture, typing, 55, &[(3, 1)], None, &earlier)?;
+    unselect(fixture)?;
+    let stepping = [
+        find(56, "overlapneedle", false),
+        PageAction::FindNext,
+        PageAction::FindNext,
+        PageAction::FindPrevious,
+    ];
+    let reports = [(3, 1), (3, 2), (3, 3), (3, 2)];
+    burst(fixture, stepping, 56, &reports, Some(&[1, 2, 3, 2]), &[])?;
+    // StopFind retires replies still in flight, so they cannot reach the next search.
+    let stopped = [
+        find(57, "ov", false),
+        PageAction::FindNext,
+        PageAction::StopFind,
+        find(58, "overlapneedle", false),
+    ];
+    burst(fixture, stopped, 58, &[(3, 1)], None, &[(57, 4)])?;
+    action_on(fixture, OVERLAP, PageAction::StopFind)?;
+    fixture.send(BrowserCommand::Close { id: OVERLAP })?;
+    fixture.barrier()
+}
+
+/// Reload the overlap page so the next search starts with no selection, at the first match.
+fn unselect(fixture: &mut Fixture) -> Result<(), String> {
+    fixture.send(BrowserCommand::Reload { id: OVERLAP })?;
+    fixture.loaded(OVERLAP)
+}
+
+/// Send `actions` back to back, then require the final request's reports and selections.
+fn burst(
+    fixture: &mut Fixture,
+    actions: impl IntoIterator<Item = PageAction>,
+    request: u64,
+    reports: &[(i32, i32)],
+    selections: Option<&[u32]>,
+    earlier: &[(u64, i32)],
+) -> Result<(), String> {
+    for action in actions {
+        action_on(fixture, OVERLAP, action)?;
+    }
+    let mut overlap = OverlapObservation::new(request, reports, selections, earlier);
+    fixture.wait_checked("overlapping Find results", |event, _| {
+        overlap.observe(event)?;
+        Ok(overlap.complete())
+    })?;
+    fixture.barrier_checked(|event| overlap.observe(event))?;
+    fixture.watch_for(
+        "no late overlapping Find result",
+        Duration::from_millis(200),
+        |event| overlap.observe(event),
+    )?;
+    require(
+        overlap.complete(),
+        &format!("Overlapping Find did not settle: {}", overlap.describe()),
+    )
+}
+
 fn mute_states(fixture: &mut Fixture) -> Result<(), String> {
     for shown in [true, false, true] {
         fixture.send(BrowserCommand::ShowActive(shown.then_some(3000)))?;
@@ -258,7 +369,11 @@ fn cancel_print(fixture: &mut Fixture) -> Result<(), String> {
 }
 
 fn action(fixture: &mut Fixture, action: PageAction) -> Result<(), String> {
-    fixture.send(BrowserCommand::PageAction { id: 3000, action })
+    action_on(fixture, 3000, action)
+}
+
+fn action_on(fixture: &mut Fixture, id: u64, action: PageAction) -> Result<(), String> {
+    fixture.send(BrowserCommand::PageAction { id, action })
 }
 
 fn require_stopped_find(event: &BrowserEvent) -> Result<(), String> {
