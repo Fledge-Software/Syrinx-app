@@ -1,41 +1,39 @@
 //! Pulls plugin search feeds into Syrinx's own search (#141): only when a feed is announced
-//! as changed, never while the owner types (D9), and a feed's cursor moves only once the rows
-//! it covers are kept in both tiers.
+//! as changed, and a pull is never started or moved on because the owner typed (D9). A
+//! feed's cursor moves only once the rows it covers are kept in both tiers.
 
+mod batch;
 mod keys;
+pub(super) mod sinks;
+mod worker;
 
-use std::collections::{BTreeSet, VecDeque};
+use std::collections::VecDeque;
 use std::fmt;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use syrinx_plugin_host::HostError;
-use syrinx_plugin_host::bindings::exports::syrinx::plugin::search_feed::{
-    Batch, CatalogueEntry, Change, Document,
-};
+use syrinx_plugin_host::bindings::exports::syrinx::plugin::search_feed::Batch;
 use syrinx_plugin_host::bindings::syrinx::plugin::types::PluginError;
 use syrinx_plugin_host::owner::OwnerRuntime;
 use syrinx_plugin_host::session::CallResult;
 use syrinx_plugin_host::worker::{Pending, PluginEvent};
-use syrinx_search::fulltext::{
-    self, Deletion, FullText, FullTextDocument, FullTextError, Namespace,
-};
-use syrinx_search::{Catalogue, Entry, FeedKey, SearchError, Target, Usage};
+use syrinx_search::fulltext::{FullTextError, Namespace};
+use syrinx_search::{Catalogue, FeedKey, SearchError};
 use syrinx_store::{
     FeedRowChange, FeedRowOutcome, PluginFeedCommit, PluginFeedEntry, Store, StoreError,
     StoredFeedEntry,
 };
 
-use futures::channel::mpsc::UnboundedSender;
 use keys::FeedKeys;
-
-use super::{SessionError, SessionEvent};
+use sinks::{FeedIndex, FeedStore, committed};
+pub(super) use worker::is_typing;
 
 /// The most changes one pull asks a plugin for; the plugin contract allows 512.
 pub(super) const BATCH_CHANGES: u32 = 256;
 /// The most batches one announcement pulls before the feed waits behind every other one.
 pub(super) const BATCHES_PER_TRIGGER: u32 = 8;
 
-/// Why one pull, or one feed's removal, did not finish. None carries a plugin's text.
+/// Why one pull, or one plugin's removal, did not finish. None carries a plugin's text.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum FeedError {
     /// The plugin id or feed name cannot name a full-text namespace.
@@ -66,6 +64,8 @@ impl fmt::Display for FeedError {
 
 /// The plugin's side of a pull, so tests can stand in for a running plugin.
 pub(super) trait FeedSource {
+    /// What the runtime reported since the last look.
+    fn take_events(&mut self) -> Vec<PluginEvent>;
     fn request(
         &mut self,
         plugin: &str,
@@ -86,6 +86,10 @@ impl BatchAnswer for Pending<Result<Batch, PluginError>> {
 }
 
 impl FeedSource for OwnerRuntime {
+    fn take_events(&mut self) -> Vec<PluginEvent> {
+        OwnerRuntime::take_events(self)
+    }
+
     fn request(
         &mut self,
         plugin: &str,
@@ -99,8 +103,8 @@ impl FeedSource for OwnerRuntime {
 
 /// What a pull writes to: the store, the full-text index and the palette's catalogue.
 pub(super) struct Sinks<'a> {
-    pub(super) store: &'a Store,
-    pub(super) index: Option<&'a mut FullText>,
+    pub(super) store: &'a dyn FeedStore,
+    pub(super) index: Option<&'a mut dyn FeedIndex>,
     pub(super) catalogue: &'a mut Catalogue,
     /// Unix seconds; plugin documents keep this as their capture time.
     pub(super) now: i64,
@@ -123,16 +127,24 @@ struct Pull {
     batches: u32,
 }
 
-/// The session's plugin feeds: their interned rows, the feeds waiting to be pulled and the
-/// pull in flight. Nothing here runs a plugin unless a feed was announced.
+/// The session's plugin feeds: their interned rows, the feeds waiting to be pulled, the pull
+/// in flight and the removed plugins still to clear. Nothing here runs a plugin unless a feed
+/// was announced.
 #[derive(Default)]
 pub(super) struct PluginFeeds {
     keys: FeedKeys,
     waiting: VecDeque<FeedName>,
     pull: Option<Pull>,
+    /// Plugins the runtime removed whose rows and text are still to go.
+    removed: Vec<String>,
     /// Whether this session has looked for text a removed plugin left in the index.
     swept: bool,
+    /// When the owner last typed in the palette; pulls wait `TYPING_PAUSE` after it (D9).
+    typed_at: Option<Instant>,
 }
+
+/// How long after the owner's last keystroke in the palette a pull may move on again.
+const TYPING_PAUSE: Duration = Duration::from_millis(750);
 
 impl PluginFeeds {
     /// Puts every kept tier 1 row into the catalogue, so each plugin's entries are found
@@ -145,28 +157,48 @@ impl PluginFeeds {
         Ok(feeds)
     }
 
-    /// Queues each feed announced as changed; another event is no concern of feeds.
-    pub(super) fn notice(&mut self, events: impl IntoIterator<Item = PluginEvent>) {
+    /// Queues each feed announced as changed and each plugin removed; returns a description
+    /// of every other event, which feeds do not read.
+    pub(super) fn notice(&mut self, events: impl IntoIterator<Item = PluginEvent>) -> Vec<String> {
+        let mut unread = Vec::new();
         for event in events {
-            let PluginEvent::FeedChanged { plugin, feed } = event else {
-                continue;
-            };
-            self.announce(FeedName { plugin, feed });
+            match event {
+                PluginEvent::FeedChanged { plugin, feed } => {
+                    self.announce(FeedName { plugin, feed });
+                }
+                PluginEvent::Removed { plugin } => self.removed.push(plugin),
+                other => unread.push(describe(&other)),
+            }
         }
+        unread
     }
 
-    /// Whether a pull is in flight or a feed waits while the index can take it.
+    /// Records that the owner typed in the palette at `now`.
+    pub(super) fn note_typing(&mut self, now: Instant) {
+        self.typed_at = Some(now);
+    }
+
+    /// How long pulls still wait for the owner's typing to pause; `None` once it has.
+    pub(super) fn typing_quiet_for(&self, now: Instant) -> Option<Duration> {
+        let resumes = self.typed_at? + TYPING_PAUSE;
+        let left = resumes.saturating_duration_since(now);
+        (!left.is_zero()).then_some(left)
+    }
+
+    /// Whether a pull is in flight, or work waits while the index can take it.
     pub(super) fn busy(&self, index_open: bool) -> bool {
-        self.pull.is_some() || (index_open && !self.waiting.is_empty())
+        let waiting = !self.waiting.is_empty() || !self.removed.is_empty();
+        self.pull.is_some() || (index_open && waiting)
     }
 
-    /// Moves pulling on by at most one batch: applies an answered one, or starts the next
-    /// waiting feed. Never waits for a plugin.
+    /// Moves pulling on by at most one batch: clears removed plugins, applies an answered
+    /// batch, or starts the next waiting feed. Never waits for a plugin.
     pub(super) fn pump(
         &mut self,
         source: &mut dyn FeedSource,
         sinks: &mut Sinks<'_>,
     ) -> Result<(), FeedError> {
+        self.forget_removed(sinks)?;
         self.sweep_once(sinks)?;
         let Some(pull) = self.pull.take() else {
             return self.start_next(source, sinks);
@@ -187,7 +219,7 @@ impl PluginFeeds {
     pub(super) fn forget_plugin(
         &mut self,
         plugin: &str,
-        index: Option<&mut FullText>,
+        index: Option<&mut dyn FeedIndex>,
         catalogue: &mut Catalogue,
     ) -> Result<(), FeedError> {
         self.waiting.retain(|name| name.plugin != plugin);
@@ -201,9 +233,23 @@ impl PluginFeeds {
         for target in self.keys.forget_plugin(plugin) {
             catalogue.remove(target).map_err(FeedError::Search)?;
         }
-        // A closed index cannot be reached, so the owner hears that the text was left.
+        // A closed index cannot be reached, so the owner hears that the text was left; the
+        // next session's sweep removes it.
         let index = index.ok_or(FeedError::Index(FullTextError::NeedsReopen))?;
-        index.remove_plugin(plugin).map_err(FeedError::Index)
+        committed(index.remove_plugin(plugin)).map_err(FeedError::Index)
+    }
+
+    /// Clears every plugin the runtime reported removed this session.
+    fn forget_removed(&mut self, sinks: &mut Sinks<'_>) -> Result<(), FeedError> {
+        for plugin in std::mem::take(&mut self.removed) {
+            // Re-typed, so the index's borrow can end with this one call.
+            let index = sinks
+                .index
+                .as_deref_mut()
+                .map(|index| index as &mut dyn FeedIndex);
+            self.forget_plugin(&plugin, index, sinks.catalogue)?;
+        }
+        Ok(())
     }
 
     /// Once per session, with the index open, removes the text of every plugin the store no
@@ -216,11 +262,7 @@ impl PluginFeeds {
             return Ok(());
         }
         self.swept = true;
-        let installs = sinks.store.plugin_installs().map_err(FeedError::Store)?;
-        let installed: BTreeSet<String> = installs
-            .into_iter()
-            .map(|install| install.plugin_id)
-            .collect();
+        let installed = sinks.store.installed().map_err(FeedError::Store)?;
         let held = index.plugin_ids().map_err(FeedError::Index)?;
         for plugin in held.difference(&installed) {
             self.forget_plugin(plugin, Some(&mut *index), sinks.catalogue)?;
@@ -251,7 +293,7 @@ impl PluginFeeds {
         let namespace = namespace(&name)?;
         let cursor = sinks
             .store
-            .plugin_feed_cursor(&name.plugin, &name.feed)
+            .cursor(&name.plugin, &name.feed)
             .map_err(FeedError::Store)?;
         let fed = index.is_fed(&namespace).map_err(FeedError::Index)?;
         let after = cursor.filter(|_| fed);
@@ -297,47 +339,44 @@ impl PluginFeeds {
         Ok(())
     }
 
-    /// Keeps one batch: documents and the fed marker in the index first, then the rows and
-    /// the cursor in one store transaction, then the catalogue as the store kept it. A crash
-    /// anywhere before the store commit replays the batch from the old cursor, which both
-    /// tiers take as a no-op where they already hold it.
+    /// Keeps one batch, in this order: the whole batch is checked against both tiers; the
+    /// documents go to the index; the rows and the new cursor to the store, in one
+    /// transaction; only then is the feed marked as fed in the index, and the catalogue
+    /// updated as the store kept it. A failure anywhere before the store commit leaves the
+    /// old cursor, so the batch is replayed, which both tiers take as a no-op where they hold
+    /// it; and a pull from the start is not marked as fed until its cursor is kept, so a
+    /// failure there pulls from the start again rather than on from an older cursor.
     fn apply(
         &mut self,
         pull: &Pull,
         batch: &Batch,
         sinks: &mut Sinks<'_>,
     ) -> Result<(), FeedError> {
-        let reset = batch
-            .changes
-            .iter()
-            .rposition(|change| matches!(change, Change::Reset));
-        // Everything before the last reset is erased by it, so only what follows is applied.
-        let changes = reset.map_or(&batch.changes[..], |last| &batch.changes[last + 1..]);
-        let clear_first = pull.from_start || reset.is_some();
+        let kept = batch::kept(batch, pull.from_start);
+        let namespace = namespace(&pull.name)?;
+        let rows = batch::row_changes(kept.changes);
+        let commit = PluginFeedCommit {
+            plugin_id: pull.name.plugin.clone(),
+            feed: pull.name.feed.clone(),
+            clear_first: kept.clear_first,
+            changes: rows.clone(),
+            next_cursor: batch.next_cursor.clone(),
+        };
+        batch::check(&commit, &namespace, kept.changes)?;
         let index = sinks
             .index
             .as_deref_mut()
             .ok_or(FeedError::Index(FullTextError::NeedsReopen))?;
-        keep_documents(
-            index,
-            &namespace(&pull.name)?,
-            changes,
-            clear_first,
-            sinks.now,
-        )?;
-        let rows = row_changes(changes);
-        let commit = PluginFeedCommit {
-            plugin_id: pull.name.plugin.clone(),
-            feed: pull.name.feed.clone(),
-            clear_first,
-            changes: rows.clone(),
-            next_cursor: batch.next_cursor.clone(),
-        };
-        let outcomes = sinks
-            .store
-            .commit_plugin_feed(commit)
-            .map_err(FeedError::Store)?;
-        self.show_kept(sinks.catalogue, &pull.name, clear_first, &rows, &outcomes)
+        keep_documents(index, &namespace, &kept, sinks.now)?;
+        let outcomes = sinks.store.commit(commit).map_err(FeedError::Store)?;
+        mark_fed(index, &namespace)?;
+        self.show_kept(
+            sinks.catalogue,
+            &pull.name,
+            kept.clear_first,
+            &rows,
+            &outcomes,
+        )
     }
 
     /// Mirrors a committed batch in the catalogue: a cleared feed's rows leave, and each row
@@ -395,7 +434,7 @@ impl PluginFeeds {
             .target(feed, &entry.entry_id)
             .ok_or(FeedError::KeysExhausted)?;
         catalogue
-            .upsert(catalogue_entry(target, entry))
+            .upsert(batch::catalogue_entry(target, entry))
             .map_err(FeedError::Search)
     }
 
@@ -416,168 +455,56 @@ impl PluginFeeds {
     }
 }
 
-/// How often the session looks for a plugin's answer while a feed is being pulled.
-const ANSWER_POLL: Duration = Duration::from_millis(20);
-
-/// The session loop's side of pulling: it hears announcements and moves pulls on between
-/// the owner's commands, so a slow plugin never holds up browsing.
-impl super::Worker {
-    /// Hears the runtime's announcements and moves pulling on by one batch. A failed pull is
-    /// shown to the owner and the loop goes on; the feed is pulled again when next announced.
-    pub(super) fn pump_plugin_feeds(
-        &mut self,
-        store: &Store,
-        events: &UnboundedSender<SessionEvent>,
-    ) -> Result<(), SessionError> {
-        let Some(plugins) = self.plugins.as_mut() else {
-            return Ok(());
-        };
-        self.survival.operation = "pulling plugin search feeds";
-        // Other events have no reader in the session yet; plugin tabs (#29) will add one.
-        self.plugin_feeds.notice(plugins.runtime.take_events());
-        let now = super::utc_seconds()?;
-        let mut sinks = Sinks {
-            store,
-            index: self.page_text.index_mut(),
-            catalogue: &mut self.catalogue,
-            now,
-        };
-        let pumped = self.plugin_feeds.pump(&mut plugins.runtime, &mut sinks);
-        let Err(error) = pumped else {
-            return Ok(());
-        };
-        super::emit_recoverable(events, SessionError::PluginFeed(error))
-    }
-
-    /// Whether a pull is under way, so the loop wakes soon to collect its answer.
-    pub(super) fn plugin_feeds_busy(&mut self) -> bool {
-        let index_open = self.page_text.index_mut().is_some();
-        self.plugins.is_some() && self.plugin_feeds.busy(index_open)
-    }
-
-    /// The loop's wait, cut short while a pull is under way.
-    pub(super) fn plugin_feed_wait(&mut self, wait: Duration) -> Duration {
-        if self.plugin_feeds_busy() {
-            return wait.min(ANSWER_POLL);
-        }
-        wait
-    }
-}
-
 fn namespace(name: &FeedName) -> Result<Namespace, FeedError> {
     Namespace::plugin_feed(&name.plugin, &name.feed).map_err(|_| FeedError::Name)
 }
 
-/// Commits the batch's documents and deletions, and the fed marker, to the feed's own
-/// namespace, which D40's page-text expiry never reads.
+/// An event feeds do not read, named by plugin and kind only.
+fn describe(event: &PluginEvent) -> String {
+    let (plugin, kind) = match event {
+        PluginEvent::Outcome { plugin, .. } => (Some(plugin), "a write's outcome"),
+        PluginEvent::Failed { plugin, .. } => (Some(plugin), "the plugin failed"),
+        PluginEvent::Deactivated { plugin, .. } => (Some(plugin), "the plugin stopped"),
+        PluginEvent::Cache { plugin, .. } => (plugin.as_ref(), "a compiled-code cache problem"),
+        PluginEvent::PrepareFailed { plugin, .. } => (Some(plugin), "a background compile failed"),
+        PluginEvent::FeedChanged { plugin, .. } => (Some(plugin), "a feed changed"),
+        PluginEvent::Removed { plugin } => (Some(plugin), "the plugin was removed"),
+    };
+    match plugin {
+        Some(plugin) => format!("{plugin}: {kind}"),
+        None => kind.to_owned(),
+    }
+}
+
+/// Commits the kept part of a batch to the feed's own namespace, which D40's page-text
+/// expiry never reads. The fed marker is not written here (see `apply`).
 fn keep_documents(
-    index: &mut FullText,
+    index: &mut dyn FeedIndex,
     namespace: &Namespace,
-    changes: &[Change],
-    clear_first: bool,
+    kept: &batch::Kept<'_>,
     now: i64,
 ) -> Result<(), FeedError> {
-    if clear_first {
-        index.reset(namespace).map_err(FeedError::Index)?;
+    if kept.clear_first {
+        committed(index.reset(namespace)).map_err(FeedError::Index)?;
     }
-    for change in changes {
+    for change in kept.changes {
         // One at a time, so a deletion sees a document staged earlier in the same batch.
-        let Some(staged) = document_change(index, namespace, change, now)? else {
+        let Some(staged) = batch::document_change(index, namespace, change, now)? else {
             continue;
         };
         index.stage(&[staged], now).map_err(FeedError::Index)?;
     }
+    committed(index.commit()).map_err(FeedError::Index)
+}
+
+/// Marks the feed as fed once its cursor is kept; a separate small commit only when the
+/// marker is missing, as after a reset or a pull from the start.
+fn mark_fed(index: &mut dyn FeedIndex, namespace: &Namespace) -> Result<(), FeedError> {
+    if index.is_fed(namespace).map_err(FeedError::Index)? {
+        return Ok(());
+    }
     index.mark_fed(namespace).map_err(FeedError::Index)?;
-    index.commit().map_err(FeedError::Index)
-}
-
-/// The index's form of one change; `None` for what tier 2 does not hold.
-fn document_change(
-    index: &FullText,
-    namespace: &Namespace,
-    change: &Change,
-    now: i64,
-) -> Result<Option<fulltext::Change>, FeedError> {
-    match change {
-        Change::UpsertDocument(document) => Ok(Some(fulltext::Change::Upsert(full_text_document(
-            namespace, document, now,
-        )))),
-        Change::Delete(id) => {
-            // The plugin names no revision; the tombstone covers the one held, if any.
-            let held = index
-                .held_revision(namespace, id)
-                .map_err(FeedError::Index)?;
-            Ok(held.map(|revision| {
-                fulltext::Change::Delete(Deletion {
-                    namespace: namespace.clone(),
-                    id: id.clone(),
-                    revision,
-                    deleted_at: now,
-                })
-            }))
-        }
-        Change::UpsertEntry(_) | Change::Reset => Ok(None),
-    }
-}
-
-fn full_text_document(namespace: &Namespace, document: &Document, now: i64) -> FullTextDocument {
-    FullTextDocument {
-        namespace: namespace.clone(),
-        id: document.id.clone(),
-        revision: document.revision,
-        captured_at: now,
-        title: document.title.clone(),
-        body: document.body.clone(),
-    }
-}
-
-/// The batch's tier 1 changes; a deletion reaches both tiers.
-fn row_changes(changes: &[Change]) -> Vec<FeedRowChange> {
-    changes
-        .iter()
-        .filter_map(|change| match change {
-            Change::UpsertEntry(entry) => Some(FeedRowChange::Upsert(stored_entry(entry))),
-            Change::Delete(id) => Some(FeedRowChange::Delete(id.clone())),
-            Change::UpsertDocument(_) | Change::Reset => None,
-        })
-        .collect()
-}
-
-fn stored_entry(entry: &CatalogueEntry) -> PluginFeedEntry {
-    PluginFeedEntry {
-        entry_id: entry.id.clone(),
-        revision: entry.revision,
-        title: entry.title.clone(),
-        subtitle: entry.subtitle.clone(),
-        icon: icon_name(entry),
-        last_used: entry.last_used,
-        keywords: entry.keywords.clone(),
-    }
-}
-
-/// The contract's icon name, as its WIT enum spells it.
-fn icon_name(entry: &CatalogueEntry) -> String {
-    format!("{:?}", entry.icon).to_lowercase()
-}
-
-/// A plugin row as the catalogue matches it: the title, then the subtitle and keywords in
-/// the address field. How a plugin row looks is the owner's call (#265, question 1).
-fn catalogue_entry(target: Target, entry: &PluginFeedEntry) -> Entry {
-    let address = std::iter::once(entry.subtitle.as_str())
-        .chain(entry.keywords.iter().map(String::as_str))
-        .filter(|text| !text.is_empty())
-        .collect::<Vec<_>>()
-        .join(" ");
-    Entry {
-        target,
-        title: entry.title.clone(),
-        address,
-        usage: Usage {
-            visits: 0,
-            last_used: entry.last_used.map(|millis| millis.div_euclid(1000)),
-        },
-        open: false,
-    }
+    committed(index.commit()).map_err(FeedError::Index)
 }
 
 #[cfg(test)]

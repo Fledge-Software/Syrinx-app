@@ -1115,10 +1115,11 @@ impl Worker {
                     let settled = self.settle_titles(store, false);
                     self.survival.result(settled, events)?;
                     self.survival.operation = command.operation();
+                    let typed = plugin_feeds::is_typing(&command);
                     let handled = self.handle(store, command, events);
                     self.survival.result(handled, events)?;
                     self.report_page_text(events)?;
-                    self.pump_plugin_feeds(store, events)?;
+                    self.pull_after_command(typed, store, events)?;
                     delay = IDLE_DELAY;
                 }
                 Err(mpsc::RecvTimeoutError::Timeout) if self.history.has_pending_titles() => {

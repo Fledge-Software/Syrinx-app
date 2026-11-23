@@ -1,9 +1,9 @@
-//! Proves the plugin feed pull loop (#141) against a scripted plugin: replay and a crash
+//! Proves the plugin feed pull loop (#141) against a scripted plugin: replay and a failure
 //! before the cursor is kept lose nothing, an emptied index is fed again from the start,
-//! removal empties both tiers, and nothing calls a plugin while the owner types (D9).
+//! removal empties both tiers, and page-text expiry leaves plugin documents (D40).
 
 use std::cell::Cell;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::num::NonZeroU64;
 use std::path::{Path, PathBuf};
@@ -11,12 +11,18 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
+use syrinx_plugin_host::bindings::exports::syrinx::plugin::search_feed::{
+    CatalogueEntry, Change, Document,
+};
 use syrinx_plugin_host::bindings::syrinx::plugin::types::Icon;
-use syrinx_search::fulltext::{NamespaceFilter, SearchRequest};
-use syrinx_search::{BlankQuery, BoostWeights, Scope, SearchPolicy};
+use syrinx_search::fulltext::{self, FullText, NamespaceFilter, Outcome, SearchRequest};
+use syrinx_search::{BlankQuery, BoostWeights, Scope, SearchPolicy, Target};
 use syrinx_store::{DirectoryLease, LocationError, PluginInstall, PluginState};
 
 use super::*;
+use crate::session::{
+    DeletionJournal, SessionCommand, WindowsDirectoryLease, Worker, page_text, unbounded,
+};
 
 const PLUGIN: &str = "notes";
 const FEED: &str = "notes.items";
@@ -105,6 +111,8 @@ impl BatchAnswer for Ready {
 struct Scripted {
     batches: BTreeMap<Option<String>, Batch>,
     requests: Vec<Option<String>>,
+    /// Events the runtime reports at the next look.
+    events: Vec<PluginEvent>,
     /// Counts every call, shared with checks made while this plugin is borrowed elsewhere.
     calls: Rc<Cell<usize>>,
 }
@@ -117,6 +125,10 @@ impl Scripted {
 }
 
 impl FeedSource for Scripted {
+    fn take_events(&mut self) -> Vec<PluginEvent> {
+        std::mem::take(&mut self.events)
+    }
+
     fn request(
         &mut self,
         plugin: &str,
@@ -128,6 +140,80 @@ impl FeedSource for Scripted {
         self.requests.push(after.clone());
         let batch = self.batches.get(&after).expect("a scripted batch").clone();
         Ok(Box::new(Ready(batch)))
+    }
+}
+
+/// The store, failing its next feed commits as a crash before the commit would.
+struct FailingStore<'a> {
+    store: &'a Store,
+    failures: Cell<u32>,
+}
+
+impl FeedStore for FailingStore<'_> {
+    fn cursor(&self, plugin: &str, feed: &str) -> Result<Option<String>, StoreError> {
+        self.store.cursor(plugin, feed)
+    }
+
+    fn commit(&self, commit: PluginFeedCommit) -> Result<Vec<FeedRowOutcome>, StoreError> {
+        if self.failures.get() > 0 {
+            self.failures.set(self.failures.get() - 1);
+            return Err(StoreError::Busy);
+        }
+        FeedStore::commit(self.store, commit)
+    }
+
+    fn installed(&self) -> Result<BTreeSet<String>, StoreError> {
+        self.store.installed()
+    }
+}
+
+/// The index, failing its next commit as a crash before the commit would.
+struct FailingIndex<'a> {
+    index: &'a mut FullText,
+    failures: u32,
+}
+
+impl FeedIndex for FailingIndex<'_> {
+    fn reset(&mut self, namespace: &Namespace) -> Result<(), FullTextError> {
+        FeedIndex::reset(&mut *self.index, namespace)
+    }
+
+    fn stage(
+        &mut self,
+        changes: &[fulltext::Change],
+        now: i64,
+    ) -> Result<Vec<Outcome>, FullTextError> {
+        FeedIndex::stage(&mut *self.index, changes, now)
+    }
+
+    fn held_revision(&self, namespace: &Namespace, id: &str) -> Result<Option<u64>, FullTextError> {
+        FeedIndex::held_revision(&*self.index, namespace, id)
+    }
+
+    fn mark_fed(&mut self, namespace: &Namespace) -> Result<(), FullTextError> {
+        FeedIndex::mark_fed(&mut *self.index, namespace)
+    }
+
+    fn is_fed(&self, namespace: &Namespace) -> Result<bool, FullTextError> {
+        FeedIndex::is_fed(&*self.index, namespace)
+    }
+
+    fn commit(&mut self) -> Result<(), FullTextError> {
+        if self.failures > 0 {
+            self.failures -= 1;
+            // What a crash before the commit leaves: nothing staged survives.
+            self.index.discard()?;
+            return Err(FullTextError::Io);
+        }
+        FeedIndex::commit(&mut *self.index)
+    }
+
+    fn plugin_ids(&self) -> Result<BTreeSet<String>, FullTextError> {
+        FeedIndex::plugin_ids(&*self.index)
+    }
+
+    fn remove_plugin(&mut self, plugin: &str) -> Result<(), FullTextError> {
+        FeedIndex::remove_plugin(&mut *self.index, plugin)
     }
 }
 
@@ -160,24 +246,29 @@ fn batch(changes: Vec<Change>, cursor: &str, more: bool) -> Batch {
     }
 }
 
-fn announce(feeds: &mut PluginFeeds) {
-    feeds.notice([PluginEvent::FeedChanged {
+fn feed_changed() -> PluginEvent {
+    PluginEvent::FeedChanged {
         plugin: PLUGIN.to_owned(),
         feed: FEED.to_owned(),
-    }]);
+    }
 }
 
-/// Pumps until no pull is in flight and nothing waits.
-fn settle(
+fn announce(feeds: &mut PluginFeeds) {
+    let unread = feeds.notice([feed_changed()]);
+    assert!(unread.is_empty());
+}
+
+/// Pumps with `store` and `index` until no pull is in flight and nothing waits.
+fn settle_with(
     feeds: &mut PluginFeeds,
     source: &mut Scripted,
-    store: &Store,
-    index: &mut FullText,
+    store: &dyn FeedStore,
+    index: &mut dyn FeedIndex,
     catalogue: &mut Catalogue,
-) {
+) -> Result<(), FeedError> {
     for _ in 0..64 {
         if !feeds.busy(true) {
-            return;
+            return Ok(());
         }
         let mut sinks = Sinks {
             store,
@@ -185,9 +276,19 @@ fn settle(
             catalogue: &mut *catalogue,
             now: NOW,
         };
-        feeds.pump(source, &mut sinks).expect("a pull");
+        feeds.pump(source, &mut sinks)?;
     }
     panic!("pulling never settled");
+}
+
+fn settle(
+    feeds: &mut PluginFeeds,
+    source: &mut Scripted,
+    store: &Store,
+    index: &mut FullText,
+    catalogue: &mut Catalogue,
+) {
+    settle_with(feeds, source, store, index, catalogue).expect("a pull");
 }
 
 fn policy() -> SearchPolicy {
@@ -237,6 +338,16 @@ fn documents(index: &FullText, word: &str) -> Vec<String> {
     ids
 }
 
+/// The store's kept rows as (id, revision).
+fn kept_rows(store: &Store) -> Vec<(String, u64)> {
+    store
+        .plugin_feed_entries()
+        .expect("kept rows")
+        .into_iter()
+        .map(|stored| (stored.entry.entry_id, stored.entry.revision))
+        .collect()
+}
+
 fn first_batch() -> Batch {
     batch(
         vec![
@@ -256,10 +367,10 @@ fn an_announced_feed_reaches_both_tiers_and_a_replay_changes_nothing() {
     let mut index = folder.index("fulltext");
     let mut catalogue = Catalogue::new();
     let mut feeds = PluginFeeds::default();
-    let mut plugin = Scripted::default().answer(None, first_batch()).answer(
-        Some("c1"),
-        batch(vec![entry("b", 2, "Synthetic bravo two")], "c2", false),
-    );
+    let second = batch(vec![entry("b", 2, "Synthetic bravo two")], "c2", false);
+    let mut plugin = Scripted::default()
+        .answer(None, first_batch())
+        .answer(Some("c1"), second);
 
     announce(&mut feeds);
     settle(&mut feeds, &mut plugin, &store, &mut index, &mut catalogue);
@@ -273,21 +384,18 @@ fn an_announced_feed_reaches_both_tiers_and_a_replay_changes_nothing() {
         Ok(Some("c1".to_owned()))
     );
 
-    // A replay of the first batch, as after a crash before its cursor was kept, is a no-op.
-    let mut replay = Scripted::default().answer(None, first_batch());
-    feeds.pull = None;
-    feeds.waiting.clear();
+    // The first batch again, answered from its own cursor as a replay would be, is a no-op.
     let name = FeedName {
         plugin: PLUGIN.to_owned(),
         feed: FEED.to_owned(),
     };
-    let pull = Pull {
+    feeds.pull = Some(Pull {
         name,
         from_start: false,
         answer: Box::new(Ready(first_batch())),
         batches: 0,
-    };
-    feeds.pull = Some(pull);
+    });
+    let mut replay = Scripted::default();
     settle(&mut feeds, &mut replay, &store, &mut index, &mut catalogue);
     assert_eq!(
         titles(&mut catalogue, "synthetic"),
@@ -306,17 +414,32 @@ fn an_announced_feed_reaches_both_tiers_and_a_replay_changes_nothing() {
 }
 
 #[test]
-fn a_crash_between_the_index_commit_and_the_cursor_replays_and_loses_nothing() {
+fn an_older_revision_after_a_newer_one_leaves_the_newer_row_showing() {
     let folder = Folder::new();
     let store = folder.store();
     let mut index = folder.index("fulltext");
     let mut catalogue = Catalogue::new();
     let mut feeds = PluginFeeds::default();
-    let mut plugin = Scripted::default().answer(None, first_batch());
+    let newer = batch(vec![entry("a", 2, "Synthetic newer")], "c1", false);
+    let older = batch(vec![entry("a", 1, "Synthetic older")], "c2", false);
+    let mut plugin = Scripted::default()
+        .answer(None, newer)
+        .answer(Some("c1"), older);
     announce(&mut feeds);
     settle(&mut feeds, &mut plugin, &store, &mut index, &mut catalogue);
+    announce(&mut feeds);
+    settle(&mut feeds, &mut plugin, &store, &mut index, &mut catalogue);
+    assert_eq!(titles(&mut catalogue, "synthetic"), ["Synthetic newer"]);
+    assert_eq!(kept_rows(&store), [("a".to_owned(), 2)]);
+}
 
-    // The second batch reaches the index, then the session stops before the store commit.
+#[test]
+fn a_failed_index_commit_keeps_the_old_cursor_and_the_next_pull_completes_both_tiers() {
+    let folder = Folder::new();
+    let store = folder.store();
+    let mut index = folder.index("fulltext");
+    let mut catalogue = Catalogue::new();
+    let mut feeds = PluginFeeds::default();
     let second = batch(
         vec![
             entry("c", 1, "Synthetic charlie"),
@@ -326,24 +449,46 @@ fn a_crash_between_the_index_commit_and_the_cursor_replays_and_loses_nothing() {
         "c2",
         false,
     );
-    let namespace = Namespace::plugin_feed(PLUGIN, FEED).expect("a namespace");
-    keep_documents(&mut index, &namespace, &second.changes, false, NOW).expect("the index part");
-    drop(index);
-    store.shutdown().expect("the store closes");
+    let mut plugin = Scripted::default()
+        .answer(None, first_batch())
+        .answer(Some("c1"), second);
+    announce(&mut feeds);
+    settle(&mut feeds, &mut plugin, &store, &mut index, &mut catalogue);
 
-    // A restart shows the kept rows without running the plugin, then pulls from the old cursor.
-    let store = folder.store();
-    let mut index = folder.index("fulltext");
+    // The second batch reaches apply, and the index commit fails.
+    announce(&mut feeds);
+    let mut failing = FailingIndex {
+        index: &mut index,
+        failures: 1,
+    };
+    let failed = settle_with(
+        &mut feeds,
+        &mut plugin,
+        &store,
+        &mut failing,
+        &mut catalogue,
+    );
+    assert_eq!(failed, Err(FeedError::Index(FullTextError::Io)));
+    // Nothing of the batch was kept: the store would be ahead of the index otherwise.
+    assert_eq!(
+        store.plugin_feed_cursor(PLUGIN, FEED),
+        Ok(Some("c1".to_owned()))
+    );
+    assert_eq!(
+        kept_rows(&store),
+        [("a".to_owned(), 1), ("b".to_owned(), 1)]
+    );
+
+    // A restart shows the kept rows without running the plugin, then pulls from c1 again.
     let mut catalogue = Catalogue::new();
     let mut feeds = PluginFeeds::restore(&store, &mut catalogue).expect("restored rows");
     assert_eq!(
         titles(&mut catalogue, "synthetic"),
         ["Synthetic alpha", "Synthetic bravo"]
     );
-    let mut plugin = Scripted::default().answer(Some("c1"), second);
     announce(&mut feeds);
     settle(&mut feeds, &mut plugin, &store, &mut index, &mut catalogue);
-    assert_eq!(plugin.requests, [Some("c1".to_owned())]);
+    assert_eq!(plugin.requests.last(), Some(&Some("c1".to_owned())));
     assert_eq!(
         titles(&mut catalogue, "synthetic"),
         ["Synthetic bravo", "Synthetic charlie"]
@@ -353,6 +498,77 @@ fn a_crash_between_the_index_commit_and_the_cursor_replays_and_loses_nothing() {
     assert_eq!(
         store.plugin_feed_cursor(PLUGIN, FEED),
         Ok(Some("c2".to_owned()))
+    );
+}
+
+#[test]
+fn a_failed_store_commit_on_a_refeed_from_the_start_pulls_from_the_start_again() {
+    let folder = Folder::new();
+    let store = folder.store();
+    let mut index = folder.index("fulltext");
+    let mut catalogue = Catalogue::new();
+    let mut feeds = PluginFeeds::default();
+    let first = batch(
+        vec![
+            entry("a", 1, "Synthetic alpha"),
+            document("a", 1, "quillmark"),
+        ],
+        "c1",
+        true,
+    );
+    let second = batch(
+        vec![
+            entry("b", 1, "Synthetic bravo"),
+            document("b", 1, "lanternfish"),
+        ],
+        "c2",
+        false,
+    );
+    let mut plugin = Scripted::default()
+        .answer(None, first)
+        .answer(Some("c1"), second)
+        .answer(Some("c2"), batch(Vec::new(), "c2", false));
+    announce(&mut feeds);
+    settle(&mut feeds, &mut plugin, &store, &mut index, &mut catalogue);
+    assert_eq!(
+        store.plugin_feed_cursor(PLUGIN, FEED),
+        Ok(Some("c2".to_owned()))
+    );
+
+    // A history repair empties the index; the refeed's first batch reaches the index, then
+    // the store commit fails, as a crash between the two would leave it.
+    let mut emptied = folder.index("fulltext-emptied");
+    let failing = FailingStore {
+        store: &store,
+        failures: Cell::new(1),
+    };
+    announce(&mut feeds);
+    let failed = settle_with(
+        &mut feeds,
+        &mut plugin,
+        &failing,
+        &mut emptied,
+        &mut catalogue,
+    );
+    assert_eq!(failed, Err(FeedError::Store(StoreError::Busy)));
+
+    // The cursor is still the old feed's end, but the index is not marked as fed, so the next
+    // pull starts again from the start instead of going on from c2 and losing batch two.
+    announce(&mut feeds);
+    settle(
+        &mut feeds,
+        &mut plugin,
+        &store,
+        &mut emptied,
+        &mut catalogue,
+    );
+    let refed: Vec<Option<String>> = plugin.requests[2..].to_vec();
+    assert_eq!(refed, [None, None, Some("c1".to_owned())]);
+    assert_eq!(documents(&emptied, "quillmark"), ["a"]);
+    assert_eq!(documents(&emptied, "lanternfish"), ["b"]);
+    assert_eq!(
+        titles(&mut catalogue, "synthetic"),
+        ["Synthetic alpha", "Synthetic bravo"]
     );
 }
 
@@ -371,9 +587,7 @@ fn an_emptied_index_is_fed_again_from_the_start_dropping_old_rows_first() {
         "r1",
         false,
     );
-    let mut plugin = Scripted::default()
-        .answer(None, first_batch())
-        .answer(Some("c1"), batch(Vec::new(), "c1", false));
+    let mut plugin = Scripted::default().answer(None, first_batch());
     announce(&mut feeds);
     settle(&mut feeds, &mut plugin, &store, &mut index, &mut catalogue);
 
@@ -391,13 +605,7 @@ fn an_emptied_index_is_fed_again_from_the_start_dropping_old_rows_first() {
     assert_eq!(plugin.requests, [None, None]);
     assert_eq!(titles(&mut catalogue, "synthetic"), ["Synthetic bravo"]);
     assert_eq!(documents(&emptied, "lanternfish"), ["b"]);
-    let kept: Vec<String> = store
-        .plugin_feed_entries()
-        .expect("kept rows")
-        .into_iter()
-        .map(|stored| stored.entry.entry_id)
-        .collect();
-    assert_eq!(kept, ["b"]);
+    assert_eq!(kept_rows(&store), [("b".to_owned(), 1)]);
 
     // The index is marked again, so the next announcement goes on from the new cursor.
     announce(&mut feeds);
@@ -410,7 +618,6 @@ fn an_emptied_index_is_fed_again_from_the_start_dropping_old_rows_first() {
         &mut catalogue,
     );
     assert_eq!(plugin.requests.last(), Some(&Some("r1".to_owned())));
-    drop(index);
 }
 
 #[test]
@@ -441,16 +648,39 @@ fn a_reset_in_a_batch_drops_what_came_before_it_in_both_tiers() {
 }
 
 #[test]
+fn a_batch_either_tier_would_refuse_writes_to_neither() {
+    let folder = Folder::new();
+    let store = folder.store();
+    let mut index = folder.index("fulltext");
+    let mut catalogue = Catalogue::new();
+    let mut feeds = PluginFeeds::default();
+    // The document is fine; the deletion names the index's reserved marker id, which the
+    // index alone would refuse, and only after the document was written.
+    let refused = batch(
+        vec![
+            document("d", 1, "copperleaf"),
+            Change::Delete("\0fed".to_owned()),
+        ],
+        "c1",
+        false,
+    );
+    let mut plugin = Scripted::default().answer(None, refused);
+    announce(&mut feeds);
+    let failed = settle_with(&mut feeds, &mut plugin, &store, &mut index, &mut catalogue);
+    assert!(failed.is_err());
+    assert!(documents(&index, "copperleaf").is_empty());
+    assert_eq!(store.plugin_feed_cursor(PLUGIN, FEED), Ok(None));
+}
+
+#[test]
 fn a_long_feed_pulls_a_bounded_number_of_batches_per_announcement() {
     let folder = Folder::new();
     let store = folder.store();
     let mut index = folder.index("fulltext");
     let mut catalogue = Catalogue::new();
     let mut feeds = PluginFeeds::default();
-    let mut plugin = Scripted::default().answer(
-        None,
-        batch(vec![entry("p0", 1, "Synthetic page 0")], "c1", true),
-    );
+    let first = batch(vec![entry("p0", 1, "Synthetic page 0")], "c1", true);
+    let mut plugin = Scripted::default().answer(None, first);
     for page in 1..=BATCHES_PER_TRIGGER + 2 {
         let changes = vec![entry(
             &format!("p{page}"),
@@ -467,7 +697,7 @@ fn a_long_feed_pulls_a_bounded_number_of_batches_per_announcement() {
         catalogue: &mut catalogue,
         now: NOW,
     };
-    // Two pumps per batch: one starts the pull, one applies it.
+    // One pump starts the pull, then one applies each batch.
     for _ in 0..BATCHES_PER_TRIGGER + 1 {
         feeds.pump(&mut plugin, &mut sinks).expect("a pull");
     }
@@ -477,6 +707,34 @@ fn a_long_feed_pulls_a_bounded_number_of_batches_per_announcement() {
     feeds.pump(&mut plugin, &mut sinks).expect("the next turn");
     let resumed = plugin.requests.last().cloned().flatten();
     assert_eq!(resumed, Some(format!("c{BATCHES_PER_TRIGGER}")));
+}
+
+#[test]
+fn a_plugin_removed_mid_session_leaves_both_tiers_at_the_next_pump() {
+    let folder = Folder::new();
+    let store = folder.store();
+    let mut index = folder.index("fulltext");
+    let mut catalogue = Catalogue::new();
+    let mut feeds = PluginFeeds::default();
+    let mut plugin = Scripted::default().answer(None, first_batch());
+    announce(&mut feeds);
+    settle(&mut feeds, &mut plugin, &store, &mut index, &mut catalogue);
+    assert!(!titles(&mut catalogue, "synthetic").is_empty());
+
+    // The runtime removed it and the store cascaded; the next pump hears it.
+    assert_eq!(store.remove_plugin(PLUGIN.to_owned()), Ok(true));
+    plugin.events.push(PluginEvent::Removed {
+        plugin: PLUGIN.to_owned(),
+    });
+    let unread = feeds.notice(plugin.take_events());
+    assert!(unread.is_empty());
+    settle(&mut feeds, &mut plugin, &store, &mut index, &mut catalogue);
+    assert!(titles(&mut catalogue, "synthetic").is_empty());
+    assert!(documents(&index, "quillmark").is_empty());
+    assert_eq!(store.plugin_feed_cursor(PLUGIN, FEED), Ok(None));
+    assert_eq!(store.plugin_feed_entries(), Ok(Vec::new()));
+    let namespace = Namespace::plugin_feed(PLUGIN, FEED).expect("a namespace");
+    assert_eq!(index.is_fed(&namespace), Ok(false));
 }
 
 #[test]
@@ -510,57 +768,65 @@ fn text_left_by_a_plugin_removed_while_the_index_was_closed_goes_at_the_next_pul
 }
 
 #[test]
-fn removing_a_plugin_empties_both_tiers_and_its_cursor() {
-    let folder = Folder::new();
-    let store = folder.store();
-    let mut index = folder.index("fulltext");
-    let mut catalogue = Catalogue::new();
+fn events_feeds_do_not_read_are_named_by_plugin_and_kind() {
     let mut feeds = PluginFeeds::default();
-    let mut plugin = Scripted::default().answer(None, first_batch());
-    announce(&mut feeds);
-    settle(&mut feeds, &mut plugin, &store, &mut index, &mut catalogue);
-    assert!(!titles(&mut catalogue, "synthetic").is_empty());
-
-    assert_eq!(store.remove_plugin(PLUGIN.to_owned()), Ok(true));
-    feeds
-        .forget_plugin(PLUGIN, Some(&mut index), &mut catalogue)
-        .expect("forgotten");
-    assert!(titles(&mut catalogue, "synthetic").is_empty());
-    assert!(documents(&index, "quillmark").is_empty());
-    assert_eq!(store.plugin_feed_cursor(PLUGIN, FEED), Ok(None));
-    assert_eq!(store.plugin_feed_entries(), Ok(Vec::new()));
-    assert_eq!(
-        index.is_fed(&Namespace::plugin_feed(PLUGIN, FEED).expect("ns")),
-        Ok(false)
-    );
+    let unread = feeds.notice([
+        feed_changed(),
+        PluginEvent::Deactivated {
+            plugin: PLUGIN.to_owned(),
+            reason: syrinx_plugin_host::worker::StopReason::Shutdown,
+        },
+    ]);
+    assert_eq!(unread, ["notes: the plugin stopped"]);
+    assert!(feeds.busy(true));
 }
 
 #[test]
-fn typing_in_the_palette_never_calls_a_plugin() {
+fn typing_in_the_palette_never_starts_or_moves_a_pull() {
     let folder = Folder::new();
-    let store = folder.store();
-    let mut index = folder.index("fulltext");
-    let mut catalogue = Catalogue::new();
-    let mut feeds = PluginFeeds::default();
+    let lease = Arc::new(
+        WindowsDirectoryLease::prepare(&folder.0.join("State")).expect("a synthetic lease"),
+    );
+    let journal = DeletionJournal::open(&lease).expect("a synthetic journal");
+    let page_text = page_text::PageText::open(&lease);
+    let store = Store::open(lease).expect("a synthetic store");
+    store
+        .save_plugin_install(install())
+        .expect("a synthetic install");
+    let mut worker = Worker::restore(&store, journal, page_text).expect("a synthetic worker");
+    let (sender, _events) = unbounded();
     let mut plugin = Scripted::default().answer(None, first_batch());
-    let calls = Rc::clone(&plugin.calls);
-    announce(&mut feeds);
-    settle(&mut feeds, &mut plugin, &store, &mut index, &mut catalogue);
-    assert_eq!(calls.get(), 1);
+    let unread = worker.plugin_feeds.notice([feed_changed()]);
+    assert!(unread.is_empty(), "a feed waits to be pulled");
 
-    // Every prefix the owner types is answered from the catalogue and the index alone.
-    for typed in ["s", "sy", "syn", "synthetic", "synthetic al"] {
-        assert!(
-            catalogue
-                .query(typed, Scope::Everything, 100, policy())
-                .is_ok()
-        );
-        assert!(documents(&index, "quillmark").len() <= 1);
+    // The owner types in the palette; the loop then does what it does after any command.
+    for typed in ["s", "sy", "syn", "synthetic"] {
+        let query = SessionCommand::Query {
+            request_id: 1,
+            text: typed.to_owned(),
+            scope: Scope::Everything,
+            policy: policy(),
+        };
+        let typing = is_typing(&query);
+        worker.handle(&store, query, &sender).expect("a query");
+        worker
+            .pull_after_command_from(typing, &mut plugin, &store, &sender)
+            .expect("nothing to do");
     }
-    assert_eq!(calls.get(), 1, "no pull without an announcement");
-    // An announcement alone queues; only the session's pump calls the plugin.
-    announce(&mut feeds);
-    assert_eq!(calls.get(), 1);
+    assert!(plugin.requests.is_empty(), "no plugin call while typing");
+    let paused = worker.plugin_feeds.typing_quiet_for(Instant::now());
+    assert!(
+        paused.is_some(),
+        "the loop's own wake-ups wait for typing to pause"
+    );
+
+    // Any other command moves the waiting pull on.
+    worker
+        .pull_after_command_from(false, &mut plugin, &store, &sender)
+        .expect("a pull");
+    assert_eq!(plugin.requests, [None]);
+    drop(worker);
+    store.shutdown().expect("the store closes");
 }
 
 #[test]

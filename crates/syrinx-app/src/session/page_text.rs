@@ -233,6 +233,11 @@ impl PageText {
         self.index.as_mut()
     }
 
+    /// Whether the index is open.
+    pub(super) fn index_open(&self) -> bool {
+        self.index.is_some()
+    }
+
     /// The open index, for tests that read what it holds.
     #[cfg(test)]
     pub(super) fn index(&self) -> Option<&FullText> {
