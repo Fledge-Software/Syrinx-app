@@ -397,3 +397,46 @@ fn a_deleted_entry_keeps_its_revision_so_only_a_newer_one_comes_back() {
     store.shutdown().expect("store closes");
     directory.cleanup();
 }
+
+#[test]
+fn a_tombstone_keeps_no_text_of_the_deleted_entry() {
+    let directory = TestDirectory::new();
+    let store = installed(&directory);
+    let written = commit(vec![upsert("a", 5, "Synthetic private title")], "c1");
+    assert_eq!(
+        store.commit_plugin_feed(written),
+        Ok(vec![FeedRowOutcome::Applied])
+    );
+    let deleted = commit(vec![FeedRowChange::Delete("a".to_owned())], "c2");
+    assert_eq!(
+        store.commit_plugin_feed(deleted),
+        Ok(vec![FeedRowOutcome::Applied])
+    );
+    store.shutdown().expect("store closes");
+
+    // The raw row: only the id, revision and icon remain.
+    let connection = directory.connection();
+    let raw: (i64, i64, String, String, Option<i64>, String) = connection
+        .query_row(
+            "SELECT revision, deleted, title, subtitle, last_used, keywords
+             FROM plugin_feed_entry WHERE entry_id = 'a'",
+            [],
+            |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                    row.get(5)?,
+                ))
+            },
+        )
+        .expect("the tombstone row");
+    assert_eq!(
+        raw,
+        (5, 1, String::new(), String::new(), None, String::new())
+    );
+    close(connection);
+    directory.cleanup();
+}
