@@ -549,11 +549,12 @@ pub fn open_installed(
 /// version folder newer than the record that still verifies against the recorded publisher.
 /// It survives a restart because it is its own signed folder; nothing about it is recorded
 /// until the owner accepts. A newer folder whose contents are refused (signature, hash, slot,
-/// version, publisher, or a version other than the folder's name) is removed, and so is every older waiting folder once a newer one is
-/// offered, so none is left stuck. An unsigned folder while developer mode is off is kept and
-/// skipped: an older waiting folder may then be offered instead. A failure to read or check a
-/// folder is returned and removes nothing. The update offered holds the id until it is
-/// accepted (`keep`) or declined, so no other flow touches the plugin meanwhile.
+/// version, publisher, or a version other than the folder's name) is removed, and so is every
+/// older waiting folder once a newer one is offered, so none is left stuck. An unsigned folder
+/// while developer mode is off is kept and skipped: an older waiting folder may then be offered
+/// instead. A failure to read or check a folder is returned and removes nothing. The update
+/// offered holds the id until it is accepted (`keep`) or declined, so no other flow touches the
+/// plugin meanwhile.
 pub fn settle_pending_update(
     folders: &PluginFolders,
     installed: Installed<'_>,

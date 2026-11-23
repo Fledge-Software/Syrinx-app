@@ -42,7 +42,7 @@ fn package_accepts(id: &str) -> bool {
 fn the_package_list_and_the_manifest_accept_the_same_plugin_ids() {
     let longest = "x".repeat(MAX_PLUGIN_ID_BYTES);
     let too_long = "x".repeat(MAX_PLUGIN_ID_BYTES + 1);
-    let table: [(&str, bool); 25] = [
+    let table: [(&str, bool); 26] = [
         ("notes", true),
         ("a", true),
         ("forge-2", true),
@@ -62,6 +62,7 @@ fn the_package_list_and_the_manifest_accept_the_same_plugin_ids() {
         ("prn", false),
         ("aux", false),
         ("nul", false),
+        ("com0", false),
         ("com1", false),
         ("com9", false),
         ("lpt1", false),

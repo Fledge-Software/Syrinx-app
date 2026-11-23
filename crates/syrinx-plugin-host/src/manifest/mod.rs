@@ -349,7 +349,8 @@ fn check_plugin_id(id: &str) -> Result<(), ManifestError> {
 }
 
 /// Whether a lowercase, dot-free id is a Windows device name, which no folder may be named.
-/// `syrinx-update` keeps the same rule for the signed package list.
+/// `syrinx-update` keeps the same rule for the signed package list. An id with a dot is
+/// refused before this check, so there is no extension-like suffix to split off.
 fn is_device_name(id: &str) -> bool {
     let numbered = |prefix: &str| {
         id.strip_prefix(prefix)
