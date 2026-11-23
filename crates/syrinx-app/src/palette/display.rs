@@ -1,4 +1,4 @@
-//! Turns search hits into bounded, safely highlighted palette rows, in order and in sections, and previews.
+//! Turns search hits into bounded, safely highlighted palette rows, in order and in sections.
 
 use std::collections::HashSet;
 use std::ops::Range;
@@ -8,8 +8,6 @@ use syrinx_search::{SearchHit, SearchResults, Target};
 
 /// Row text is cut here so one long title cannot stall layout.
 pub const ROW_TEXT_LIMIT: usize = 160;
-/// The preview shows more of an address, but still a bounded amount.
-pub const PREVIEW_TEXT_LIMIT: usize = 600;
 
 /// Text clipped to a character limit, with highlight ranges that are valid for it.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -181,83 +179,14 @@ fn saved_page_of(
     (live_instance(model, saved) == Some(id)).then_some(saved)
 }
 
-/// The typed row's name when the text is a search, shared by the row and its preview.
+/// The typed row's name when the text is a search.
 pub fn search_label(entry: &str) -> String {
     format!("{entry} — Search the web")
 }
 
-/// The typed row's name when the text is an address, shared by the row and its preview.
+/// The typed row's name when the text is an address.
 pub fn address_label(entry: &str, address: &str) -> String {
     format!("{entry} — Go to {address}")
-}
-
-/// What the preview pane says about the selected row.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct Preview {
-    pub kind: &'static str,
-    pub title: Highlighted,
-    pub detail: Option<Highlighted>,
-    pub hint: String,
-}
-
-impl Preview {
-    pub fn address(entry: &str, address: &str) -> Self {
-        Self {
-            kind: "Address",
-            title: highlight(&address_label(entry, address), &[], PREVIEW_TEXT_LIMIT),
-            detail: None,
-            hint: "Enter opens this address in the current tab. Matches, if any, are below it."
-                .to_owned(),
-        }
-    }
-
-    pub fn search(entry: &str) -> Self {
-        Self {
-            kind: "Web search",
-            title: highlight(&search_label(entry), &[], PREVIEW_TEXT_LIMIT),
-            detail: None,
-            hint: "Enter searches the web, with Google, in the current tab. Matches, if any, are below it."
-                .to_owned(),
-        }
-    }
-
-    pub fn page(hit: &SearchHit) -> Self {
-        let (kind, hint) = match hit.target {
-            Target::Tab(_) => ("Open tab", "Enter switches to this tab."),
-            Target::Saved(_) => (
-                "Saved page",
-                "Enter switches to its open tab, or opens it if it is not loaded.",
-            ),
-            Target::History(_) => ("History", "Enter opens this page."),
-            Target::Command(_) => ("Command", "Enter runs this command."),
-        };
-        let detail = (!hit.title.is_empty() && !hit.address.is_empty())
-            .then(|| highlight(&hit.address, &hit.address_matches, PREVIEW_TEXT_LIMIT));
-        Self {
-            kind,
-            title: row_title(hit, PREVIEW_TEXT_LIMIT),
-            detail,
-            hint: hint.to_owned(),
-        }
-    }
-
-    pub fn command(hit: &SearchHit, plugin: Option<&str>, shortcut: Option<String>) -> Self {
-        let kind = if plugin.is_some() {
-            "Plugin action"
-        } else {
-            "Browser command"
-        };
-        let hint = match shortcut {
-            Some(shortcut) => format!("Enter runs it here; {shortcut} also runs it."),
-            None => "Enter runs it here.".to_owned(),
-        };
-        Self {
-            kind,
-            title: highlight(&hit.title, &hit.title_matches, PREVIEW_TEXT_LIMIT),
-            detail: plugin.map(|plugin| highlight(plugin, &[], PREVIEW_TEXT_LIMIT)),
-            hint,
-        }
-    }
 }
 
 #[cfg(test)]
@@ -319,9 +248,6 @@ mod tests {
         let title = row_title(&untitled, ROW_TEXT_LIMIT);
         assert_eq!(title.text, "https://arrange.example.test/");
         assert_eq!(title.ranges, vec![Range { start: 0, end: 5 }]);
-        let preview = Preview::page(&untitled);
-        assert_eq!(preview.detail, None);
-        assert_eq!(preview.kind, "Open tab");
     }
 
     #[test]
@@ -499,10 +425,6 @@ mod tests {
         assert_eq!(
             address_label("example.com", "https://example.com/"),
             "example.com — Go to https://example.com/"
-        );
-        assert_eq!(
-            Preview::search("youtube").title.text,
-            "youtube — Search the web"
         );
     }
 }

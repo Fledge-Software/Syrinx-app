@@ -1,6 +1,8 @@
 //! Builds the synthetic test plugins in `tests/fixtures/plugins` once per test
 //! run, for `wasm32-wasip2`, and hands out their bytes.
 
+pub mod sha256;
+
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::Command;

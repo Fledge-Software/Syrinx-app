@@ -23,6 +23,8 @@ use syrinx_store::{
     StoreError,
 };
 
+mod cache;
+
 use crate::lifecycle::answer;
 use crate::package::{manifest_text, register};
 use crate::support::{self, FULL};
@@ -151,12 +153,12 @@ fn close(runtime: OwnerRuntime, store: Arc<Store>) {
 fn shutdown_hands_back_every_event_still_queued() {
     let temp = TempStore::new();
     let store = temp.open();
-    let unused =
-        OwnerRuntime::start(Arc::clone(&store), "0.1.0-owner", DenyList::new()).expect("starts");
+    let unused = OwnerRuntime::start(Arc::clone(&store), "0.1.0-owner", DenyList::new(), None)
+        .expect("starts");
     assert!(unused.shutdown().is_empty(), "no worker ever ran");
 
-    let mut runtime =
-        OwnerRuntime::start(Arc::clone(&store), "0.1.0-owner", DenyList::new()).expect("starts");
+    let mut runtime = OwnerRuntime::start(Arc::clone(&store), "0.1.0-owner", DenyList::new(), None)
+        .expect("starts");
     install(&mut runtime, "test", STORAGE);
     runtime
         .grant("test", CapabilityKind::Storage, 20)
@@ -198,8 +200,8 @@ fn shutdown_hands_back_every_event_still_queued() {
 fn the_test_plugin_runs_through_activation_commands_views_and_a_restart() {
     let temp = TempStore::new();
     let store = temp.open();
-    let mut runtime =
-        OwnerRuntime::start(Arc::clone(&store), "0.1.0-owner", DenyList::new()).expect("starts");
+    let mut runtime = OwnerRuntime::start(Arc::clone(&store), "0.1.0-owner", DenyList::new(), None)
+        .expect("starts");
     install(&mut runtime, "test", STORAGE);
     runtime
         .grant("test", CapabilityKind::Storage, 20)
@@ -239,8 +241,8 @@ fn the_test_plugin_runs_through_activation_commands_views_and_a_restart() {
 
     // After a restart the grant and the setting are still there, with no new grant.
     let store = temp.open();
-    let mut runtime =
-        OwnerRuntime::start(Arc::clone(&store), "0.1.0-owner", DenyList::new()).expect("restarts");
+    let mut runtime = OwnerRuntime::start(Arc::clone(&store), "0.1.0-owner", DenyList::new(), None)
+        .expect("restarts");
     let registry = registry("test", STORAGE);
     runtime
         .load(
@@ -264,8 +266,8 @@ fn the_test_plugin_runs_through_activation_commands_views_and_a_restart() {
 fn one_plugins_grant_is_not_anothers_and_a_revocation_stops_the_next_call() {
     let temp = TempStore::new();
     let store = temp.open();
-    let mut runtime =
-        OwnerRuntime::start(Arc::clone(&store), "0.1.0-owner", DenyList::new()).expect("starts");
+    let mut runtime = OwnerRuntime::start(Arc::clone(&store), "0.1.0-owner", DenyList::new(), None)
+        .expect("starts");
     install(&mut runtime, "test", STORAGE);
     install(&mut runtime, "other", STORAGE);
     runtime
@@ -297,8 +299,8 @@ fn one_plugins_grant_is_not_anothers_and_a_revocation_stops_the_next_call() {
 fn removing_a_plugin_stops_it_and_deletes_everything_keyed_to_it() {
     let temp = TempStore::new();
     let store = temp.open();
-    let mut runtime =
-        OwnerRuntime::start(Arc::clone(&store), "0.1.0-owner", DenyList::new()).expect("starts");
+    let mut runtime = OwnerRuntime::start(Arc::clone(&store), "0.1.0-owner", DenyList::new(), None)
+        .expect("starts");
     install(&mut runtime, "test", STORAGE);
     runtime
         .grant("test", CapabilityKind::Storage, 20)
@@ -320,8 +322,8 @@ fn removing_a_plugin_stops_it_and_deletes_everything_keyed_to_it() {
 fn only_requested_sandboxed_capabilities_are_granted_and_store_refusals_are_typed() {
     let temp = TempStore::new();
     let store = temp.open();
-    let mut runtime =
-        OwnerRuntime::start(Arc::clone(&store), "0.1.0-owner", DenyList::new()).expect("starts");
+    let mut runtime = OwnerRuntime::start(Arc::clone(&store), "0.1.0-owner", DenyList::new(), None)
+        .expect("starts");
     let terminal = "[[capabilities]]\nkind = \"terminal\"\ntrust = \"full\"\nreason = \"Runs synthetic builds.\"\nrequired = false\n";
     install(&mut runtime, "test", &format!("{STORAGE}{terminal}"));
     assert_eq!(
@@ -365,7 +367,8 @@ fn a_folder_is_granted_only_under_the_folder_capability_and_outside_the_deny_lis
     let mut deny = DenyList::new();
     deny.protect(Protected::SyrinxData, &protected);
     let store = temp.open();
-    let mut runtime = OwnerRuntime::start(Arc::clone(&store), "0.1.0-owner", deny).expect("starts");
+    let mut runtime =
+        OwnerRuntime::start(Arc::clone(&store), "0.1.0-owner", deny, None).expect("starts");
     install(&mut runtime, "test", FOLDER);
 
     assert_eq!(
@@ -399,7 +402,7 @@ fn a_folder_is_granted_only_under_the_folder_capability_and_outside_the_deny_lis
 }
 
 fn start(store: &Arc<Store>) -> OwnerRuntime {
-    OwnerRuntime::start(Arc::clone(store), "0.1.0-owner", DenyList::new()).expect("starts")
+    OwnerRuntime::start(Arc::clone(store), "0.1.0-owner", DenyList::new(), None).expect("starts")
 }
 
 /// What `recall` read back, from `plugin`'s log.

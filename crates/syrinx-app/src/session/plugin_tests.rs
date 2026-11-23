@@ -1,8 +1,9 @@
 //! Proves the session starts the plugin runtime from its own store at start-up (#136), that a
-//! grant it cannot read never stops browsing, and that the test plugin runs through the
-//! session's own route: activation, a command, a view opened and closed, and shutdown; and that
-//! the workers' events are reported once, without plugin text, as the loop wakes and at close
-//! (#268).
+//! grant it cannot read never stops browsing, that the test plugin runs through the
+//! session's own route: activation, a command, a view opened and closed, and shutdown, that
+//! its compiled code is kept under the real SHA-256 and loaded after a restart (#137), and
+//! that the runtime's events, cache problems included, are reported once, without plugin
+//! text, as the loop wakes and at close (#268).
 
 use syrinx_core::CommandRegistry;
 use syrinx_plugin_host::bindings::syrinx::plugin::types::Outcome;
@@ -14,8 +15,8 @@ use syrinx_plugin_host::manifest::{
 use syrinx_plugin_host::owner::{OwnerError, OwnerRuntime};
 use syrinx_plugin_host::session::CallResult;
 use syrinx_plugin_host::worker::{PluginEvent, PluginStatus, StopReason};
-use syrinx_plugin_host::{Failure, HostError};
-use syrinx_plugin_host::{PluginRegistry, SignedIdentity, check_signed};
+use syrinx_plugin_host::{CacheError, Failure, HostError, Refusal};
+use syrinx_plugin_host::{CompileCounts, PluginRegistry, SignedIdentity, check_signed};
 use syrinx_store::{PluginInstall, PluginState};
 
 use super::*;
@@ -64,11 +65,53 @@ fn install_record() -> PluginInstall {
     }
 }
 
+/// The session's store and plugin runtime over the fixture's folder, with the cache folder
+/// beside the database, as `serve_accepted` starts them.
+fn started(fixture: &Fixture) -> (Arc<Store>, plugins::SessionPlugins) {
+    let (_lease, store, session_plugins) = started_with_lease(fixture);
+    (store, session_plugins)
+}
+
+/// As `started`, keeping the lease for a test that also opens the session's other parts.
+fn started_with_lease(
+    fixture: &Fixture,
+) -> (
+    Arc<WindowsDirectoryLease>,
+    Arc<Store>,
+    plugins::SessionPlugins,
+) {
+    let lease = Arc::new(WindowsDirectoryLease::prepare(&fixture.0).expect("the synthetic folder"));
+    let store = Arc::new(Store::open(lease.clone()).expect("the synthetic store"));
+    let cache_folder = lease.cache_folder(plugins::CACHE_FOLDER);
+    let (session_plugins, problems) = plugins::start(&store, &fixture.0, cache_folder);
+    assert!(problems.is_empty(), "{problems:?}");
+    (lease, store, session_plugins.expect("the runtime starts"))
+}
+
+/// Activate the test plugin with an empty call; it answers once activation is done.
+fn activate(runtime: &mut OwnerRuntime) {
+    let answered = runtime
+        .call("test", |_session| Ok(()))
+        .expect("queued")
+        .wait(Duration::from_secs(60))
+        .expect("answered");
+    assert_eq!(answered, Ok(()));
+}
+
 #[test]
 fn the_test_plugin_runs_through_the_sessions_own_route() {
     let fixture = Fixture::new();
-    let (lease, store) = synthetic_store(&fixture);
-    let mut runtime = installed_runtime(&store, &fixture);
+    create_database(&fixture);
+    let (store, mut session_plugins) = started(&fixture);
+    let runtime = &mut session_plugins.runtime;
+    let mut registry = PluginRegistry::new();
+    let registered = registered_fixture(&mut registry);
+    runtime
+        .install(registered, Arc::from(full_component()), install_record())
+        .expect("installed");
+    runtime
+        .grant("test", CapabilityKind::Storage, 20)
+        .expect("granted");
 
     let wait = Duration::from_secs(60);
     let ran = runtime
@@ -92,14 +135,20 @@ fn the_test_plugin_runs_through_the_sessions_own_route() {
         store.plugin_setting("test", "test.greeting"),
         Ok(Some(b"hello".to_vec()))
     );
-    assert_eq!(plugins::close(Some(runtime), store), Ok(()));
-    drop(lease);
+    assert_eq!(plugins::close(Some(session_plugins), store), Ok(()));
     fixture.cleanup();
 }
-
-/// A runtime over `store` with the full fixture installed and granted storage.
-fn installed_runtime(store: &Arc<Store>, fixture: &Fixture) -> OwnerRuntime {
-    let mut runtime = plugins::start(store, &fixture.0).expect("the runtime starts");
+/// A fresh synthetic session with the full fixture installed and granted storage, and its lease.
+fn installed(
+    fixture: &Fixture,
+) -> (
+    Arc<WindowsDirectoryLease>,
+    Arc<Store>,
+    plugins::SessionPlugins,
+) {
+    create_database(fixture);
+    let (lease, store, mut session_plugins) = started_with_lease(fixture);
+    let runtime = &mut session_plugins.runtime;
     let mut registry = PluginRegistry::new();
     let registered = registered_fixture(&mut registry);
     runtime
@@ -109,15 +158,7 @@ fn installed_runtime(store: &Arc<Store>, fixture: &Fixture) -> OwnerRuntime {
     runtime
         .grant("test", CapabilityKind::Storage, 20)
         .expect("granted");
-    runtime
-}
-
-/// A fresh synthetic store at the current schema, and its lease.
-fn synthetic_store(fixture: &Fixture) -> (Arc<WindowsDirectoryLease>, Arc<Store>) {
-    create_database(fixture);
-    let lease = Arc::new(WindowsDirectoryLease::prepare(&fixture.0).expect("the synthetic folder"));
-    let store = Arc::new(Store::open(lease.clone()).expect("the synthetic store"));
-    (lease, store)
+    (lease, store, session_plugins)
 }
 
 /// Run one of the fixture's commands and wait for its answer.
@@ -151,15 +192,17 @@ const TRAPPED: &str = "Plugin test stopped: commands.run trapped";
 #[test]
 fn a_trap_is_reported_once_and_the_next_drain_is_empty() {
     let fixture = Fixture::new();
-    let (lease, store) = synthetic_store(&fixture);
-    let mut runtime = installed_runtime(&store, &fixture);
-    trap_and_restart(&mut runtime);
-    assert_eq!(plugins::drain(&runtime), vec![TRAPPED.to_owned()]);
+    let (lease, store, mut session_plugins) = installed(&fixture);
+    trap_and_restart(&mut session_plugins.runtime);
+    assert_eq!(
+        plugins::drain(&session_plugins.runtime),
+        vec![TRAPPED.to_owned()]
+    );
     assert!(
-        plugins::drain(&runtime).is_empty(),
+        plugins::drain(&session_plugins.runtime).is_empty(),
         "nothing is reported twice"
     );
-    assert_eq!(plugins::close(Some(runtime), store), Ok(()));
+    assert_eq!(plugins::close(Some(session_plugins), store), Ok(()));
     drop(lease);
     fixture.cleanup();
 }
@@ -167,18 +210,17 @@ fn a_trap_is_reported_once_and_the_next_drain_is_empty() {
 #[test]
 fn the_session_loop_empties_the_plugin_queue_as_it_wakes() {
     let fixture = Fixture::new();
-    let (lease, store) = synthetic_store(&fixture);
-    let mut runtime = installed_runtime(&store, &fixture);
-    trap_and_restart(&mut runtime);
+    let (lease, store, mut session_plugins) = installed(&fixture);
+    trap_and_restart(&mut session_plugins.runtime);
     assert_eq!(
-        runtime.status("test"),
+        session_plugins.runtime.status("test"),
         Some(PluginStatus::Active),
         "restarted"
     );
     let journal = DeletionJournal::open(&lease).expect("open synthetic journal");
     let page_text = page_text::PageText::open(&lease);
     let mut worker = Worker::restore(&store, journal, page_text).expect("restore synthetic worker");
-    worker.plugins = Some(runtime);
+    worker.plugins = Some(session_plugins);
     // One ordinary command, then the window goes away: the real loop wakes for each.
     let (commands, receiver) = mpsc::channel();
     commands
@@ -191,13 +233,13 @@ fn the_session_loop_empties_the_plugin_queue_as_it_wakes() {
     let (mut usage, _) =
         UsageCollector::load(Arc::default(), &fixture.0, local_today(), Instant::now());
     assert_eq!(worker.serve(&store, receiver, &sender, &mut usage), Ok(()));
-    let runtime = worker.plugins.take().expect("the worker keeps the runtime");
+    let session_plugins = worker.plugins.take().expect("the worker keeps the runtime");
     assert!(
-        plugins::drain(&runtime).is_empty(),
+        plugins::drain(&session_plugins.runtime).is_empty(),
         "the loop took the queued trap"
     );
     drop(worker);
-    assert_eq!(plugins::close(Some(runtime), store), Ok(()));
+    assert_eq!(plugins::close(Some(session_plugins), store), Ok(()));
     drop(lease);
     fixture.cleanup();
 }
@@ -222,6 +264,11 @@ fn every_event_is_described_without_text_from_the_plugin_or_the_system() {
         plugin: plugin(),
         reason,
     };
+    let cached = |error| PluginEvent::Cache {
+        plugin: Some(plugin()),
+        error,
+    };
+    let refused_entry = |refusal| cached(CacheError::Refused(refusal));
     let events = vec![
         settled(Outcome::Done(Some(SENTINEL.to_owned()))),
         settled(Outcome::Failed(refused())),
@@ -238,6 +285,25 @@ fn every_event_is_described_without_text_from_the_plugin_or_the_system() {
         stopped(StopReason::Shutdown),
         stopped(StopReason::Uninstalled),
         stopped(StopReason::CapabilityRevoked(CapabilityKind::Storage)),
+        refused_entry(Refusal::Missing),
+        refused_entry(Refusal::Length),
+        refused_entry(Refusal::Hash),
+        refused_entry(Refusal::Deserialize(SENTINEL.to_owned())),
+        refused_entry(Refusal::Checks(SENTINEL.to_owned())),
+        refused_entry(Refusal::OtherBytes),
+        cached(CacheError::File(std::io::ErrorKind::PermissionDenied)),
+        cached(CacheError::NotAFile),
+        cached(CacheError::Unnamed),
+        cached(CacheError::Store(SENTINEL.to_owned())),
+        cached(CacheError::Hash(SENTINEL.to_owned())),
+        PluginEvent::Cache {
+            plugin: None,
+            error: CacheError::Serialize(SENTINEL.to_owned()),
+        },
+        PluginEvent::PrepareFailed {
+            plugin: plugin(),
+            error: HostError::Malformed(SENTINEL.to_owned()),
+        },
     ];
     let lines = plugins::describe_all(&events);
     assert_eq!(
@@ -255,6 +321,19 @@ fn every_event_is_described_without_text_from_the_plugin_or_the_system() {
             "Plugin test was deactivated: Syrinx is closing",
             "Plugin test was deactivated: the plugin was uninstalled",
             "Plugin test was deactivated: the required storage capability was revoked",
+            "Plugin test: its compiled code was not kept or used: an entry was refused (its file is missing)",
+            "Plugin test: its compiled code was not kept or used: an entry was refused (its length is wrong)",
+            "Plugin test: its compiled code was not kept or used: an entry was refused (its SHA-256 is wrong)",
+            "Plugin test: its compiled code was not kept or used: an entry was refused (wasmtime could not load it)",
+            "Plugin test: its compiled code was not kept or used: an entry was refused (it failed the checks a compile passes)",
+            "Plugin test: its compiled code was not kept or used: an entry was refused (it was compiled from other bytes)",
+            "Plugin test: its compiled code was not kept or used: a cache file failed (permission denied)",
+            "Plugin test: its compiled code was not kept or used: something other than a file is in its folder",
+            "Plugin test: its compiled code was not kept or used: the plugin id cannot name a cache file",
+            "Plugin test: its compiled code was not kept or used: the store could not read or keep its record",
+            "Plugin test: its compiled code was not kept or used: its SHA-256 could not be computed",
+            "The compiled plugin code cache could not be used: the compiled code could not be written out",
+            "Plugin test could not be compiled in the background; its first use compiles it",
         ]
     );
     assert!(lines.iter().all(|line| !line.contains("secret-7f3a")));
@@ -263,19 +342,171 @@ fn every_event_is_described_without_text_from_the_plugin_or_the_system() {
 #[test]
 fn shutdown_hands_back_what_stopping_the_plugins_raised() {
     let fixture = Fixture::new();
-    let (lease, store) = synthetic_store(&fixture);
-    let mut runtime = installed_runtime(&store, &fixture);
+    let (lease, store, mut session_plugins) = installed(&fixture);
     assert!(
-        matches!(run(&mut runtime, "test.echo"), Ok(Ok(()))),
+        matches!(run(&mut session_plugins.runtime, "test.echo"), Ok(Ok(()))),
         "the fixture is active"
     );
+    let plugins::SessionPlugins {
+        runtime,
+        cache_folder,
+    } = session_plugins;
     assert_eq!(
         plugins::describe_all(&runtime.shutdown()),
         vec!["Plugin test was deactivated: Syrinx is closing".to_owned()]
     );
+    drop(cache_folder);
     let store = Arc::try_unwrap(store).unwrap_or_else(|_| panic!("nothing else holds the store"));
     assert_eq!(store.shutdown(), Ok(()));
     drop(lease);
+    fixture.cleanup();
+}
+
+#[test]
+fn compiled_code_is_kept_under_its_sha256_and_loaded_after_a_restart() {
+    let fixture = Fixture::new();
+    create_database(&fixture);
+    let component = full_component();
+    let record = PluginInstall {
+        module_sha256: syrinx_update::sha256(component).expect("SHA-256"),
+        ..install_record()
+    };
+    let (store, mut session_plugins) = started(&fixture);
+    let mut registry = PluginRegistry::new();
+    let registered = registered_fixture(&mut registry);
+    session_plugins
+        .runtime
+        .install(registered, Arc::from(component), record)
+        .expect("installed");
+    activate(&mut session_plugins.runtime);
+    let compiled = CompileCounts {
+        compiled: 1,
+        loaded: 0,
+    };
+    assert_eq!(session_plugins.runtime.compile_counts(), compiled);
+    assert!(session_plugins.runtime.take_events().is_empty());
+    let kept = store
+        .plugin_compiled("test")
+        .expect("the record reads")
+        .expect("a record");
+    assert_eq!(kept.syrinx_version, env!("CARGO_PKG_VERSION"));
+    let entry = fixture
+        .0
+        .join(plugins::CACHE_FOLDER)
+        .join("plugin-test.cwasm");
+    let bytes = fs::read(&entry).expect("the cached entry");
+    assert_eq!(
+        kept.artifact_sha256,
+        syrinx_update::sha256(&bytes).expect("SHA-256")
+    );
+    assert_eq!(plugins::close(Some(session_plugins), store), Ok(()));
+
+    let (store, mut session_plugins) = started(&fixture);
+    let mut registry = PluginRegistry::new();
+    let registered = registered_fixture(&mut registry);
+    session_plugins
+        .runtime
+        .load(registered, Arc::from(component))
+        .expect("loaded");
+    activate(&mut session_plugins.runtime);
+    let loaded = CompileCounts {
+        compiled: 0,
+        loaded: 1,
+    };
+    assert_eq!(session_plugins.runtime.compile_counts(), loaded);
+    assert_eq!(plugins::close(Some(session_plugins), store), Ok(()));
+    fixture.cleanup();
+}
+
+/// Install the fixture with its real SHA-256 and activate it, leaving a warm cache entry.
+fn warm_cache(fixture: &Fixture, component: &[u8]) {
+    let record = PluginInstall {
+        module_sha256: syrinx_update::sha256(component).expect("SHA-256"),
+        ..install_record()
+    };
+    let (store, mut session_plugins) = started(fixture);
+    let mut registry = PluginRegistry::new();
+    let registered = registered_fixture(&mut registry);
+    session_plugins
+        .runtime
+        .install(registered, Arc::from(component), record)
+        .expect("installed");
+    activate(&mut session_plugins.runtime);
+    assert!(plugins::drain(&session_plugins.runtime).is_empty());
+    assert_eq!(plugins::close(Some(session_plugins), store), Ok(()));
+}
+
+#[test]
+fn a_damaged_cache_entry_is_reported_while_the_plugin_still_loads() {
+    let fixture = Fixture::new();
+    create_database(&fixture);
+    let component = full_component();
+    warm_cache(&fixture, component);
+    // One flipped byte in the middle of the kept entry: only its SHA-256 shows it.
+    let entry = fixture
+        .0
+        .join(plugins::CACHE_FOLDER)
+        .join("plugin-test.cwasm");
+    let mut bytes = fs::read(&entry).expect("the cached entry");
+    let middle = bytes.len() / 2;
+    bytes[middle] ^= 0x01;
+    fs::write(&entry, bytes).expect("rewrite the cached entry");
+
+    let (store, mut session_plugins) = started(&fixture);
+    let mut registry = PluginRegistry::new();
+    let registered = registered_fixture(&mut registry);
+    session_plugins
+        .runtime
+        .load(registered, Arc::from(component))
+        .expect("loaded");
+    activate(&mut session_plugins.runtime);
+    assert_eq!(
+        plugins::drain(&session_plugins.runtime),
+        vec![
+            "Plugin test: its compiled code was not kept or used: an entry was refused (its SHA-256 is wrong)"
+                .to_owned()
+        ]
+    );
+    assert_eq!(
+        session_plugins.runtime.status("test"),
+        Some(PluginStatus::Active),
+        "the plugin compiled and runs"
+    );
+    assert_eq!(plugins::close(Some(session_plugins), store), Ok(()));
+    fixture.cleanup();
+}
+
+const PREPARE_FAILED: &str =
+    "Plugin test could not be compiled in the background; its first use compiles it";
+
+#[test]
+fn a_failed_background_compile_is_reported() {
+    let fixture = Fixture::new();
+    create_database(&fixture);
+    let (store, mut session_plugins) = started(&fixture);
+    let mut registry = PluginRegistry::new();
+    let registered = registered_fixture(&mut registry);
+    // Bytes no compiler accepts, under the fixture's real manifest.
+    session_plugins
+        .runtime
+        .install(
+            registered,
+            Arc::from(&b"not a component"[..]),
+            install_record(),
+        )
+        .expect("installed");
+    let deadline = Instant::now() + Duration::from_secs(60);
+    let mut lines = Vec::new();
+    while !lines.iter().any(|line| line == PREPARE_FAILED) {
+        assert!(
+            Instant::now() < deadline,
+            "the failed compile is never reported"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+        lines.extend(plugins::drain(&session_plugins.runtime));
+    }
+    assert_eq!(lines, vec![PREPARE_FAILED.to_owned()]);
+    assert_eq!(plugins::close(Some(session_plugins), store), Ok(()));
     fixture.cleanup();
 }
 

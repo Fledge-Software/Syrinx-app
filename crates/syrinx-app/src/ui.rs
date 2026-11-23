@@ -1493,7 +1493,8 @@ impl BrowserView {
             }
             PaletteEvent::Activate(Target::Command(_))
             | PaletteEvent::Query { .. }
-            | PaletteEvent::Shortcut(_) => {}
+            | PaletteEvent::Shortcut(_)
+            | PaletteEvent::Resized => {}
         }
     }
 
@@ -1558,6 +1559,8 @@ impl BrowserView {
                     self.shortcut(shortcut, window, cx);
                 });
             }
+            // What the popup lists changed its height.
+            PaletteEvent::Resized => self.fit_palette(window, cx),
             PaletteEvent::Closed => {
                 self.focus_page(window, cx);
             }
@@ -2635,7 +2638,9 @@ mod palette_shortcut_tests {
                             completed = true;
                             retained_popup = None;
                         }
-                        PaletteEvent::Query { .. } => panic!("unexpected query in refocus race"),
+                        PaletteEvent::Query { .. } | PaletteEvent::Resized => {
+                            panic!("unexpected query or resize in refocus race")
+                        }
                     }
                 }
                 assert!(

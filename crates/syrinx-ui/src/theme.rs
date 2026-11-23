@@ -533,6 +533,11 @@ fn recolour(drawn: &mut Palette, background: Color, mode: Mode) {
     ] {
         *role = shade(*role);
     }
+    // Glass's panel is near-opaque, not opaque; it takes the hue too and keeps its opacity (#265).
+    if !drawn.panel.is_opaque() {
+        let opacity = drawn.panel.alpha;
+        drawn.panel = shade(drawn.panel.with_alpha_byte(0xFF)).with_alpha_byte(opacity);
+    }
 }
 
 /// Whether `role` is a text or icon role that is lightened or darkened to stay readable.
@@ -771,6 +776,31 @@ mod tests {
         assert_eq!(preset.text_muted, canvas.text_muted);
         assert_eq!(preset.text, canvas.text);
         assert!(worst_ratio(&preset, "text_muted", "pill") < contrast::TEXT_MINIMUM);
+    }
+
+    #[test]
+    fn a_saved_see_through_theme_gives_the_palette_panel_its_own_hue() {
+        // A warm background under Acrylic: the panel must not stay the canvas's navy (#265).
+        let accent = Accent::default();
+        let warm = ThemeSpec {
+            background: Color::hex(0x2A1C12),
+            ..ThemeSpec::glass()
+        };
+        let canvas = palette(PaletteId::Glass, accent);
+        let drawn = warm.palette(accent, false);
+        let (theme_hue, _) = warm.background.hue_and_saturation();
+        let (panel_hue, _) = drawn.panel.hue_and_saturation();
+        assert!(
+            (panel_hue - theme_hue).abs() < 3.,
+            "panel hue {panel_hue} follows the theme's {theme_hue}"
+        );
+        assert_eq!(drawn.panel.alpha, canvas.panel.alpha, "opacity is kept");
+        // The preset still draws the canvas's own panel.
+        assert_eq!(warm.preset_palette(accent, false).panel, canvas.panel);
+        for role in ["text", "text_secondary_bright", "text_muted"] {
+            let ratio = worst_ratio(&drawn, role, "panel");
+            assert!(ratio >= contrast::TEXT_MINIMUM, "{role} on panel: {ratio}");
+        }
     }
 
     #[test]

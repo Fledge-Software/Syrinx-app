@@ -45,7 +45,9 @@ use syrinx_core::{
     TabError, TabId, TabKind, TabMetadata, TabModel, TabModelSnapshot, TabSnapshot,
     commit_bookmark_import,
 };
-use syrinx_platform::{DeletionJournal, JournalError, StartupStorage, WindowsDirectoryLease};
+use syrinx_platform::{
+    CacheFolder, DeletionJournal, JournalError, StartupStorage, WindowsDirectoryLease,
+};
 use syrinx_search::{
     Catalogue, Entry, Scope, SearchError, SearchPolicy, SearchResults, Target, Usage,
     fulltext::FullTextError,
@@ -405,6 +407,8 @@ pub enum SessionError {
     Usage(UsageError),
     /// The plugin runtime could not start; browsing goes on without plugins (#136).
     Plugins(syrinx_plugin_host::owner::OwnerError),
+    /// The compiled-code cache's folder was refused; plugins compile at each activation (#137).
+    PluginCache(LocationError),
     NoActiveTab,
     /// The session worker could not take a request, or stopped before answering it.
     StorageUnavailable,
@@ -476,6 +480,9 @@ impl fmt::Display for SessionError {
             Self::Deletion(error) => write!(formatter, "Cannot clear history safely: {error}"),
             Self::Usage(error) => write!(formatter, "{error}"),
             Self::Plugins(error) => write!(formatter, "Plugins are unavailable: {error}"),
+            Self::PluginCache(error) => {
+                write!(formatter, "Compiled plugin code cannot be kept: {error}")
+            }
             Self::NoActiveTab => formatter.write_str("There is no active page to save"),
             Self::StorageUnavailable => formatter.write_str("Local storage is unavailable"),
             Self::HistoryUnavailable => {
@@ -626,13 +633,12 @@ fn run(
     events: &UnboundedSender<SessionEvent>,
 ) -> Result<(), SessionError> {
     let mut startup = StartupFacts::default();
-    let Some((store, mut worker)) = startup_session(&data_dir, &commands, events, &mut startup)?
-    else {
+    let Some(mut opened) = startup_session(&data_dir, &commands, events, &mut startup)? else {
         return Ok(());
     };
-    worker.acceptance = acceptance;
+    opened.worker.acceptance = acceptance;
     // The guard has accepted the folder; `serve_accepted` keeps any stop beside the database.
-    serve_accepted(usage, startup, store, worker, commands, events, &data_dir)
+    serve_accepted(usage, startup, opened, commands, events, &data_dir)
 }
 
 /// Serves commands on the accepted folder. The one place a stop is kept in the log, written
@@ -640,20 +646,24 @@ fn run(
 fn serve_accepted(
     usage: Arc<UsageRecorder>,
     startup: StartupFacts,
-    store: Store,
-    mut worker: Worker,
+    opened: OpenedSession,
     commands: mpsc::Receiver<SessionCommand>,
     events: &UnboundedSender<SessionEvent>,
     data_dir: &std::path::Path,
 ) -> Result<(), SessionError> {
+    let OpenedSession {
+        store,
+        mut worker,
+        plugin_cache,
+    } = opened;
     worker.survival.keep_in(data_dir.to_path_buf());
     // The session owns the plugin runtime, which shares its store; plugins never stop browsing.
     let store = Arc::new(store);
-    let (plugins, started) = match plugins::start(&store, data_dir) {
-        Ok(plugins) => (Some(plugins), Ok(())),
-        Err(error) => (None, emit_recoverable(events, SessionError::Plugins(error))),
-    };
+    let (plugins, problems) = plugins::start(&store, data_dir, plugin_cache);
     worker.plugins = plugins;
+    let started = problems
+        .into_iter()
+        .try_for_each(|error| emit_recoverable(events, error));
     let result = started.and_then(|()| {
         serve_counted(
             &usage,
@@ -767,7 +777,7 @@ fn startup_session(
     commands: &mpsc::Receiver<SessionCommand>,
     events: &UnboundedSender<SessionEvent>,
     facts: &mut StartupFacts,
-) -> Result<Option<(Store, Worker)>, SessionError> {
+) -> Result<Option<OpenedSession>, SessionError> {
     // The guarded preflight retains either the existing primary or the exact recovery offer.
     let confirmed = match recovery::prepare_startup(data_dir)? {
         StartupStorage::Ready(lease) => match open_session(lease, false) {
@@ -805,7 +815,7 @@ fn open_with_repair(
     error: SessionError,
     commands: &mpsc::Receiver<SessionCommand>,
     events: &UnboundedSender<SessionEvent>,
-) -> Result<Option<(Store, Worker)>, SessionError> {
+) -> Result<Option<OpenedSession>, SessionError> {
     let Some(reason) = history_repair::repairable(&error) else {
         return Err(error);
     };
@@ -818,16 +828,25 @@ fn open_with_repair(
     open_session(lease, true).map(Some)
 }
 
+/// What a successful open hands the session: the store, the restored worker, and the
+/// compiled-code cache's folder opened under the same lease (#137).
+struct OpenedSession {
+    store: Store,
+    worker: Worker,
+    plugin_cache: Result<CacheFolder, LocationError>,
+}
+
 /// Opens the store and the deletion journal; `repair` rebuilds the journal and clears all
 /// history first, which the owner has confirmed.
-fn open_session(
-    lease: WindowsDirectoryLease,
-    repair: bool,
-) -> Result<(Store, Worker), SessionError> {
+fn open_session(lease: WindowsDirectoryLease, repair: bool) -> Result<OpenedSession, SessionError> {
     let lease = Arc::new(lease);
     let store = Store::open(lease.clone()).map_err(SessionError::Store)?;
     match open_worker(&store, &lease, repair) {
-        Ok(worker) => Ok((store, worker)),
+        Ok(worker) => Ok(OpenedSession {
+            store,
+            worker,
+            plugin_cache: lease.cache_folder(plugins::CACHE_FOLDER),
+        }),
         Err(error) => {
             // Recovery cannot overlap live connections or conceal a failed close.
             finish_store(Err(error), store.shutdown())
@@ -920,7 +939,7 @@ struct Worker {
     /// Whether the window missed the zoom levels a clear applied; an idle tick resends them (#196).
     zoom_levels: zoom_levels::ZoomLevelsReport,
     /// The plugin runtime while the loop serves; its events are reported at each wake-up (#268).
-    plugins: Option<syrinx_plugin_host::owner::OwnerRuntime>,
+    plugins: Option<plugins::SessionPlugins>,
 }
 
 /// The tabs a command created, and those of them that put back an earlier tab's page.

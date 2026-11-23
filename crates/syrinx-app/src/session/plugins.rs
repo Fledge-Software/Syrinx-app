@@ -1,17 +1,21 @@
 //! Starts and stops the plugin runtime the session owns (#136): the owner's grants read from
 //! the store, the deny list built from Syrinx's own folders and the system's, and the
-//! workers' events reported on the local diagnostic path (#268).
+//! compiled-code cache in its folder beside the database (#137), and the runtime's events
+//! reported on the local diagnostic path (#268).
 
 use std::ffi::OsString;
 use std::path::Path;
 use std::sync::Arc;
 
-use syrinx_plugin_host::Failure;
+use syrinx_platform::CacheFolder;
 use syrinx_plugin_host::bindings::syrinx::plugin::types::Outcome;
 use syrinx_plugin_host::grants::{DenyList, Protected};
-use syrinx_plugin_host::owner::{OwnerError, OwnerRuntime};
+use syrinx_plugin_host::owner::{CacheSetup, OwnerRuntime};
 use syrinx_plugin_host::worker::PluginEvent;
-use syrinx_store::{Store, StoreError};
+use syrinx_plugin_host::{CacheError, Failure, Refusal};
+use syrinx_store::{LocationError, Store, StoreError};
+
+use super::SessionError;
 
 /// Environment variables naming system folders no plugin may be granted, by kind. A
 /// variable this system does not set protects nothing.
@@ -24,21 +28,76 @@ const SYSTEM_FOLDERS: [(&str, Protected); 6] = [
     ("HOME", Protected::UserProfile),
 ];
 
-/// Read the owner's grants. No plugin is installed from a package yet (2d), so no plugin
-/// code, compiler or worker starts here; each starts on first use.
-pub(super) fn start(store: &Arc<Store>, state_dir: &Path) -> Result<OwnerRuntime, OwnerError> {
-    OwnerRuntime::start(
+/// The compiled-code cache's folder beside the database, under the storage lease (D13): local,
+/// never synced or roamed, and never copied into a backup.
+pub(super) const CACHE_FOLDER: &str = "PluginCache";
+
+/// The plugin runtime and the folder its compiled-code cache writes to; `close` stops the
+/// runtime before it releases the folder.
+pub(super) struct SessionPlugins {
+    pub(super) runtime: OwnerRuntime,
+    pub(super) cache_folder: Option<CacheFolder>,
+}
+
+/// Read the owner's grants and clear stale entries from the compiled-code cache in
+/// `cache_folder`; a refused folder leaves plugins compiling at each activation. Each problem
+/// is returned for the session to report: none stops browsing. No plugin is installed from a
+/// package yet (2d), so no plugin code, compiler or worker starts here.
+pub(super) fn start(
+    store: &Arc<Store>,
+    state_dir: &Path,
+    cache_folder: Result<CacheFolder, LocationError>,
+) -> (Option<SessionPlugins>, Vec<SessionError>) {
+    let mut problems = Vec::new();
+    let cache_folder = match cache_folder {
+        Ok(folder) => Some(folder),
+        Err(error) => {
+            problems.push(SessionError::PluginCache(error));
+            None
+        }
+    };
+    let cache = cache_folder.as_ref().map(|folder| CacheSetup {
+        folder: folder.path().to_path_buf(),
+        sha256: compiled_sha256,
+    });
+    let started = OwnerRuntime::start(
         Arc::clone(store),
         env!("CARGO_PKG_VERSION"),
         deny_list(state_dir),
-    )
+        cache,
+    );
+    match started {
+        Ok(runtime) => {
+            let plugins = SessionPlugins {
+                runtime,
+                cache_folder,
+            };
+            (Some(plugins), problems)
+        }
+        Err(error) => {
+            problems.push(SessionError::Plugins(error));
+            (None, problems)
+        }
+    }
 }
 
-/// Stop every plugin and report what the workers raised, stopping included, then hand back
-/// the store, which nothing else holds any more, for the session to close.
-pub(super) fn close(plugins: Option<OwnerRuntime>, store: Arc<Store>) -> Result<(), StoreError> {
-    if let Some(plugins) = plugins {
-        log_lines(describe_all(&plugins.shutdown()));
+/// SHA-256 for the compiled-code cache, from the audited implementation updates use.
+fn compiled_sha256(bytes: &[u8]) -> Result<[u8; 32], String> {
+    syrinx_update::sha256(bytes).map_err(|error| error.to_string())
+}
+
+/// Stop every plugin and report what the runtime raised, stopping included, release the
+/// cache folder, then hand back the store, which nothing else holds any more, for the
+/// session to close.
+pub(super) fn close(plugins: Option<SessionPlugins>, store: Arc<Store>) -> Result<(), StoreError> {
+    if let Some(SessionPlugins {
+        runtime,
+        cache_folder,
+    }) = plugins
+    {
+        log_lines(describe_all(&runtime.shutdown()));
+        // Only once no plugin can write to it.
+        drop(cache_folder);
     }
     match Arc::try_unwrap(store) {
         Ok(store) => store.shutdown(),
@@ -48,9 +107,9 @@ pub(super) fn close(plugins: Option<OwnerRuntime>, store: Arc<Store>) -> Result<
 }
 
 /// Report what the workers queued since the last look, so the queue never grows unread.
-pub(super) fn report_events(plugins: Option<&OwnerRuntime>) {
+pub(super) fn report_events(plugins: Option<&SessionPlugins>) {
     if let Some(plugins) = plugins {
-        log_lines(drain(plugins));
+        log_lines(drain(&plugins.runtime));
     }
 }
 
@@ -91,6 +150,23 @@ fn describe(event: &PluginEvent) -> String {
             // Every reason's text is the host's own.
             format!("Plugin {plugin} was deactivated: {reason}")
         }
+        PluginEvent::Cache {
+            plugin: Some(plugin),
+            error,
+        } => format!(
+            "Plugin {plugin}: its compiled code was not kept or used: {}",
+            cache_kind(error)
+        ),
+        PluginEvent::Cache {
+            plugin: None,
+            error,
+        } => format!(
+            "The compiled plugin code cache could not be used: {}",
+            cache_kind(error)
+        ),
+        PluginEvent::PrepareFailed { plugin, .. } => format!(
+            "Plugin {plugin} could not be compiled in the background; its first use compiles it"
+        ),
     }
 }
 
@@ -112,6 +188,32 @@ fn failure_kind(failure: &Failure) -> String {
         Failure::OverBudget => "one call and its deferred calls took too long".to_owned(),
         Failure::Load(_) => "it could not be compiled, linked or started".to_owned(),
         Failure::ActivationRefused(_) => "it refused to activate".to_owned(),
+    }
+}
+
+/// What went wrong with the compiled-code cache, without the store's, hasher's or wasmtime's
+/// text, which may name a path.
+fn cache_kind(error: &CacheError) -> String {
+    match error {
+        CacheError::Refused(refusal) => format!("an entry was refused ({})", refusal_kind(refusal)),
+        CacheError::File(kind) => format!("a cache file failed ({kind})"),
+        CacheError::NotAFile => "something other than a file is in its folder".to_owned(),
+        CacheError::Unnamed => "the plugin id cannot name a cache file".to_owned(),
+        CacheError::Store(_) => "the store could not read or keep its record".to_owned(),
+        CacheError::Hash(_) => "its SHA-256 could not be computed".to_owned(),
+        CacheError::Serialize(_) => "the compiled code could not be written out".to_owned(),
+    }
+}
+
+/// Why a cached entry was refused and deleted, without wasmtime's text.
+fn refusal_kind(refusal: &Refusal) -> &'static str {
+    match refusal {
+        Refusal::Missing => "its file is missing",
+        Refusal::Length => "its length is wrong",
+        Refusal::Hash => "its SHA-256 is wrong",
+        Refusal::Deserialize(_) => "wasmtime could not load it",
+        Refusal::Checks(_) => "it failed the checks a compile passes",
+        Refusal::OtherBytes => "it was compiled from other bytes",
     }
 }
 
