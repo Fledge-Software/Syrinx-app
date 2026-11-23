@@ -20,7 +20,7 @@ use syrinx_plugin_host::worker::PluginEvent;
 use syrinx_plugin_host::{PluginRegistry, SignedIdentity};
 use syrinx_store::{FolderAccess, PluginInstall, PluginState, Store};
 
-use super::{FOLDER, READ_ONE_FOLDER, REQUIRED_STORAGE, STORAGE, TempStore, close, echo};
+use super::{FOLDER, READ_ONE_FOLDER, REQUIRED_STORAGE, STORAGE, TempStore, close, echo, scope};
 use crate::package::manifest_text;
 use crate::support::sha256::sha256;
 use crate::support::{self, FULL, Fixture, variant};
@@ -522,7 +522,8 @@ fn a_narrower_update_narrows_grants_and_folders_and_deletes_dropped_grants() {
     assert_eq!(grants.len(), 1, "the storage grant went with its request");
     let folder = &grants[0].grant;
     assert_eq!(
-        folder.scope_json, "{\"count\":1,\"watch\":false,\"writable\":false}",
+        scope(folder),
+        serde_json::json!({ "count": 1, "watch": false, "writable": false }),
         "the scope the new version asks for"
     );
     assert_eq!(folder.granted_at, 20, "narrowing is not a new grant");
