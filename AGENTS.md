@@ -275,10 +275,11 @@ style problem.
   in its signed release; any other plugin is installed from a folder the
   owner picks, and updates are owner-initiated.
 - **The Trilium fork stays a separate program.** Notes is to run on a fork
-  of Trilium (owner, 2026-11-23; #277, #278), which is AGPL-3.0-or-later.
-  Its source never enters `Syrinx-app`, the plugin template or the Notes
-  plugin; they reach the running fork only through HTTP messages, and
-  nothing is copied either way.
+  of Trilium (the owner's direction in #277 and #278, 2026-11-23), which is
+  AGPL-3.0-or-later. Its source never enters `Syrinx-app`, the plugin
+  template or the Notes plugin; they reach the running fork only through
+  HTTP messages (Syrinx also starts and stops it, #279), and nothing is
+  copied either way.
   `docs/dev/trilium-audit.md` records what the fork ships.
 - **Fledge sits behind a trait.** The Fledge plugin, on hold since 2026-10-20,
   calls Fledge only through the `fledge-client` trait, on the stand-in client
