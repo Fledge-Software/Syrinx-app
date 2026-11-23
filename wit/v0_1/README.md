@@ -63,7 +63,10 @@ host's contract tests check them:
   (`crates/syrinx-plugin-host/src/limits.rs`), and starts no request while
   the owner types in the palette. A remote address is HTTPS only. Each
   refusal's text starts with its rule's name, as in
-  `denied("redirect-off-host: ...")`.
+  `denied("redirect-off-host: ...")`. `unavailable` means asking again
+  cannot repeat a write: nothing was sent, or the request was a GET or HEAD.
+  A POST, PUT, PATCH or DELETE whose answer was lost after it may have
+  reached the server is `internal("uncertain: ...")`, and is never resent.
 - **Search keywords.** A catalogue entry carries at most 16 keywords of at
   most 120 characters; the host drops and logs an over-limit keyword instead
   of refusing the batch.

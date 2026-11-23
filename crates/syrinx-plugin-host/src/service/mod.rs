@@ -5,6 +5,7 @@
 //! network itself is the `Transport` the application passes in; the test host's is loopback-only.
 
 mod address;
+mod credential;
 mod door;
 mod request;
 
@@ -13,15 +14,17 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
-pub use address::{AddressError, Credential, ServiceAddress};
+pub use address::{AddressError, ServiceAddress};
+pub use credential::Credential;
 pub use door::ServiceDoor;
 
 use crate::bindings::syrinx::plugin::service::{Header, Method, Response};
 use crate::bindings::syrinx::plugin::types::PluginError;
+use crate::deadline::CallDeadline;
 use crate::limits;
 
 /// One request as the transport sends it. `headers` include the credential: a transport sends
-/// them and never logs, stores or reports them.
+/// them and never logs, stores or reports them, which is why this type has no `Debug`.
 pub struct OutgoingRequest<'a> {
     pub address: &'a ServiceAddress,
     pub method: Method,
@@ -42,14 +45,17 @@ pub struct IncomingResponse {
     pub body: Vec<u8>,
 }
 
-/// Why a transport could not deliver a response. It carries no text, so no address, header or
-/// credential can leak through it.
+/// Why a transport could not deliver a response, by whether the request may have reached the
+/// server. It carries no text, so no address, header or credential can leak through it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TransportError {
-    TimedOut,
-    ResponseTooLarge,
-    /// No connection, a failed TLS handshake, or a malformed response.
+    /// Nothing was sent: no connection, or a failed TLS handshake.
     Unreachable,
+    /// The time ran out once the request may have been sent.
+    TimedOut,
+    /// The request was sent, but the answer was cut off or malformed.
+    BadResponse,
+    ResponseTooLarge,
 }
 
 /// The network under the `service` import. It must follow no redirect itself (the host decides
@@ -70,8 +76,8 @@ pub fn method_name(method: Method) -> &'static str {
     }
 }
 
-/// Set by the application while the owner types in the palette: no request starts then, so
-/// the palette keeps its search budget (D48).
+/// Set by the application from the palette while the owner types there: no request, and no
+/// redirect hop, starts then, so the palette keeps its search budget (D48).
 #[derive(Clone, Default)]
 pub struct OwnerTyping(Arc<AtomicBool>);
 
@@ -100,14 +106,24 @@ pub enum ServiceRefusal {
     InvalidPath(&'static str),
     InvalidHeader(&'static str),
     /// A header only the host sets, such as `host` or the credential's; holds the name.
-    HostHeader(String),
+    ReservedHeader(String),
     RequestTooLarge,
+    /// The call had no time left to send the request; nothing was sent.
+    NoTime,
     /// The server redirected to another scheme, host or port.
     RedirectOffHost,
+    /// The server redirected within the address to a path the host would refuse from a plugin.
+    InvalidRedirect,
     TooManyRedirects,
+    /// The body, or the headers, came back larger than the host takes.
     ResponseTooLarge,
-    /// The deadline passed; a write may still have reached the server.
+    /// A reading request (GET or HEAD) got no answer in time; asking again is safe.
     TimedOut,
+    /// A reading request got a cut-off or malformed answer; asking again is safe.
+    BadResponse,
+    /// A writing request may have reached the server but its answer was lost; never resend it.
+    Uncertain,
+    /// Nothing was sent: the address could not be reached.
     Unreachable,
 }
 
@@ -120,12 +136,16 @@ impl ServiceRefusal {
             Self::OtherHost => "other-host",
             Self::InvalidPath(_) => "invalid-path",
             Self::InvalidHeader(_) => "invalid-header",
-            Self::HostHeader(_) => "host-header",
+            Self::ReservedHeader(_) => "reserved-header",
             Self::RequestTooLarge => "request-too-large",
+            Self::NoTime => "no-time",
             Self::RedirectOffHost => "redirect-off-host",
+            Self::InvalidRedirect => "invalid-redirect",
             Self::TooManyRedirects => "too-many-redirects",
             Self::ResponseTooLarge => "response-too-large",
             Self::TimedOut => "timed-out",
+            Self::BadResponse => "bad-response",
+            Self::Uncertain => "uncertain",
             Self::Unreachable => "unreachable",
         }
     }
@@ -137,23 +157,27 @@ impl ServiceRefusal {
             Self::OtherHost => "a plugin gives only a path; the owner chose the address".into(),
             Self::InvalidPath(why) => format!("the path was refused: {why}"),
             Self::InvalidHeader(why) => format!("a header was refused: {why}"),
-            Self::HostHeader(name) => format!("only the host sets the {name} header"),
+            Self::ReservedHeader(name) => format!("only the host sets the {name} header"),
             Self::RequestTooLarge => format!(
                 "the body is larger than {} bytes",
                 limits::MAX_SERVICE_REQUEST_BYTES
             ),
+            Self::NoTime => "this call had no time left to send the request".into(),
             Self::RedirectOffHost => "the server redirected away from the approved address".into(),
+            Self::InvalidRedirect => "the server redirected to a path the host refuses".into(),
             Self::TooManyRedirects => format!(
                 "the server redirected more than {} times",
                 limits::MAX_SERVICE_REDIRECTS
             ),
             Self::ResponseTooLarge => format!(
-                "the response is larger than {} bytes",
+                "the response is larger than {} bytes, or has too many headers",
                 limits::MAX_SERVICE_RESPONSE_BYTES
             ),
-            Self::TimedOut => {
-                "no answer in time; the request may still have reached the server".into()
-            }
+            Self::TimedOut => "the server did not answer in time".into(),
+            Self::BadResponse => "the server's answer was cut off or malformed".into(),
+            Self::Uncertain => "the request may have reached the server, but its answer was \
+                                lost; do not send it again"
+                .into(),
             Self::Unreachable => "the approved address could not be reached".into(),
         }
     }
@@ -168,37 +192,43 @@ impl fmt::Display for ServiceRefusal {
 impl std::error::Error for ServiceRefusal {}
 
 impl From<ServiceRefusal> for PluginError {
-    /// Policy refusals are `denied`, a malformed request `invalid-input`, and a refusal that may
-    /// pass on a later try `unavailable`.
+    /// Policy refusals are `denied` and a malformed request `invalid-input`. `unavailable`
+    /// ("retry may help") is kept for refusals after which asking again cannot repeat a write;
+    /// a write that may have happened is `internal`, never `unavailable`.
     fn from(refusal: ServiceRefusal) -> Self {
         let text = refusal.to_string();
         match refusal {
             ServiceRefusal::NoAddress
             | ServiceRefusal::OtherHost
-            | ServiceRefusal::HostHeader(_)
+            | ServiceRefusal::ReservedHeader(_)
             | ServiceRefusal::RedirectOffHost
+            | ServiceRefusal::InvalidRedirect
             | ServiceRefusal::TooManyRedirects
             | ServiceRefusal::ResponseTooLarge => Self::Denied(text),
             ServiceRefusal::InvalidPath(_)
             | ServiceRefusal::InvalidHeader(_)
             | ServiceRefusal::RequestTooLarge => Self::InvalidInput(text),
             ServiceRefusal::OwnerTyping
+            | ServiceRefusal::NoTime
             | ServiceRefusal::TimedOut
+            | ServiceRefusal::BadResponse
             | ServiceRefusal::Unreachable => Self::Unavailable(text),
+            ServiceRefusal::Uncertain => Self::Internal(text),
         }
     }
 }
 
-/// Answer a plugin's request through its door, or refuse it when the owner approved none.
-/// `budget` is how long the current export lets a host service wait.
+/// Answer a plugin's request through its door, or refuse it when the owner approved none. The
+/// request may wait at most `CallDeadline::service_budget` of the current export.
 pub fn answer(
     door: Option<&ServiceDoor>,
-    budget: Duration,
+    deadline: Option<CallDeadline>,
     method: Method,
     path: &str,
     headers: Vec<Header>,
     body: Vec<u8>,
 ) -> Result<Response, PluginError> {
     let door = door.ok_or(ServiceRefusal::NoAddress)?;
+    let budget = deadline.map_or(Duration::ZERO, CallDeadline::service_budget);
     Ok(door.request(method, path, headers, &body, budget)?)
 }

@@ -83,3 +83,6 @@ pub const MAX_SERVICE_REQUEST_BYTES: usize = 1024 * 1024;
 pub const MAX_SERVICE_RESPONSE_BYTES: usize = 4 * 1024 * 1024;
 /// Redirects followed within the approved address; one off it is refused at once.
 pub const MAX_SERVICE_REDIRECTS: usize = 3;
+/// Response headers the host hands a plugin, by count and by their names' and values' bytes.
+pub const MAX_SERVICE_RESPONSE_HEADERS: usize = 128;
+pub const MAX_SERVICE_RESPONSE_HEADER_BYTES: usize = 64 * 1024;

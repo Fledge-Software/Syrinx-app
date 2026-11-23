@@ -120,6 +120,16 @@ fn an_unsupported_schema_is_refused_before_anything_else() {
 }
 
 #[test]
+fn every_earlier_patch_of_the_track_is_still_supported() {
+    let (track, patch) = CONTRACT_VERSION.rsplit_once('.').expect("a dotted version");
+    let patch: u32 = patch.parse().expect("a numeric patch");
+    let expected: Vec<String> = (0..=patch)
+        .map(|patch| format!("{CONTRACT_PACKAGE}/plugin@{track}.{patch}"))
+        .collect();
+    assert_eq!(supported_worlds(), expected);
+}
+
+#[test]
 fn an_unsupported_world_is_refused_before_the_other_fields() {
     let text = changed("syrinx:plugin/plugin@0.1.0", "syrinx:plugin/plugin@0.2.0").replacen(
         "id = \"notes\"",

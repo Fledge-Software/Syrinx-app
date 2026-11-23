@@ -17,8 +17,9 @@ use crate::support;
 use server::SyntheticServer;
 
 /// The commands the `service` variant answers; each reads `/<name>`.
-const COMMANDS: [&str; 6] = [
+const COMMANDS: [&str; 7] = [
     "variant.notes",
+    "variant.stall",
     "variant.other-host",
     "variant.redirect-away",
     "variant.redirect-home",
@@ -125,6 +126,39 @@ fn the_plugin_reads_from_its_approved_address_with_the_host_s_credential() {
         "{requests:?}"
     );
     assert!(requests[0].contains(&expected), "{requests:?}");
+    assert_eq!(fixture.server.problems(), Vec::<String>::new());
+}
+
+#[test]
+fn the_server_s_echo_of_the_credential_and_its_cookie_never_reach_the_plugin() {
+    let mut fixture = granted();
+    assert_eq!(run(&mut fixture, "variant.notes"), Ok(()));
+    let headers: Vec<String> = logged(&fixture)
+        .into_iter()
+        .filter(|line| line.starts_with("header "))
+        .collect();
+    assert!(
+        headers.contains(&"header content-type: text/plain".to_owned()),
+        "{headers:?}"
+    );
+    for line in &headers {
+        let lower = line.to_ascii_lowercase();
+        assert!(
+            !lower.contains("x-api-key") && !lower.contains("set-cookie"),
+            "{line}"
+        );
+    }
+}
+
+#[test]
+fn a_read_with_no_answer_ends_at_its_deadline_as_timed_out() {
+    let mut fixture = granted();
+    let error = refused(run(&mut fixture, "variant.stall"));
+    assert!(
+        error.starts_with("PluginError::Unavailable(\"timed-out: "),
+        "{error}"
+    );
+    assert_eq!(fixture.server.requests().len(), 1);
 }
 
 #[test]

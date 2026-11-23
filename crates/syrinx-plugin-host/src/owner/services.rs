@@ -11,7 +11,6 @@ use crate::bindings::syrinx::plugin::host::{self, LogLevel};
 use crate::bindings::syrinx::plugin::service::{self, Header, Method, Response};
 use crate::bindings::syrinx::plugin::types::{self, PluginError};
 use crate::deadline::CallDeadline;
-use crate::service::ServiceDoor;
 use crate::views::{ViewBook, ViewRecord};
 
 /// Made for one plugin: no call can name another plugin's namespace.
@@ -20,9 +19,6 @@ pub struct StoreServices {
     store: Arc<Store>,
     book: ViewBook,
     deadline: Option<CallDeadline>,
-    /// The address the owner approved for the `service` capability; none until the owner can
-    /// approve one in the window.
-    door: Option<ServiceDoor>,
 }
 
 impl StoreServices {
@@ -32,14 +28,7 @@ impl StoreServices {
             store,
             book: ViewBook::new(),
             deadline: None,
-            door: None,
         }
-    }
-
-    /// Answer `service` requests through `door`: the address and credential the owner approved.
-    pub fn with_service(mut self, door: ServiceDoor) -> Self {
-        self.door = Some(door);
-        self
     }
 
     /// What the plugin logged, oldest first; kept in memory and bounded.
@@ -83,6 +72,8 @@ impl PluginHost for StoreServices {
 
 impl types::Host for StoreServices {}
 
+/// The owner cannot approve an address in the window yet (#280), so every request is refused
+/// as `no-address` before anything is sent.
 impl service::Host for StoreServices {
     fn request(
         &mut self,
@@ -91,14 +82,7 @@ impl service::Host for StoreServices {
         headers: Vec<Header>,
         body: Vec<u8>,
     ) -> Result<Response, PluginError> {
-        crate::service::answer(
-            self.door.as_ref(),
-            self.budget(),
-            method,
-            &path,
-            headers,
-            body,
-        )
+        crate::service::answer(None, self.deadline, method, &path, headers, body)
     }
 }
 

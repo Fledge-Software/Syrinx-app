@@ -4,7 +4,6 @@
 //! settings bounds) are the `Mediator`'s, in front of these services.
 
 use std::collections::BTreeMap;
-use std::time::Duration;
 
 use crate::bindings::syrinx::plugin::host::{self, LogLevel};
 use crate::bindings::syrinx::plugin::service::{self, Header, Method, Response};
@@ -58,10 +57,14 @@ impl service::Host for SyntheticHost {
         headers: Vec<Header>,
         body: Vec<u8>,
     ) -> Result<Response, PluginError> {
-        let budget = self
-            .deadline
-            .map_or(Duration::ZERO, CallDeadline::service_budget);
-        service_door::answer(self.door.as_ref(), budget, method, &path, headers, body)
+        service_door::answer(
+            self.door.as_ref(),
+            self.deadline,
+            method,
+            &path,
+            headers,
+            body,
+        )
     }
 }
 

@@ -99,7 +99,7 @@ fn contract_0_1_0(wit: &str) -> String {
         "",
     );
     let start = wit
-        .find("/// HTTP requests to the one address")
+        .find("@since(version = 0.1.1)\ninterface service {")
         .expect("the WIT has the service interface");
     let end = wit[start..]
         .find("interface lifecycle {")

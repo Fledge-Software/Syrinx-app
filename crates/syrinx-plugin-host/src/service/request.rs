@@ -1,5 +1,5 @@
-//! The checks on what a plugin puts in a `service` request: a path that names no host, and
-//! headers that cannot override what the host sets.
+//! The checks on what a plugin puts in a `service` request (a path that names no host, headers
+//! that cannot override what the host sets) and on which response headers it may read.
 
 use crate::bindings::syrinx::plugin::service::Header;
 use crate::limits;
@@ -8,7 +8,7 @@ use super::{Credential, ServiceRefusal};
 
 /// Headers only the host or its transport may set: routing, length, connection handling,
 /// cookies and every credential header.
-const HOST_HEADERS: &[&str] = &[
+const RESERVED_HEADERS: &[&str] = &[
     "authorization",
     "connection",
     "content-length",
@@ -98,19 +98,30 @@ fn check_header(header: &Header, credential: Option<&Credential>) -> Result<(), 
             "a header value holds a line break or control character",
         ));
     }
-    if is_host_header(&header.name, credential) {
-        return Err(ServiceRefusal::HostHeader(header.name.to_ascii_lowercase()));
+    if is_reserved_header(&header.name, credential) {
+        return Err(ServiceRefusal::ReservedHeader(
+            header.name.to_ascii_lowercase(),
+        ));
     }
     Ok(())
 }
 
-/// Whether only the host may set `name`: one of `HOST_HEADERS`, a `proxy-` or `sec-` header,
-/// or the credential's own.
-pub(super) fn is_host_header(name: &str, credential: Option<&Credential>) -> bool {
+/// Whether only the host may set `name`: one of `RESERVED_HEADERS`, a `proxy-` or `sec-`
+/// header, or the credential's own.
+fn is_reserved_header(name: &str, credential: Option<&Credential>) -> bool {
     let name = name.to_ascii_lowercase();
-    HOST_HEADERS.contains(&name.as_str())
+    RESERVED_HEADERS.contains(&name.as_str())
         || name.starts_with("proxy-")
         || name.starts_with("sec-")
+        || credential.is_some_and(|credential| credential.header() == name)
+}
+
+/// Whether a response header is kept from the plugin: a cookie the server sets, or a header of
+/// the credential's name, which a server might echo.
+pub(super) fn is_withheld_response_header(name: &str, credential: Option<&Credential>) -> bool {
+    let name = name.to_ascii_lowercase();
+    name == "set-cookie"
+        || name == "set-cookie2"
         || credential.is_some_and(|credential| credential.header() == name)
 }
 
@@ -191,7 +202,7 @@ mod tests {
         ] {
             assert_eq!(
                 check_headers(&[header(name, "v")], Some(&credential)),
-                Err(ServiceRefusal::HostHeader(name.to_ascii_lowercase())),
+                Err(ServiceRefusal::ReservedHeader(name.to_ascii_lowercase())),
                 "{name}"
             );
         }
@@ -199,6 +210,29 @@ mod tests {
             check_headers(&[header("accept", "application/json")], Some(&credential)),
             Ok(())
         );
+    }
+
+    #[test]
+    fn only_cookies_and_the_credential_s_header_are_withheld_from_a_response() {
+        let credential = Credential::new("x-api-key", "synthetic").expect("valid");
+        for name in ["Set-Cookie", "set-cookie2", "X-API-Key"] {
+            assert!(
+                is_withheld_response_header(name, Some(&credential)),
+                "{name}"
+            );
+        }
+        for name in [
+            "content-length",
+            "content-type",
+            "location",
+            "etag",
+            "sec-fetch-site",
+        ] {
+            assert!(
+                !is_withheld_response_header(name, Some(&credential)),
+                "{name}"
+            );
+        }
     }
 
     #[test]

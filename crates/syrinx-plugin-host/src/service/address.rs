@@ -1,5 +1,5 @@
-//! The one address a plugin's `service` requests go to, and the credential the host adds to
-//! them: both chosen outside the plugin, which can change neither (#280).
+//! The one address a plugin's `service` requests go to, chosen outside the plugin, which
+//! cannot change it (#280).
 
 use std::fmt;
 use std::net::{Ipv4Addr, Ipv6Addr};
@@ -192,47 +192,6 @@ fn is_loopback(host: &str) -> bool {
     host.parse::<Ipv4Addr>().is_ok_and(|ip| ip.is_loopback())
 }
 
-/// The header the host adds to every request, such as an `authorization` token. Its value is
-/// never shown: not by `Debug`, not in an error, a log or the plugin's response.
-#[derive(Clone, PartialEq, Eq)]
-pub struct Credential {
-    header: String,
-    value: String,
-}
-
-impl Credential {
-    pub fn new(header: &str, value: impl Into<String>) -> Result<Self, AddressError> {
-        let value = value.into();
-        if !super::request::is_token(header) || !super::request::is_header_value(&value) {
-            return Err(AddressError::Credential);
-        }
-        Ok(Self {
-            header: header.to_ascii_lowercase(),
-            value,
-        })
-    }
-
-    /// The header's name, lowercase.
-    pub fn header(&self) -> &str {
-        &self.header
-    }
-
-    /// For the transport only, which must send it and never log it.
-    pub fn value(&self) -> &str {
-        &self.value
-    }
-}
-
-impl fmt::Debug for Credential {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("Credential")
-            .field("header", &self.header)
-            .field("value", &"<withheld>")
-            .finish()
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -292,21 +251,5 @@ mod tests {
         assert!(!address.is_same_origin("https", "notes.example.test:8443"));
         assert!(!address.is_same_origin("https", "other.example.test"));
         assert!(!address.is_same_origin("https", "x@notes.example.test"));
-    }
-
-    #[test]
-    fn a_credential_never_shows_its_value() {
-        let credential = Credential::new("Authorization", "synthetic-secret").expect("valid");
-        let shown = format!("{credential:?}");
-        assert!(!shown.contains("synthetic-secret"), "{shown}");
-        assert_eq!(credential.header(), "authorization");
-        assert_eq!(
-            Credential::new("x-token", "a\r\nx-other: b"),
-            Err(AddressError::Credential)
-        );
-        assert_eq!(
-            Credential::new("bad name", "v"),
-            Err(AddressError::Credential)
-        );
     }
 }

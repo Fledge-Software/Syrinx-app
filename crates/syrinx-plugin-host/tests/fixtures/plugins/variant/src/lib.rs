@@ -22,7 +22,8 @@ use bindings::syrinx::plugin::types::{Outcome, PluginError};
 struct Plugin;
 
 /// The `service` variant's commands: `variant.<name>` reads `/<name>` from the approved address
-/// and logs the status and body; `variant.other-host` asks for another host by name.
+/// and logs each header it was handed, then the status and body; `variant.other-host` asks for
+/// another host by name.
 #[cfg(feature = "service")]
 mod service {
     use super::bindings::syrinx::plugin::host::{self, LogLevel};
@@ -40,6 +41,12 @@ mod service {
             value: "text/plain".into(),
         };
         let response = service::request(Method::Get, &path, &[accept], &[])?;
+        for header in &response.headers {
+            host::log(
+                LogLevel::Info,
+                &format!("header {}: {}", header.name, header.value),
+            );
+        }
         let body = String::from_utf8_lossy(&response.body);
         host::log(LogLevel::Info, &format!("{} {body}", response.status));
         Ok(())

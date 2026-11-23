@@ -12,6 +12,7 @@ struct Sent {
     path: String,
     headers: Vec<Header>,
     body: Vec<u8>,
+    timeout: Duration,
 }
 
 /// A transport that answers from a script and records what it was asked.
@@ -19,6 +20,8 @@ struct Sent {
 struct Scripted {
     answers: Mutex<Vec<Result<IncomingResponse, TransportError>>>,
     sent: Mutex<Vec<Sent>>,
+    /// Set as the first request is sent, as if the owner started typing during it.
+    typing_after_first: Option<OwnerTyping>,
 }
 
 impl Scripted {
@@ -26,6 +29,18 @@ impl Scripted {
         Arc::new(Self {
             answers: Mutex::new(answers.into_iter().rev().collect()),
             sent: Mutex::default(),
+            typing_after_first: None,
+        })
+    }
+
+    fn typing_after_first(
+        answers: Vec<Result<IncomingResponse, TransportError>>,
+        typing: OwnerTyping,
+    ) -> Arc<Self> {
+        Arc::new(Self {
+            answers: Mutex::new(answers.into_iter().rev().collect()),
+            sent: Mutex::default(),
+            typing_after_first: Some(typing),
         })
     }
 
@@ -41,7 +56,11 @@ impl Transport for Scripted {
             path: request.path.to_owned(),
             headers: request.headers.to_vec(),
             body: request.body.to_vec(),
+            timeout: request.timeout,
         });
+        if let Some(typing) = &self.typing_after_first {
+            typing.set(true);
+        }
         self.answers
             .lock()
             .expect("unpoisoned")
@@ -132,7 +151,7 @@ fn nothing_is_sent_while_the_owner_types_or_for_another_host() {
     );
     assert_eq!(
         door.request(Method::Get, "/x", Vec::new(), b"", Duration::ZERO),
-        Err(ServiceRefusal::TimedOut)
+        Err(ServiceRefusal::NoTime)
     );
     assert!(transport.sent().is_empty());
 }
@@ -186,8 +205,6 @@ fn a_redirect_off_the_address_is_refused_before_it_is_followed() {
         "http://notes.example.test/x",
         "https://notes.example.test:8443/x",
         "https://user@notes.example.test/x",
-        "relative/x",
-        "/a/../b",
     ] {
         let transport = Scripted::new(vec![redirect(302, location)]);
         let door = door(transport.clone());
@@ -198,6 +215,110 @@ fn a_redirect_off_the_address_is_refused_before_it_is_followed() {
         );
         assert_eq!(transport.sent().len(), 1, "{location}");
     }
+}
+
+#[test]
+fn a_redirect_within_the_address_to_a_refused_path_is_an_invalid_redirect() {
+    for location in [
+        "relative/x",
+        "/a/../b",
+        "/a#fragment",
+        "https://notes.example.test/a b",
+    ] {
+        let transport = Scripted::new(vec![redirect(302, location)]);
+        let door = door(transport.clone());
+        assert_eq!(
+            get(&door, "/x"),
+            Err(ServiceRefusal::InvalidRedirect),
+            "{location}"
+        );
+        assert_eq!(transport.sent().len(), 1, "{location}");
+    }
+}
+
+#[test]
+fn a_redirect_hop_is_not_sent_once_the_owner_types() {
+    let typing = OwnerTyping::new();
+    let transport = Scripted::typing_after_first(vec![redirect(302, "/next")], typing.clone());
+    let address = ServiceAddress::parse("https://notes.example.test").expect("valid");
+    let door = ServiceDoor::new(address, None, transport.clone(), typing);
+    assert_eq!(get(&door, "/x"), Err(ServiceRefusal::OwnerTyping));
+    assert_eq!(transport.sent().len(), 1);
+}
+
+#[test]
+fn each_hop_gets_only_the_time_left_within_both_bounds() {
+    let transport = Scripted::new(vec![redirect(302, "/next"), ok(200, Vec::new(), b"")]);
+    let door = door(transport.clone());
+    let long_budget = limits::SERVICE_REQUEST_DEADLINE * 4;
+    door.request(Method::Get, "/x", Vec::new(), b"", long_budget)
+        .expect("answered");
+    let sent = transport.sent();
+    assert!(
+        sent[0].timeout <= limits::SERVICE_REQUEST_DEADLINE,
+        "{sent:?}"
+    );
+    assert!(sent[1].timeout <= sent[0].timeout, "{sent:?}");
+    let transport = Scripted::new(vec![ok(200, Vec::new(), b"")]);
+    let door = self::door(transport.clone());
+    door.request(Method::Get, "/x", Vec::new(), b"", BUDGET / 10)
+        .expect("answered");
+    assert!(transport.sent()[0].timeout <= BUDGET / 10);
+}
+
+#[test]
+fn a_lost_answer_to_a_write_is_uncertain_and_to_a_read_may_be_asked_again() {
+    let cases = [
+        (
+            Method::Get,
+            TransportError::TimedOut,
+            ServiceRefusal::TimedOut,
+        ),
+        (
+            Method::Head,
+            TransportError::BadResponse,
+            ServiceRefusal::BadResponse,
+        ),
+        (
+            Method::Post,
+            TransportError::TimedOut,
+            ServiceRefusal::Uncertain,
+        ),
+        (
+            Method::Delete,
+            TransportError::BadResponse,
+            ServiceRefusal::Uncertain,
+        ),
+        (
+            Method::Put,
+            TransportError::Unreachable,
+            ServiceRefusal::Unreachable,
+        ),
+    ];
+    for (method, error, refusal) in cases {
+        let door = door(Scripted::new(vec![Err(error)]));
+        assert_eq!(
+            door.request(method, "/x", Vec::new(), b"", BUDGET),
+            Err(refusal.clone()),
+            "{method:?} {error:?}"
+        );
+        let retry_safe = matches!(
+            crate::bindings::syrinx::plugin::types::PluginError::from(refusal.clone()),
+            crate::bindings::syrinx::plugin::types::PluginError::Unavailable(_)
+        );
+        assert_eq!(
+            retry_safe,
+            refusal != ServiceRefusal::Uncertain,
+            "{refusal}"
+        );
+    }
+}
+
+#[test]
+fn too_many_response_headers_are_refused() {
+    let headers = vec![header("x-a", "v"); limits::MAX_SERVICE_RESPONSE_HEADERS + 1];
+    let door = door(Scripted::new(vec![ok(200, headers, b"")]));
+    assert_eq!(get(&door, "/x"), Err(ServiceRefusal::ResponseTooLarge));
 }
 
 #[test]
@@ -220,10 +341,40 @@ fn an_oversized_response_is_refused_however_the_transport_reports_it() {
 
 #[test]
 fn every_refusal_names_its_rule_and_never_the_credential() {
-    let door = door(Scripted::new(vec![Err(TransportError::Unreachable)]));
-    let refusal = get(&door, "/x").expect_err("unreachable");
-    let error = crate::bindings::syrinx::plugin::types::PluginError::from(refusal);
-    let text = format!("{error:?}");
-    assert!(text.contains("unreachable: "), "{text}");
-    assert!(!text.contains("synthetic-credential"), "{text}");
+    let refused = [
+        (
+            vec![Err(TransportError::Unreachable)],
+            "/x",
+            "unreachable: ",
+        ),
+        (
+            vec![redirect(302, "https://other.example.test/")],
+            "/x",
+            "redirect-off-host: ",
+        ),
+        (vec![redirect(302, "/x"); 4], "/x", "too-many-redirects: "),
+        (Vec::new(), "//other.example.test/", "other-host: "),
+    ];
+    for (answers, path, name) in refused {
+        let door = door(Scripted::new(answers));
+        let refusal = get(&door, path).expect_err(name);
+        let text = format!(
+            "{:?}",
+            crate::bindings::syrinx::plugin::types::PluginError::from(refusal)
+        );
+        assert!(text.contains(name), "{text}");
+        assert!(!text.contains("synthetic-credential"), "{text}");
+    }
+    let reserved = door(Scripted::new(Vec::new())).request(
+        Method::Get,
+        "/x",
+        vec![header("x-api-key", "synthetic-credential")],
+        b"",
+        BUDGET,
+    );
+    let text = format!("{:?}", reserved.expect_err("reserved"));
+    assert!(
+        text.contains("x-api-key") && !text.contains("synthetic-credential"),
+        "{text}"
+    );
 }

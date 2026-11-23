@@ -6,7 +6,7 @@ use std::io::{ErrorKind, Read, Write};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpStream};
 use std::time::{Duration, Instant};
 
-use crate::bindings::syrinx::plugin::service::Header;
+use crate::bindings::syrinx::plugin::service::{Header, Method};
 use crate::service::{
     IncomingResponse, OutgoingRequest, ServiceAddress, Transport, TransportError, method_name,
 };
@@ -22,13 +22,15 @@ impl Transport for LoopbackTransport {
     fn send(&self, request: &OutgoingRequest<'_>) -> Result<IncomingResponse, TransportError> {
         let deadline = Instant::now() + request.timeout;
         let socket = loopback_socket(request.address)?;
-        let mut stream = TcpStream::connect_timeout(&socket, request.timeout).map_err(io_error)?;
+        // Until the connection stands, nothing has been sent.
+        let mut stream = TcpStream::connect_timeout(&socket, request.timeout)
+            .map_err(|_| TransportError::Unreachable)?;
         set_timeouts(&stream, deadline)?;
         stream
             .write_all(&request_bytes(request))
-            .map_err(io_error)?;
+            .map_err(after_sending)?;
         let raw = read_bounded(&mut stream, deadline, request.max_response_bytes)?;
-        parse_response(&raw, request.max_response_bytes)
+        parse_response(&raw, request.method, request.max_response_bytes)
     }
 }
 
@@ -47,8 +49,9 @@ fn loopback_socket(address: &ServiceAddress) -> Result<SocketAddr, TransportErro
 
 fn set_timeouts(stream: &TcpStream, deadline: Instant) -> Result<(), TransportError> {
     let left = remaining(deadline)?;
-    stream.set_read_timeout(Some(left)).map_err(io_error)?;
-    stream.set_write_timeout(Some(left)).map_err(io_error)
+    let unset = |_| TransportError::Unreachable;
+    stream.set_read_timeout(Some(left)).map_err(unset)?;
+    stream.set_write_timeout(Some(left)).map_err(unset)
 }
 
 fn remaining(deadline: Instant) -> Result<Duration, TransportError> {
@@ -91,8 +94,8 @@ fn read_bounded(
     loop {
         stream
             .set_read_timeout(Some(remaining(deadline)?))
-            .map_err(io_error)?;
-        let read = stream.read(&mut chunk).map_err(io_error)?;
+            .map_err(after_sending)?;
+        let read = stream.read(&mut chunk).map_err(after_sending)?;
         if read == 0 {
             return Ok(raw);
         }
@@ -104,8 +107,12 @@ fn read_bounded(
 }
 
 /// Status, headers and a body bounded by its `content-length` or the end of the stream.
-fn parse_response(raw: &[u8], max_body: usize) -> Result<IncomingResponse, TransportError> {
-    let malformed = TransportError::Unreachable;
+fn parse_response(
+    raw: &[u8],
+    method: Method,
+    max_body: usize,
+) -> Result<IncomingResponse, TransportError> {
+    let malformed = TransportError::BadResponse;
     let head_end = raw
         .windows(4)
         .position(|window| window == b"\r\n\r\n")
@@ -114,10 +121,11 @@ fn parse_response(raw: &[u8], max_body: usize) -> Result<IncomingResponse, Trans
     let mut lines = head.split("\r\n");
     let status = parse_status(lines.next().unwrap_or_default())?;
     let headers = lines.map(parse_header).collect::<Result<Vec<_>, _>>()?;
-    let body = body(&raw[head_end + 4..], &headers)?;
-    if body.len() > max_body {
-        return Err(TransportError::ResponseTooLarge);
-    }
+    let body = if has_no_body(method, status) {
+        Vec::new()
+    } else {
+        body(&raw[head_end + 4..], &headers, max_body)?
+    };
     Ok(IncomingResponse {
         status,
         headers,
@@ -130,21 +138,27 @@ fn parse_status(line: &str) -> Result<u16, TransportError> {
     let version = parts.next().unwrap_or_default();
     let code = parts.next().unwrap_or_default();
     if !version.starts_with("HTTP/1.") {
-        return Err(TransportError::Unreachable);
+        return Err(TransportError::BadResponse);
     }
-    code.parse().map_err(|_| TransportError::Unreachable)
+    code.parse().map_err(|_| TransportError::BadResponse)
+}
+
+/// HTTP gives no body to a HEAD response, nor to 1xx, 204 and 304, whatever their headers say.
+fn has_no_body(method: Method, status: u16) -> bool {
+    method == Method::Head || (100..200).contains(&status) || status == 204 || status == 304
 }
 
 fn parse_header(line: &str) -> Result<Header, TransportError> {
-    let (name, value) = line.split_once(':').ok_or(TransportError::Unreachable)?;
+    let (name, value) = line.split_once(':').ok_or(TransportError::BadResponse)?;
     Ok(Header {
         name: name.trim().to_owned(),
         value: value.trim().to_owned(),
     })
 }
 
-/// A chunked body is not supported by this test transport and reads as malformed.
-fn body(rest: &[u8], headers: &[Header]) -> Result<Vec<u8>, TransportError> {
+/// The body, refused as too large as soon as its declared length says so. A chunked body is
+/// not supported by this test transport and reads as malformed.
+fn body(rest: &[u8], headers: &[Header], max_body: usize) -> Result<Vec<u8>, TransportError> {
     let value = |name: &str| {
         headers
             .iter()
@@ -152,20 +166,71 @@ fn body(rest: &[u8], headers: &[Header]) -> Result<Vec<u8>, TransportError> {
             .map(|header| header.value.as_str())
     };
     if value("transfer-encoding").is_some() {
-        return Err(TransportError::Unreachable);
+        return Err(TransportError::BadResponse);
     }
-    let Some(length) = value("content-length") else {
-        return Ok(rest.to_vec());
+    let length = match value("content-length") {
+        Some(length) => length.parse().map_err(|_| TransportError::BadResponse)?,
+        None => rest.len(),
     };
-    let length: usize = length.parse().map_err(|_| TransportError::Unreachable)?;
+    if length > max_body {
+        return Err(TransportError::ResponseTooLarge);
+    }
     rest.get(..length)
         .map(<[u8]>::to_vec)
-        .ok_or(TransportError::Unreachable)
+        .ok_or(TransportError::BadResponse)
 }
 
-fn io_error(error: std::io::Error) -> TransportError {
+/// A failure once the request may have left: a timeout, or an answer lost on the way.
+fn after_sending(error: std::io::Error) -> TransportError {
     match error.kind() {
         ErrorKind::TimedOut | ErrorKind::WouldBlock => TransportError::TimedOut,
-        _ => TransportError::Unreachable,
+        _ => TransportError::BadResponse,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn parse(raw: &str, method: Method) -> Result<IncomingResponse, TransportError> {
+        parse_response(raw.as_bytes(), method, 16)
+    }
+
+    #[test]
+    fn a_head_204_or_304_answer_has_no_body_whatever_its_length_says() {
+        let head = "HTTP/1.1 200 OK\r\ncontent-length: 12\r\n\r\n";
+        assert_eq!(
+            parse(head, Method::Head).map(|response| response.body),
+            Ok(Vec::new())
+        );
+        for status in ["204 No Content", "304 Not Modified"] {
+            let raw = format!("HTTP/1.1 {status}\r\ncontent-length: 5\r\n\r\n");
+            assert!(parse(&raw, Method::Get).is_ok_and(|response| response.body.is_empty()));
+        }
+    }
+
+    #[test]
+    fn a_declared_length_past_the_bound_is_refused_before_the_body() {
+        let raw = "HTTP/1.1 200 OK\r\ncontent-length: 17\r\n\r\nshort";
+        assert_eq!(
+            parse(raw, Method::Get),
+            Err(TransportError::ResponseTooLarge)
+        );
+    }
+
+    #[test]
+    fn a_cut_off_or_malformed_answer_is_a_bad_response() {
+        for raw in [
+            "HTTP/1.1 200 OK\r\ncontent-length: 9\r\n\r\nshort",
+            "HTTP/1.1 200 OK\r\ntransfer-encoding: chunked\r\n\r\n",
+            "SPDY 200\r\n\r\n",
+            "HTTP/1.1 200 OK\r\n",
+        ] {
+            assert_eq!(
+                parse(raw, Method::Get),
+                Err(TransportError::BadResponse),
+                "{raw}"
+            );
+        }
     }
 }
