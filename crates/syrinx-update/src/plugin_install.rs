@@ -9,7 +9,7 @@ use std::fmt;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
-use std::sync::{Mutex, PoisonError};
+use std::sync::{Arc, Mutex, PoisonError};
 
 use crate::cng;
 use crate::directory::DirectoryPayload;
@@ -201,10 +201,13 @@ impl<'a> Expect<'a> {
     }
 }
 
-/// The data folder's plugin folders.
+/// The data folder's plugin folders, and which plugin ids an install flow holds. The
+/// application builds one per data folder, from its storage lease, and shares it: clones share
+/// the holds, while a separately built value does not see them.
 #[derive(Debug, Clone)]
 pub struct PluginFolders {
     root: PathBuf,
+    held: Arc<Mutex<BTreeSet<String>>>,
 }
 
 impl PluginFolders {
@@ -212,7 +215,21 @@ impl PluginFolders {
     pub fn new(root: &Path) -> Self {
         Self {
             root: root.to_path_buf(),
+            held: Arc::default(),
         }
+    }
+
+    /// Hold plugin `id` as an install, update or uninstall of it does, refusing while another
+    /// flow holds it.
+    fn hold(&self, id: &str) -> Result<InstallGuard, PluginInstallError> {
+        let mut held = self.held.lock().unwrap_or_else(PoisonError::into_inner);
+        if !held.insert(id.to_owned()) {
+            return Err(PluginInstallError::InstallInProgress);
+        }
+        Ok(InstallGuard {
+            held: Arc::clone(&self.held),
+            id: id.to_owned(),
+        })
     }
 
     /// Where `version` of plugin `id` is installed.
@@ -220,31 +237,46 @@ impl PluginFolders {
         self.plugin_folder(id).join(version.to_string())
     }
 
-    /// Remove every installed version of plugin `id`, as uninstalling does.
+    /// Remove every installed version of plugin `id`, as uninstalling does; refused while an
+    /// install flow holds the id, so its folder is never deleted under it.
     pub fn remove_plugin(&self, id: &str) -> Result<(), PluginInstallError> {
+        let _guard = self.hold(id)?;
+        self.remove_plugin_folder(id)
+    }
+
+    /// Remove one version's folder, a version no longer needed; refused while a flow holds the
+    /// id. A declined update is `PlacedPlugin::decline`.
+    pub fn remove_version(&self, id: &str, version: Version) -> Result<(), PluginInstallError> {
+        let _guard = self.hold(id)?;
+        self.remove_version_folder(id, version)
+    }
+
+    /// Remove every version of plugin `id` older than `keep`, once `keep` has activated once,
+    /// so the previous version stays for a rollback until then. A held newer version stays.
+    pub fn remove_older_versions(&self, id: &str, keep: Version) -> Result<(), PluginInstallError> {
+        let _guard = self.hold(id)?;
+        for version in self.versions(id)? {
+            if version < keep {
+                self.remove_version_folder(id, version)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// `remove_plugin` for a caller that already holds the id.
+    fn remove_plugin_folder(&self, id: &str) -> Result<(), PluginInstallError> {
         Ok(remove_update_folder(
             &self.plugin_folder(id),
             "an installed plugin's folder",
         )?)
     }
 
-    /// Remove one version's folder: a declined update, or a version no longer needed.
-    pub fn remove_version(&self, id: &str, version: Version) -> Result<(), PluginInstallError> {
+    /// `remove_version` for a caller that already holds the id.
+    fn remove_version_folder(&self, id: &str, version: Version) -> Result<(), PluginInstallError> {
         Ok(remove_update_folder(
             &self.version_folder(id, version),
             "an installed plugin version's folder",
         )?)
-    }
-
-    /// Remove every version of plugin `id` older than `keep`, once `keep` has activated once,
-    /// so the previous version stays for a rollback until then. A held newer version stays.
-    pub fn remove_older_versions(&self, id: &str, keep: Version) -> Result<(), PluginInstallError> {
-        for version in self.versions(id)? {
-            if version < keep {
-                self.remove_version(id, version)?;
-            }
-        }
-        Ok(())
     }
 
     /// The versions with a folder for plugin `id`, oldest first; other names are ignored.
@@ -280,33 +312,20 @@ impl PluginFolders {
     }
 }
 
-/// One install flow's exclusive hold on a plugin id, from staging until the placed copy is kept
-/// or dropped, so two installs or updates of one plugin never overlap: what the host reviewed
-/// stays true until the copy is placed. Syrinx runs as one instance (its instance lock), so a
-/// guard within the process suffices. Holds are keyed by the plugin's folder, so separate data
-/// folders never block each other.
+/// One flow's exclusive hold on a plugin id, from staging until the placed copy is kept,
+/// declined or dropped, so two installs, updates or uninstalls of one plugin never overlap: what
+/// the host reviewed stays true until the copy is placed. It excludes flows within this process
+/// that share one `PluginFolders`; another process on the same folder is not excluded, and
+/// Syrinx itself runs as one instance (its instance lock).
 struct InstallGuard {
-    key: PathBuf,
-}
-
-/// The plugin folders whose ids an install flow holds.
-static HELD: Mutex<BTreeSet<PathBuf>> = Mutex::new(BTreeSet::new());
-
-impl InstallGuard {
-    fn take(folders: &PluginFolders, id: &str) -> Result<Self, PluginInstallError> {
-        let key = folders.plugin_folder(id);
-        let mut held = HELD.lock().unwrap_or_else(PoisonError::into_inner);
-        if !held.insert(key.clone()) {
-            return Err(PluginInstallError::InstallInProgress);
-        }
-        Ok(Self { key })
-    }
+    held: Arc<Mutex<BTreeSet<String>>>,
+    id: String,
 }
 
 impl Drop for InstallGuard {
     fn drop(&mut self) {
-        let mut held = HELD.lock().unwrap_or_else(PoisonError::into_inner);
-        held.remove(&self.key);
+        let mut held = self.held.lock().unwrap_or_else(PoisonError::into_inner);
+        held.remove(&self.id);
     }
 }
 
@@ -319,7 +338,7 @@ pub struct StagedPlugin {
     installed: Option<Version>,
     /// Set once the folder has moved to its version folder, so dropping removes nothing.
     placed: bool,
-    /// This flow's hold on the plugin id, handed to the placed copy.
+    /// This flow's hold on the plugin id; `None` only once `place` handed it to the placed copy.
     guard: Option<InstallGuard>,
 }
 
@@ -351,7 +370,7 @@ impl StagedPlugin {
         if self.installed.is_some() {
             return Err(PluginInstallError::NotANewPlugin);
         }
-        folders.remove_plugin(self.list.id())?;
+        folders.remove_plugin_folder(self.list.id())?;
         self.place(folders)
     }
 
@@ -433,6 +452,15 @@ impl PlacedPlugin {
     pub fn keep(mut self) {
         self.kept = true;
     }
+
+    /// The owner declined this update: remove its folder, then end the flow.
+    pub fn decline(mut self) -> Result<(), PluginInstallError> {
+        self.kept = true;
+        Ok(remove_update_folder(
+            &self.folder,
+            "a declined plugin update",
+        )?)
+    }
 }
 
 impl Drop for PlacedPlugin {
@@ -458,7 +486,7 @@ pub fn stage_plugin(
     };
     let mut source = DirectoryPayload::open(offer.folder)?;
     let files = check_package_files(&mut source, expect, offer.developer_mode)?;
-    let guard = InstallGuard::take(folders, files.list.id())?;
+    let guard = folders.hold(files.list.id())?;
     ensure_plain_directory(&folders.staging(), "the plugin staging folder")?;
     let folder = folders
         .staging()
@@ -498,12 +526,14 @@ pub fn open_installed(
 /// version or publisher) is removed, and so is every older waiting folder once a newer one is
 /// offered, so none is left stuck. An unsigned folder while developer mode is off is kept and
 /// skipped: an older waiting folder may then be offered instead. A failure to read or check a
-/// folder is returned and removes nothing.
+/// folder is returned and removes nothing. The update offered holds the id until it is
+/// accepted (`keep`) or declined, so no other flow touches the plugin meanwhile.
 pub fn settle_pending_update(
     folders: &PluginFolders,
     installed: Installed<'_>,
     developer_mode: bool,
 ) -> Result<Option<PlacedPlugin>, PluginInstallError> {
+    let guard = folders.hold(installed.id)?;
     let mut newer: Vec<Version> = folders
         .versions(installed.id)?
         .into_iter()
@@ -512,7 +542,7 @@ pub fn settle_pending_update(
     let mut pending = None;
     while let Some(version) = newer.pop() {
         if pending.is_some() {
-            folders.remove_version(installed.id, version)?;
+            folders.remove_version_folder(installed.id, version)?;
             continue;
         }
         let folder = folders.version_folder(installed.id, version);
@@ -520,12 +550,15 @@ pub fn settle_pending_update(
             Ok(placed) => pending = Some(placed),
             Err(PluginInstallError::Unsigned) => {}
             Err(error) if is_content_refusal(&error) => {
-                folders.remove_version(installed.id, version)?;
+                folders.remove_version_folder(installed.id, version)?;
             }
             Err(error) => return Err(error),
         }
     }
-    Ok(pending)
+    Ok(pending.map(|mut placed| {
+        placed._guard = Some(guard);
+        placed
+    }))
 }
 
 /// Whether a folder was refused for what it holds, so it can never be offered, rather than

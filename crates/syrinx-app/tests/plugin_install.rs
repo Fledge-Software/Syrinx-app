@@ -303,15 +303,17 @@ impl Installer {
         Ok(reviewed)
     }
 
-    /// The update waiting for the owner, found again from its folder, reviewed afresh.
-    fn pending_update(&mut self) -> Option<Reviewed> {
+    /// The update waiting for the owner, found again from its folder and reviewed afresh, with
+    /// its folder, which holds the plugin until the owner accepts (`keep`) or declines.
+    fn pending_update(&mut self) -> Option<(Reviewed, PlacedPlugin)> {
         let record = self.record();
         let basis = installed(&record).expect("a readable record");
         let placed =
             settle_pending_update(&self.folders, basis, self.developer_mode).expect("settled")?;
         let offer = placed_offer(&placed).expect("an offer");
         let base = self.base_offer().expect("the installed version");
-        Some(self.runtime.review_update(offer, base).expect("reviewed"))
+        let reviewed = self.runtime.review_update(offer, base).expect("reviewed");
+        Some((reviewed, placed))
     }
 
     fn update(&mut self, reviewed: Reviewed, granted: &[CapabilityKind]) -> Result<(), String> {
@@ -570,13 +572,20 @@ fn a_held_update_survives_a_restart_while_the_old_version_runs_and_can_be_accept
         installer.folders.versions("test").expect("listed"),
         [v(1), v(2)]
     );
-    let held = installer.pending_update().expect("still held");
+    let (held, folder) = installer.pending_update().expect("still held");
     assert!(matches!(held.plan(), Plan::Held(_)));
+    // While the owner looks at it, no other install or update of the plugin can start.
+    let another = package(&scratch, v(3), FOLDER, Some(&signer));
+    assert_eq!(
+        installer.offer_update(&another).err(),
+        Some(PluginInstallError::InstallInProgress.to_string())
+    );
 
     // Accepted: the new version replaces it, and only its compiled code stays warm.
     installer
         .update(held.accept(), &[CapabilityKind::Folder])
         .expect("updated");
+    folder.keep();
     // The old version's compiled code is gone the moment the update returns.
     let compiled = installer.store.plugin_compiled("test").expect("read");
     assert!(compiled.is_none_or(|compiled| compiled.module_sha256 == module_hash(v(2))));
@@ -608,11 +617,9 @@ fn a_held_update_declined_after_a_restart_leaves_the_old_version_alone() {
     installer.close();
 
     let mut installer = Installer::start(&scratch);
-    drop(installer.pending_update().expect("still held"));
-    installer
-        .folders
-        .remove_version("test", v(2))
-        .expect("declined");
+    let (held, folder) = installer.pending_update().expect("still held");
+    drop(held);
+    folder.decline().expect("declined");
     assert!(installer.pending_update().is_none());
     assert_eq!(installer.folders.versions("test").expect("listed"), [v(1)]);
     installer.echo();

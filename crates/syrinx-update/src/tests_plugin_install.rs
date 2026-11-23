@@ -195,6 +195,10 @@ fn a_failed_step_leaves_no_staged_or_placed_folder() -> Result<(), UpdateError> 
         "{refused:?}"
     );
     assert!(staged_folders(&scratch).is_empty());
+
+    // The refusal ended its flow: the untampered package stages again.
+    fs::write(source.join(MODULE), &files(v(1))[0].1).expect("restores");
+    stage_plugin(&folders, &offer).expect("staged again");
     Ok(())
 }
 
@@ -511,6 +515,54 @@ fn one_install_flow_per_plugin_at_a_time() -> Result<(), UpdateError> {
         staged.place_unrecorded(&folders).err(),
         Some(PluginInstallError::NotANewPlugin)
     );
+    Ok(())
+}
+
+#[test]
+fn a_pending_update_and_an_uninstall_are_held_like_any_install_flow() -> Result<(), UpdateError> {
+    let scratch = Scratch::new();
+    let signer = TestKeyPair::generate()?;
+    let folders = scratch.folders();
+    place_new(&scratch, &folders, v(1), &signer)?;
+    place_update(&scratch, &folders, v(2), &signer)?;
+    let installed = Installed {
+        id: "sample",
+        version: v(1),
+        publisher: Publisher::Key(key(&signer)?),
+    };
+
+    // While the owner looks at the pending update, no other flow touches the plugin.
+    let pending = settle_pending_update(&folders, installed, false)
+        .expect("settled")
+        .expect("pending");
+    let source = scratch.0.join("another");
+    write_package(&source, "sample", v(3), Some(&signer))?;
+    assert_eq!(
+        stage_plugin(&folders, &update(&source, installed)).err(),
+        Some(PluginInstallError::InstallInProgress)
+    );
+    assert_eq!(
+        folders.remove_plugin("sample").err(),
+        Some(PluginInstallError::InstallInProgress)
+    );
+    assert_eq!(folders.versions("sample").expect("listed"), [v(1), v(2)]);
+
+    // Declining removes the pending folder and ends the flow.
+    pending.decline().expect("declined");
+    assert_eq!(folders.versions("sample").expect("listed"), [v(1)]);
+
+    // An uninstall while an update is staged is refused and leaves every folder alone.
+    let staged = stage_plugin(&folders, &update(&source, installed)).expect("staged");
+    assert_eq!(
+        folders.remove_plugin("sample").err(),
+        Some(PluginInstallError::InstallInProgress)
+    );
+    assert_eq!(folders.versions("sample").expect("listed"), [v(1)]);
+    drop(staged);
+    folders
+        .remove_plugin("sample")
+        .expect("uninstalled once the flow ended");
+    assert!(folders.versions("sample").expect("listed").is_empty());
     Ok(())
 }
 
