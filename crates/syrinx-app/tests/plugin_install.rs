@@ -438,10 +438,10 @@ fn a_first_install_offered_for_an_installed_id_is_refused_and_changes_nothing() 
 }
 
 #[test]
-fn a_new_install_that_loses_a_race_leaves_the_winner_in_place() {
-    let scratch = Scratch::new("race");
-    let winner_key = TestKeyPair::generate().expect("a key");
-    let loser_key = TestKeyPair::generate().expect("a key");
+fn a_second_install_of_a_plugin_waits_for_the_first_to_finish() {
+    let scratch = Scratch::new("guard");
+    let first_key = TestKeyPair::generate().expect("a key");
+    let second_key = TestKeyPair::generate().expect("a key");
     let mut installer = Installer::start(&scratch);
     let stage = |installer: &Installer, folder: &Path, signer: &TestKeyPair| {
         let offer = PluginOffer {
@@ -451,25 +451,26 @@ fn a_new_install_that_loses_a_race_leaves_the_winner_in_place() {
             },
             developer_mode: false,
         };
-        let staged = stage_plugin(&installer.folders, &offer).expect("staged");
-        let reviewed = installer
-            .runtime
-            .review_new(staged_offer(&staged).expect("an offer"))
-            .expect("reviewed while the id is free");
-        (staged, reviewed)
+        stage_plugin(&installer.folders, &offer)
     };
+    let first_folder = package(&scratch, v(1), "", Some(&first_key));
+    let second_folder = package(&scratch, v(2), "", Some(&second_key));
 
-    // Both are reviewed while the id is still free.
-    let winner_folder = package(&scratch, v(1), "", Some(&winner_key));
-    let loser_folder = package(&scratch, v(2), "", Some(&loser_key));
-    let (winner, winner_review) = stage(&installer, &winner_folder, &winner_key);
-    let (loser, loser_review) = stage(&installer, &loser_folder, &loser_key);
+    // While the first install of the id is under way, a second cannot even start.
+    let first = stage(&installer, &first_folder, &first_key).expect("staged");
+    let second = stage(&installer, &second_folder, &second_key).err();
+    assert_eq!(second, Some(PluginInstallError::InstallInProgress));
 
-    let placed = winner.place_unrecorded(&installer.folders).expect("placed");
+    // The first finishes untouched.
+    let reviewed = installer
+        .runtime
+        .review_new(staged_offer(&first).expect("an offer"))
+        .expect("reviewed");
+    let placed = first.place_unrecorded(&installer.folders).expect("placed");
     installer
         .runtime
         .install_reviewed(
-            winner_review,
+            reviewed,
             &[CapabilityKind::Storage],
             &mut installer.plugins,
             &mut installer.commands,
@@ -479,24 +480,16 @@ fn a_new_install_that_loses_a_race_leaves_the_winner_in_place() {
     placed.keep();
     let before = installer.record();
 
-    // The loser's place moves the winner's folder aside; its refused install puts it back.
-    let placed = loser.place_unrecorded(&installer.folders).expect("placed");
-    let refused = installer.runtime.install_reviewed(
-        loser_review,
-        &[CapabilityKind::Storage],
-        &mut installer.plugins,
-        &mut installer.commands,
-        25,
+    // Afterwards the second may start, and is refused as a taken id.
+    let refusal = installer.install(&second_folder, Some(key(&second_key)), &[]);
+    assert_eq!(
+        refusal,
+        Err(InstallRefusal::IdTaken("test".to_owned()).to_string())
     );
-    assert_eq!(refused, Err(InstallRefusal::IdTaken("test".to_owned())));
-    drop(placed);
-
     assert_eq!(installer.record(), before);
     assert_eq!(installer.folders.versions("test").expect("listed"), [v(1)]);
     installer.echo();
     installer.close();
-    // The winner's folder still verifies at the next start.
-    Installer::start(&scratch).close();
 }
 
 #[test]

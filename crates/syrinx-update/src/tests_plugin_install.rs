@@ -468,35 +468,41 @@ fn a_folder_left_without_a_record_never_blocks_a_new_install() -> Result<(), Upd
 }
 
 #[test]
-fn a_new_install_that_is_refused_puts_the_folder_it_moved_aside_back() -> Result<(), UpdateError> {
+fn one_install_flow_per_plugin_at_a_time() -> Result<(), UpdateError> {
     let scratch = Scratch::new();
     let signer = TestKeyPair::generate()?;
     let folders = scratch.folders();
-    // Another install of the same id won the race and placed version 1.
-    place_new(&scratch, &folders, v(1), &signer)?;
+    let first_source = scratch.0.join("first");
+    let second_source = scratch.0.join("second");
+    write_package(&first_source, "sample", v(1), Some(&signer))?;
+    write_package(&second_source, "sample", v(2), Some(&signer))?;
+    let first_offer = first_install(&first_source, key(&signer)?);
+    let second_offer = first_install(&second_source, key(&signer)?);
 
-    let source = scratch.0.join("loser");
-    write_package(&source, "sample", v(2), Some(&signer))?;
-    let placed = stage_plugin(&folders, &first_install(&source, key(&signer)?))
-        .expect("staged")
-        .place_unrecorded(&folders)
-        .expect("placed");
-    assert_eq!(folders.versions("sample").expect("listed"), [v(2)]);
-    // The host refused the install, so the placed copy is dropped without `keep`.
-    drop(placed);
-    assert_eq!(folders.versions("sample").expect("listed"), [v(1)]);
-    assert!(
-        folders
-            .version_folder("sample", v(1))
-            .join(MODULE)
-            .is_file()
+    // While the first flow holds the id, a second is refused and the first goes on untouched.
+    let first = stage_plugin(&folders, &first_offer).expect("staged");
+    assert_eq!(
+        stage_plugin(&folders, &second_offer).err(),
+        Some(PluginInstallError::InstallInProgress)
     );
+    let placed = first.place_unrecorded(&folders).expect("placed");
+    assert_eq!(
+        stage_plugin(&folders, &second_offer).err(),
+        Some(PluginInstallError::InstallInProgress),
+        "still held once placed"
+    );
+    placed.keep();
+    assert_eq!(folders.versions("sample").expect("listed"), [v(1)]);
+
+    // Once a flow ends, kept or dropped, the next may start.
+    drop(stage_plugin(&folders, &second_offer).expect("staged after a kept flow"));
+    stage_plugin(&folders, &second_offer).expect("staged after a dropped flow");
 
     // An update's copy is never placed as a new plugin.
     let update_source = scratch.0.join("update");
-    write_package(&update_source, "sample", v(3), Some(&signer))?;
+    write_package(&update_source, "other", v(3), Some(&signer))?;
     let installed = Installed {
-        id: "sample",
+        id: "other",
         version: v(1),
         publisher: Publisher::Key(key(&signer)?),
     };
