@@ -9,6 +9,7 @@ mod commands;
 mod destinations;
 mod downloads;
 mod page_text;
+pub mod plugin_forms;
 mod tabs;
 pub mod usage;
 mod web_address;
