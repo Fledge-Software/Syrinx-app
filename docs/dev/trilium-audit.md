@@ -421,16 +421,18 @@ Notes on the tables:
   (`core/routes/index.ts`), and the backup-restore routes
   `/api/setup/restore/upload/*` and `POST /api/setup/restore/start`
   (`server/routes/routes.ts`), answer before the database is initialised;
-  `GET /api/setup/restore/status` has no guard and answers in every state;
-  `GET` and `POST /set-password`
-  (`server/routes/routes.ts`) answer after it, until a password is set. None
-  needs a login: `checkSetupAuth` in `server/services/auth.ts` applies only
-  once data exists and a password is set (`isSetupAuthRequired` in
-  `core/services/setup_auth.ts`). Whoever reaches the port first can set the
-  password, restore a backup of their own or seed the database from a sync
-  server of their choosing. The recommendation for #281 is to initialise the
-  database and set the Syrinx-issued credential before the listener opens, or
-  to keep these routes closed until then.
+  `GET` and `POST /set-password` (`server/routes/routes.ts`) answer after it,
+  until a password is set. Two read-only status routes, `GET
+  /api/setup/status` (`core/routes/index.ts`) and `GET
+  /api/setup/restore/status` (`server/routes/routes.ts`), have no guard and
+  answer in every state. None needs a login: `checkSetupAuth` in
+  `server/services/auth.ts` applies only once data exists and a password is
+  set (`isSetupAuthRequired` in `core/services/setup_auth.ts`). Whoever
+  reaches the port first can set the password, restore a backup of their own
+  or seed the database from a sync server of their choosing. The
+  recommendation for #281 is to initialise the database and set the
+  Syrinx-issued credential before the listener opens, or to keep these routes
+  closed until then.
 - **`/custom/*path`.** `server/routes/custom.ts` mounts it for every method,
   "explicitly" without CSRF protection, and `core/routes/custom.ts` answers
   from the first note labelled `#customRequestHandler` or
