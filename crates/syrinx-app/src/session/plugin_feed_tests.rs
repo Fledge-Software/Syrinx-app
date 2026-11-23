@@ -480,6 +480,36 @@ fn a_long_feed_pulls_a_bounded_number_of_batches_per_announcement() {
 }
 
 #[test]
+fn text_left_by_a_plugin_removed_while_the_index_was_closed_goes_at_the_next_pull() {
+    let folder = Folder::new();
+    let store = folder.store();
+    let mut index = folder.index("fulltext");
+    let mut catalogue = Catalogue::new();
+    let mut feeds = PluginFeeds::default();
+    let mut plugin = Scripted::default().answer(None, first_batch());
+    announce(&mut feeds);
+    settle(&mut feeds, &mut plugin, &store, &mut index, &mut catalogue);
+
+    // Removed while the index is closed: the rows go, and the text is reported as left.
+    assert_eq!(store.remove_plugin(PLUGIN.to_owned()), Ok(true));
+    let closed = feeds.forget_plugin(PLUGIN, None, &mut catalogue);
+    assert_eq!(closed, Err(FeedError::Index(FullTextError::NeedsReopen)));
+    assert!(titles(&mut catalogue, "synthetic").is_empty());
+    assert_eq!(documents(&index, "quillmark"), ["a"]);
+
+    // A new session's first pump, with the index open, finds and removes it.
+    let mut feeds = PluginFeeds::restore(&store, &mut catalogue).expect("nothing kept");
+    let mut sinks = Sinks {
+        store: &store,
+        index: Some(&mut index),
+        catalogue: &mut catalogue,
+        now: NOW,
+    };
+    feeds.pump(&mut plugin, &mut sinks).expect("the sweep");
+    assert!(documents(&index, "quillmark").is_empty());
+}
+
+#[test]
 fn removing_a_plugin_empties_both_tiers_and_its_cursor() {
     let folder = Folder::new();
     let store = folder.store();

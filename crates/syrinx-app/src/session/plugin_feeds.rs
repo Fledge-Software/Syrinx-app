@@ -4,7 +4,7 @@
 
 mod keys;
 
-use std::collections::VecDeque;
+use std::collections::{BTreeSet, VecDeque};
 use std::fmt;
 use std::time::Duration;
 
@@ -130,6 +130,8 @@ pub(super) struct PluginFeeds {
     keys: FeedKeys,
     waiting: VecDeque<FeedName>,
     pull: Option<Pull>,
+    /// Whether this session has looked for text a removed plugin left in the index.
+    swept: bool,
 }
 
 impl PluginFeeds {
@@ -165,6 +167,7 @@ impl PluginFeeds {
         source: &mut dyn FeedSource,
         sinks: &mut Sinks<'_>,
     ) -> Result<(), FeedError> {
+        self.sweep_once(sinks)?;
         let Some(pull) = self.pull.take() else {
             return self.start_next(source, sinks);
         };
@@ -201,6 +204,28 @@ impl PluginFeeds {
         // A closed index cannot be reached, so the owner hears that the text was left.
         let index = index.ok_or(FeedError::Index(FullTextError::NeedsReopen))?;
         index.remove_plugin(plugin).map_err(FeedError::Index)
+    }
+
+    /// Once per session, with the index open, removes the text of every plugin the store no
+    /// longer records as installed: one removed while the index was closed left it there.
+    fn sweep_once(&mut self, sinks: &mut Sinks<'_>) -> Result<(), FeedError> {
+        let Some(index) = sinks.index.as_deref_mut() else {
+            return Ok(());
+        };
+        if self.swept {
+            return Ok(());
+        }
+        self.swept = true;
+        let installs = sinks.store.plugin_installs().map_err(FeedError::Store)?;
+        let installed: BTreeSet<String> = installs
+            .into_iter()
+            .map(|install| install.plugin_id)
+            .collect();
+        let held = index.plugin_ids().map_err(FeedError::Index)?;
+        for plugin in held.difference(&installed) {
+            self.forget_plugin(plugin, Some(&mut *index), sinks.catalogue)?;
+        }
+        Ok(())
     }
 
     /// Queues a feed once; one already waiting covers this announcement too.

@@ -92,7 +92,24 @@ fn removing_a_plugin_takes_every_feed_of_it_and_nothing_else() {
         .expect("mark the feed");
     index.commit().expect("commit the marker");
 
+    let held: Vec<String> = index
+        .plugin_ids()
+        .expect("list plugins")
+        .into_iter()
+        .collect();
+    assert_eq!(
+        held,
+        ["a", "a.b", "ab"],
+        "plugins only, never a feed or page text"
+    );
+
     index.remove_plugin("a").expect("remove the plugin");
+    let left: Vec<String> = index
+        .plugin_ids()
+        .expect("list plugins")
+        .into_iter()
+        .collect();
+    assert_eq!(left, ["a.b", "ab"]);
     let mut left = fixture.ids(&index, "lanternfish");
     left.sort();
     assert_eq!(left, ["3", "4", "5", "6"]);

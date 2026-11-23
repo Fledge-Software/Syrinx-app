@@ -9,7 +9,11 @@ mod types;
 #[cfg(test)]
 mod tests;
 
-use std::{collections::HashMap, ops::Bound, path::Path};
+use std::{
+    collections::{BTreeSet, HashMap},
+    ops::Bound,
+    path::Path,
+};
 
 use tantivy::{
     Directory, Index, IndexReader, IndexWriter, ReloadPolicy, Searcher, SegmentMeta,
@@ -189,6 +193,31 @@ impl FullText {
             Box::new(own) as Box<dyn Query>,
         )]))?;
         self.commit_with(self.cleared)
+    }
+
+    /// The id of every plugin with a namespace in the committed index, so text a plugin left
+    /// after its removal can be found without its manifest.
+    pub fn plugin_ids(&self) -> Result<BTreeSet<String>, FullTextError> {
+        self.require_usable()?;
+        let prefix = types::PLUGIN_PREFIX;
+        // `;` follows `:` in byte order, so this range is exactly the `plugin:` spellings.
+        let end = format!("{}{}", &prefix[..prefix.len() - 1], ';');
+        let mut plugins = BTreeSet::new();
+        for segment in self.searcher()?.segment_readers() {
+            let namespaces = segment.inverted_index(self.fields.namespace)?;
+            let mut terms = namespaces
+                .terms()
+                .range()
+                .ge(prefix)
+                .lt(&end)
+                .into_stream()?;
+            while terms.advance() {
+                let spelling =
+                    std::str::from_utf8(terms.key()).map_err(|_| FullTextError::Damaged)?;
+                plugins.insert(plugin_of(spelling)?.to_owned());
+            }
+        }
+        Ok(plugins)
     }
 
     /// The revision held for `id`, document or tombstone, once staged changes are counted.
@@ -480,6 +509,15 @@ impl FullText {
         let reader = self.reader.as_ref().ok_or(FullTextError::Engine)?;
         Ok(reader.searcher())
     }
+}
+
+/// The plugin id a stored `plugin:{plugin}:{feed}` spelling names.
+fn plugin_of(spelling: &str) -> Result<&str, FullTextError> {
+    let pair = spelling
+        .strip_prefix(types::PLUGIN_PREFIX)
+        .ok_or(FullTextError::Damaged)?;
+    let (plugin, _) = pair.split_once(':').ok_or(FullTextError::Damaged)?;
+    Ok(plugin)
 }
 
 /// A page clear must name a non-empty range; anything else carries no range.
