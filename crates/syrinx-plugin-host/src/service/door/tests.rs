@@ -317,6 +317,11 @@ fn once_a_write_is_answered_every_later_failure_is_uncertain() {
             ServiceRefusal::Uncertain("response-too-large"),
         ),
     ];
+    let mut cases = cases.to_vec();
+    cases.push((
+        vec![redirect(307, "/x"); limits::MAX_SERVICE_REDIRECTS + 1],
+        ServiceRefusal::Uncertain("too-many-redirects"),
+    ));
     for (answers, refusal) in cases {
         assert_eq!(
             post(&door(Scripted::new(answers))),
@@ -324,6 +329,11 @@ fn once_a_write_is_answered_every_later_failure_is_uncertain() {
             "{refusal}"
         );
     }
+    let slow = door(Scripted::slow(vec![redirect(307, "/next")], BUDGET / 5));
+    assert_eq!(
+        slow.request(Method::Post, "/x", Vec::new(), b"data", BUDGET / 10),
+        Err(ServiceRefusal::Uncertain("no-time"))
+    );
     let typing = OwnerTyping::new();
     let transport = Scripted::typing_after_first(vec![redirect(307, "/next")], typing.clone());
     let address = ServiceAddress::parse("https://notes.example.test").expect("valid");
