@@ -54,7 +54,7 @@ pub(super) fn height(scopes_shown: bool, choices: &PaletteChoices, view: View) -
     if list > 0. {
         height += LIST_DIVIDER + list.min(LIST_MAX_HEIGHT);
     }
-    if choices.has_status_line() {
+    if !choices.status_line().is_empty() {
         height += NOTICE_HEIGHT;
     }
     height
@@ -500,7 +500,8 @@ pub(super) fn notice(choices: &PaletteChoices) -> Option<Div> {
 
 /// The status line's text, or nothing when the line is not drawn.
 fn notice_text(choices: &PaletteChoices) -> Option<String> {
-    choices.has_status_line().then(|| choices.status_line())
+    let line = choices.status_line();
+    (!line.is_empty()).then_some(line)
 }
 
 fn key_hint(label: &str) -> Div {

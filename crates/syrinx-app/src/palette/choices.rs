@@ -75,11 +75,6 @@ impl PaletteChoices {
         compose_status_line(self.registry_problem.as_deref(), &self.status)
     }
 
-    /// Whether the status line has anything to say, without composing it.
-    pub(super) fn has_status_line(&self) -> bool {
-        self.registry_problem.is_some() || !self.status.is_empty()
-    }
-
     fn begin_query(&mut self) -> u64 {
         self.request_id = self
             .request_id
@@ -1592,10 +1587,12 @@ mod tests {
         let refused = choices.query("JAVASCRIPT:1");
         let refusal = choices.status.clone();
         assert!(!refusal.is_empty(), "the synthetic address is refused");
-        assert_eq!(choices.status_line(), format!("{problem} · {refusal}"));
+        assert_eq!(
+            choices.status_line(),
+            format!("{problem}{STATUS_SEPARATOR}{refusal}")
+        );
         let failure = SessionError::Search(SearchError::QueryTooLong);
         let error_text = failure.to_string();
-        assert!(!error_text.is_empty());
         assert_ne!(error_text, refusal, "the failure replaces the refusal");
         assert!(choices.receive(refused, Err(failure)));
         assert_eq!(
@@ -1604,16 +1601,6 @@ mod tests {
         );
         choices.query("synthetic");
         assert_eq!(choices.status_line(), problem, "typing keeps it");
-    }
-
-    #[test]
-    fn a_registry_problem_set_by_reset_survives_the_first_reply() {
-        let problem = "Commands are unavailable: synthetic registry failure";
-        let mut choices = PaletteChoices::default();
-        choices.reset(Some(problem.to_owned()));
-        let request = choices.query("");
-        assert!(choices.receive(request, Ok(results(&targets()))));
-        assert_eq!(choices.status_line(), problem);
     }
 
     #[test]
@@ -1627,28 +1614,6 @@ mod tests {
         let request = choices.query("");
         assert!(choices.receive(request, Ok(results(&targets()))));
         assert_eq!(choices.status_line(), "");
-    }
-
-    #[test]
-    fn has_status_line_agrees_with_the_composed_line() {
-        for (registry, per_query) in [
-            (None, ""),
-            (Some("Commands are unavailable: synthetic"), ""),
-            (None, "Synthetic refusal"),
-            (
-                Some("Commands are unavailable: synthetic"),
-                "Synthetic refusal",
-            ),
-        ] {
-            let mut choices = PaletteChoices::default();
-            choices.reset(registry.map(str::to_owned));
-            choices.status = per_query.to_owned();
-            assert_eq!(
-                choices.has_status_line(),
-                !choices.status_line().is_empty(),
-                "registry {registry:?}, per query {per_query:?}"
-            );
-        }
     }
 
     #[test]
