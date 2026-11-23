@@ -84,6 +84,10 @@ pub enum PluginInstallError {
     NoPublisherKey,
     /// The install record's publisher is damaged.
     RecordedPublisher,
+    /// A new plugin's id already has an installed version's folder.
+    AlreadyInstalled,
+    /// An update would replace the installed version's own folder.
+    InstalledVersion,
     /// An installed version's folder holds another version than its record names.
     NotRecordedVersion { recorded: Version, found: Version },
 }
@@ -101,6 +105,8 @@ impl fmt::Display for PluginInstallError {
                 .write_str("this plugin is not signed; unsigned plugins need developer mode"),
             Self::NoPublisherKey => formatter.write_str("no publisher key was given to trust"),
             Self::RecordedPublisher => formatter.write_str("the recorded publisher is damaged"),
+            Self::AlreadyInstalled => formatter.write_str("this plugin is already installed"),
+            Self::InstalledVersion => formatter.write_str("this version is the installed one"),
             Self::NotRecordedVersion { recorded, found } => write!(
                 formatter,
                 "the folder for version {recorded} holds version {found}"
@@ -158,13 +164,31 @@ pub struct PluginOffer<'a> {
     pub developer_mode: bool,
 }
 
-/// What a folder must prove, as `check_folder` reads it.
+/// What a folder must prove, as `check_package_files` reads it.
 #[derive(Clone, Copy)]
 enum Expect<'a> {
     New(Option<PinnedKey>),
     Newer(Installed<'a>),
     /// The installed version itself, found again at start-up.
     Exactly(Installed<'a>),
+}
+
+impl<'a> Expect<'a> {
+    /// The install record checked against; `None` for a new plugin.
+    fn installed(self) -> Option<Installed<'a>> {
+        match self {
+            Self::New(_) => None,
+            Self::Newer(installed) | Self::Exactly(installed) => Some(installed),
+        }
+    }
+
+    /// The version the package must be newer than: only an update's.
+    fn older_than(self) -> Option<Version> {
+        match self {
+            Self::Newer(installed) => Some(installed.version),
+            Self::New(_) | Self::Exactly(_) => None,
+        }
+    }
 }
 
 /// The data folder's plugin folders.
@@ -251,6 +275,8 @@ pub struct StagedPlugin {
     folder: PathBuf,
     list: PluginPackageList,
     publisher: Publisher,
+    /// The installed version an update replaces; `None` for a new plugin.
+    installed: Option<Version>,
     /// Set once the folder has moved to its version folder, so dropping removes nothing.
     placed: bool,
 }
@@ -273,11 +299,20 @@ impl StagedPlugin {
     }
 
     /// Move the staged copy to `Plugins/<id>/<version>/`, replacing a folder an earlier offer of
-    /// this same version left there. Callers never stage the installed version itself: an
-    /// update must be newer, and a new plugin has no installed version. A failure leaves no
-    /// folder there.
+    /// this same update left there. It never touches the installed version's folder: a new
+    /// plugin whose id already has a version folder is refused, and so is an update whose
+    /// destination is the installed version's. A failure leaves no folder there.
     pub fn place(mut self, folders: &PluginFolders) -> Result<PlacedPlugin, PluginInstallError> {
         let (id, version) = (self.list.id().to_owned(), self.list.version());
+        match self.installed {
+            None if !folders.versions(&id)?.is_empty() => {
+                return Err(PluginInstallError::AlreadyInstalled);
+            }
+            Some(installed) if installed == version => {
+                return Err(PluginInstallError::InstalledVersion);
+            }
+            _ => {}
+        }
         ensure_plain_directory(&folders.plugins(), "the plugins folder")?;
         ensure_plain_directory(&folders.plugin_folder(&id), "a plugin's folder")?;
         let destination = folders.version_folder(&id, version);
@@ -367,6 +402,7 @@ pub fn stage_plugin(
         folder,
         list: files.list,
         publisher: files.publisher,
+        installed: expect.installed().map(|installed| installed.version),
         placed: false,
     };
     copy_verified(source, &staged, files.signature.as_deref())?;
@@ -387,11 +423,14 @@ pub fn open_installed(
     verify_placed(folder, Expect::Exactly(installed), developer_mode)
 }
 
-/// The update waiting for the owner, if any: the newest version folder newer than the record
-/// that still verifies against the recorded publisher. It survives a restart because it is its
-/// own signed folder; nothing about it is recorded until the owner accepts. Newer folders that
-/// no longer verify, and older waiting ones, are removed, so none is left stuck.
-pub fn find_pending_update(
+/// The update waiting for the owner, if any, with the waiting folders settled: the newest
+/// version folder newer than the record that still verifies against the recorded publisher.
+/// It survives a restart because it is its own signed folder; nothing about it is recorded
+/// until the owner accepts. A newer folder whose contents are refused (signature, hash, slot,
+/// version or publisher) is removed, and so is every older waiting folder once a newer one is
+/// offered, so none is left stuck. An unsigned folder while developer mode is off is kept but
+/// not offered. A failure to read a folder is returned and removes nothing.
+pub fn settle_pending_update(
     folders: &PluginFolders,
     installed: Installed<'_>,
     developer_mode: bool,
@@ -410,11 +449,31 @@ pub fn find_pending_update(
         let folder = folders.version_folder(installed.id, version);
         match verify_placed(folder, Expect::Newer(installed), developer_mode) {
             Ok(placed) => pending = Some(placed),
-            Err(PluginInstallError::Files(error)) => return Err(error.into()),
-            Err(_) => folders.remove_version(installed.id, version)?,
+            Err(PluginInstallError::Unsigned) => {}
+            Err(error) if is_content_refusal(&error) => {
+                folders.remove_version(installed.id, version)?;
+            }
+            Err(error) => return Err(error),
         }
     }
     Ok(pending)
+}
+
+/// Whether a folder was refused for what it holds, so it can never be offered, rather than
+/// for a failure to read it.
+fn is_content_refusal(error: &PluginInstallError) -> bool {
+    match error {
+        PluginInstallError::Package(UpdateError::Read { .. }) => false,
+        PluginInstallError::Package(_)
+        | PluginInstallError::DifferentPublisher
+        | PluginInstallError::NotRecordedVersion { .. } => true,
+        PluginInstallError::Files(_)
+        | PluginInstallError::Unsigned
+        | PluginInstallError::NoPublisherKey
+        | PluginInstallError::RecordedPublisher
+        | PluginInstallError::AlreadyInstalled
+        | PluginInstallError::InstalledVersion => false,
+    }
 }
 
 /// A version folder checked in place against `expect`; it is kept when dropped.
@@ -472,23 +531,15 @@ fn check_signed(
     signature: &[u8],
     expect: Expect<'_>,
 ) -> Result<(PluginPackageList, Publisher), PluginInstallError> {
-    let installed = match expect {
-        Expect::New(trusted) => {
-            let key = trusted.ok_or(PluginInstallError::NoPublisherKey)?;
-            let verified = verify_new_plugin_package(package, signature, &KeySet::new(&[key])?)?;
-            return Ok((verified.list().clone(), Publisher::Key(key)));
-        }
-        Expect::Newer(installed) | Expect::Exactly(installed) => installed,
+    let Some(installed) = expect.installed() else {
+        return check_signed_new(package, signature, expect);
     };
     // An unsigned development plugin has no key a signed package could match.
     let Publisher::Key(recorded) = installed.publisher else {
         return Err(PluginInstallError::DifferentPublisher);
     };
-    let older = match expect {
-        Expect::Newer(installed) => Some(installed.version),
-        Expect::New(_) | Expect::Exactly(_) => None,
-    };
     let keys = KeySet::new(&[recorded])?;
+    let older = expect.older_than();
     let verified =
         verify_plugin_package(package, signature, &keys, installed.id, older).map_err(|error| {
             match error {
@@ -497,6 +548,19 @@ fn check_signed(
             }
         })?;
     Ok((verified.list().clone(), Publisher::Key(recorded)))
+}
+
+/// A new plugin's signed package, which must come from the key the owner chose to trust.
+fn check_signed_new(
+    package: &[u8],
+    signature: &[u8],
+    expect: Expect<'_>,
+) -> Result<(PluginPackageList, Publisher), PluginInstallError> {
+    let Expect::New(Some(key)) = expect else {
+        return Err(PluginInstallError::NoPublisherKey);
+    };
+    let verified = verify_new_plugin_package(package, signature, &KeySet::new(&[key])?)?;
+    Ok((verified.list().clone(), Publisher::Key(key)))
 }
 
 /// A folder without `package.sig`: only in developer mode, and never for a signed plugin.
@@ -508,15 +572,16 @@ fn check_unsigned(
     if !developer_mode {
         return Err(PluginInstallError::Unsigned);
     }
-    let rules = match expect {
-        Expect::New(_) => None,
-        Expect::Newer(installed) | Expect::Exactly(installed) => {
-            if installed.publisher != Publisher::Unsigned {
-                return Err(PluginInstallError::DifferentPublisher);
-            }
-            matches!(expect, Expect::Newer(_)).then_some((installed.id, installed.version))
-        }
-    };
+    let signed_before = expect
+        .installed()
+        .is_some_and(|installed| installed.publisher != Publisher::Unsigned);
+    if signed_before {
+        return Err(PluginInstallError::DifferentPublisher);
+    }
+    let rules = expect
+        .installed()
+        .zip(expect.older_than())
+        .map(|(installed, older)| (installed.id, older));
     let list = read_unsigned_plugin_package(package, rules)?;
     Ok((list, Publisher::Unsigned))
 }

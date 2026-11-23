@@ -10,8 +10,8 @@ use crate::error::UpdateError;
 use crate::{
     Basis, DetachedSignature, FileEntry, Installed, KeyId, PACKAGE_FILE, PACKAGE_SIGNATURE_FILE,
     PLUGIN_STAGING_FOLDER, PackagePath, PinnedKey, PluginFolders, PluginInstallError, PluginOffer,
-    PluginPackageList, Publisher, SignatureKind, StagedPlugin, Version, find_pending_update,
-    open_installed, stage_plugin,
+    PluginPackageList, Publisher, SignatureKind, StagedPlugin, Version, open_installed,
+    settle_pending_update, stage_plugin,
 };
 
 const WORLD: &str = "syrinx:plugin/plugin@0.1.0";
@@ -339,15 +339,9 @@ fn older_versions_go_once_the_new_one_runs_and_uninstall_removes_every_version()
     let scratch = Scratch::new();
     let signer = TestKeyPair::generate()?;
     let folders = scratch.folders();
-    for minor in [1, 2, 3] {
-        let source = scratch.0.join(format!("v{minor}"));
-        write_package(&source, "sample", v(minor), Some(&signer))?;
-        let offer = first_install(&source, key(&signer)?);
-        stage_plugin(&folders, &offer)
-            .expect("staged")
-            .place(&folders)
-            .expect("placed")
-            .keep();
+    place_new(&scratch, &folders, v(1), &signer)?;
+    for minor in [2, 3] {
+        place_update(&scratch, &folders, v(minor), &signer)?;
     }
     assert_eq!(
         folders.versions("sample").expect("listed"),
@@ -401,6 +395,111 @@ fn place_new(
         .place(folders)
         .expect("placed")
         .keep();
+    Ok(())
+}
+
+/// Place `version` of `sample` as an update of version 1, keeping its folder.
+fn place_update(
+    scratch: &Scratch,
+    folders: &PluginFolders,
+    version: Version,
+    signer: &TestKeyPair,
+) -> Result<(), UpdateError> {
+    let source = scratch.0.join(format!("chosen-{version}"));
+    write_package(&source, "sample", version, Some(signer))?;
+    let installed = Installed {
+        id: "sample",
+        version: v(1),
+        publisher: Publisher::Key(key(signer)?),
+    };
+    stage_plugin(folders, &update(&source, installed))
+        .expect("staged")
+        .place(folders)
+        .expect("placed")
+        .keep();
+    Ok(())
+}
+
+#[test]
+fn a_new_plugin_never_replaces_an_installed_one() -> Result<(), UpdateError> {
+    let scratch = Scratch::new();
+    let signer = TestKeyPair::generate()?;
+    let folders = scratch.folders();
+    place_new(&scratch, &folders, v(1), &signer)?;
+
+    // Offered again as new, at the same version or another, it is refused before anything moves.
+    for version in [v(1), v(2)] {
+        let source = scratch.0.join(format!("again-{version}"));
+        write_package(&source, "sample", version, Some(&signer))?;
+        let staged =
+            stage_plugin(&folders, &first_install(&source, key(&signer)?)).expect("staged");
+        assert_eq!(
+            staged.place(&folders).err(),
+            Some(PluginInstallError::AlreadyInstalled)
+        );
+    }
+    assert_eq!(folders.versions("sample").expect("listed"), [v(1)]);
+    assert!(
+        folders
+            .version_folder("sample", v(1))
+            .join(MODULE)
+            .is_file()
+    );
+    Ok(())
+}
+
+#[test]
+fn of_two_waiting_updates_the_newer_is_offered_and_the_older_removed() -> Result<(), UpdateError> {
+    let scratch = Scratch::new();
+    let signer = TestKeyPair::generate()?;
+    let folders = scratch.folders();
+    place_new(&scratch, &folders, v(1), &signer)?;
+    place_update(&scratch, &folders, v(2), &signer)?;
+    place_update(&scratch, &folders, v(3), &signer)?;
+    let installed = Installed {
+        id: "sample",
+        version: v(1),
+        publisher: Publisher::Key(key(&signer)?),
+    };
+    let pending = settle_pending_update(&folders, installed, false).expect("settled");
+    assert_eq!(pending.map(|placed| placed.list().version()), Some(v(3)));
+    assert_eq!(folders.versions("sample").expect("listed"), [v(1), v(3)]);
+    Ok(())
+}
+
+#[test]
+fn an_unsigned_waiting_update_is_kept_but_not_offered_without_developer_mode()
+-> Result<(), UpdateError> {
+    let scratch = Scratch::new();
+    let folders = scratch.folders();
+    let installed = Installed {
+        id: "sample",
+        version: v(1),
+        publisher: Publisher::Unsigned,
+    };
+    for (version, basis) in [
+        (v(1), Basis::New { trusted: None }),
+        (v(2), Basis::Update(installed)),
+    ] {
+        let source = scratch.0.join(format!("dev-{version}"));
+        write_package(&source, "sample", version, None)?;
+        let offer = PluginOffer {
+            folder: &source,
+            basis,
+            developer_mode: true,
+        };
+        stage_plugin(&folders, &offer)
+            .expect("staged")
+            .place(&folders)
+            .expect("placed")
+            .keep();
+    }
+
+    let off = settle_pending_update(&folders, installed, false).expect("settled");
+    assert!(off.is_none(), "not offered while developer mode is off");
+    assert_eq!(folders.versions("sample").expect("listed"), [v(1), v(2)]);
+    let on = settle_pending_update(&folders, installed, true).expect("settled");
+    assert_eq!(on.map(|placed| placed.list().version()), Some(v(2)));
     Ok(())
 }
 
@@ -467,7 +566,7 @@ fn a_held_update_is_found_again_offered_again_and_a_broken_one_removed() -> Resu
         publisher: Publisher::Key(key(&signer)?),
     };
     assert!(
-        find_pending_update(&folders, installed, false)
+        settle_pending_update(&folders, installed, false)
             .expect("looked")
             .is_none()
     );
@@ -481,7 +580,14 @@ fn a_held_update_is_found_again_offered_again_and_a_broken_one_removed() -> Resu
         .place(&folders)
         .expect("placed")
         .keep();
-    let pending = find_pending_update(&folders, installed, false).expect("looked");
+    // The installed version's own folder is never an update's destination.
+    let replay = scratch.0.join("replay");
+    write_package(&replay, "sample", v(1), Some(&signer))?;
+    assert!(matches!(
+        stage_plugin(&folders, &update(&replay, installed)).err(),
+        Some(PluginInstallError::Package(UpdateError::NotNewer { .. }))
+    ));
+    let pending = settle_pending_update(&folders, installed, false).expect("looked");
     assert_eq!(pending.map(|placed| placed.list().version()), Some(v(2)));
 
     // Offering the same version again replaces it instead of getting stuck.
@@ -496,7 +602,7 @@ fn a_held_update_is_found_again_offered_again_and_a_broken_one_removed() -> Resu
     let module = folders.version_folder("sample", v(2)).join(MODULE);
     fs::write(&module, b"\0asm changed while waiting").expect("tampers");
     assert!(
-        find_pending_update(&folders, installed, false)
+        settle_pending_update(&folders, installed, false)
             .expect("looked")
             .is_none()
     );
