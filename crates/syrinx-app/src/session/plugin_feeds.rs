@@ -63,7 +63,7 @@ impl fmt::Display for FeedError {
             Self::Stalled { plugin } => {
                 write!(
                     formatter,
-                    "plugin {plugin}'s feed went round and was stopped"
+                    "a feed of plugin {plugin} went round and was stopped"
                 )
             }
             Self::Name => formatter.write_str("a plugin feed's name cannot be indexed"),

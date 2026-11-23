@@ -213,7 +213,6 @@ fn a_removal_the_open_index_refused_is_tried_again_only_at_the_next_idle_tick() 
     assert_eq!(refused, Err(FeedError::Index(FullTextError::Io)));
     // The next turn does not ask the index again.
     assert_eq!(feeds.pump(&mut plugin, &mut sinks), Ok(()));
-    drop(sinks);
     assert!(
         titles(&mut catalogue, "synthetic").is_empty(),
         "the rows went at once"
@@ -230,6 +229,5 @@ fn a_removal_the_open_index_refused_is_tried_again_only_at_the_next_idle_tick() 
         at: Instant::now(),
     };
     feeds.pump(&mut plugin, &mut sinks).expect("the retry");
-    drop(sinks);
     assert!(documents(&index, "quillmark").is_empty());
 }
