@@ -5,11 +5,20 @@ use std::sync::Mutex;
 
 use super::*;
 
+/// One request as the scripted transport received it.
+#[derive(Debug, Clone)]
+struct Sent {
+    method: Method,
+    path: String,
+    headers: Vec<Header>,
+    body: Vec<u8>,
+}
+
 /// A transport that answers from a script and records what it was asked.
 #[derive(Default)]
 struct Scripted {
     answers: Mutex<Vec<Result<IncomingResponse, TransportError>>>,
-    sent: Mutex<Vec<(Method, String, Vec<Header>, Vec<u8>)>>,
+    sent: Mutex<Vec<Sent>>,
 }
 
 impl Scripted {
@@ -20,19 +29,19 @@ impl Scripted {
         })
     }
 
-    fn sent(&self) -> Vec<(Method, String, Vec<Header>, Vec<u8>)> {
+    fn sent(&self) -> Vec<Sent> {
         self.sent.lock().expect("unpoisoned").clone()
     }
 }
 
 impl Transport for Scripted {
     fn send(&self, request: &OutgoingRequest<'_>) -> Result<IncomingResponse, TransportError> {
-        self.sent.lock().expect("unpoisoned").push((
-            request.method,
-            request.path.to_owned(),
-            request.headers.to_vec(),
-            request.body.to_vec(),
-        ));
+        self.sent.lock().expect("unpoisoned").push(Sent {
+            method: request.method,
+            path: request.path.to_owned(),
+            headers: request.headers.to_vec(),
+            body: request.body.to_vec(),
+        });
         self.answers
             .lock()
             .expect("unpoisoned")
@@ -95,7 +104,7 @@ fn the_host_adds_the_credential_and_never_hands_it_back() {
     );
     let sent = transport.sent();
     assert_eq!(
-        sent[0].2,
+        sent[0].headers,
         vec![
             header("accept", "application/json"),
             header("x-api-key", "synthetic-credential"),
@@ -143,7 +152,7 @@ fn redirects_within_the_address_are_followed() {
     let paths: Vec<(Method, String, Vec<u8>)> = transport
         .sent()
         .into_iter()
-        .map(|(method, path, _, body)| (method, path, body))
+        .map(|sent| (sent.method, sent.path, sent.body))
         .collect();
     assert_eq!(
         paths,
@@ -162,8 +171,11 @@ fn a_303_becomes_a_bodiless_get() {
     door.request(Method::Post, "/form", Vec::new(), b"data", BUDGET)
         .expect("answered");
     let second = &transport.sent()[1];
-    assert_eq!((second.0, second.1.as_str()), (Method::Get, "/result"));
-    assert!(second.3.is_empty());
+    assert_eq!(
+        (second.method, second.path.as_str()),
+        (Method::Get, "/result")
+    );
+    assert!(second.body.is_empty());
 }
 
 #[test]
