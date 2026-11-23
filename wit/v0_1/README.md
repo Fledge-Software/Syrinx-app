@@ -68,7 +68,9 @@ host's contract tests check them:
   Once a POST, PUT, PATCH or DELETE may have reached the server, any failure
   after that point (a lost or oversized answer, a refused redirect, a later
   hop that cannot be sent) is `internal("uncertain: ...")`, naming the rule
-  that failed, and the request is never resent.
+  that failed, and the request is never resent. Redirects follow the Fetch
+  standard: a POST answered 301 or 302, or a write answered 303, continues
+  as a bodiless GET; a 307 or 308 repeats the write on the approved address.
 - **Search keywords.** A catalogue entry carries at most 16 keywords of at
   most 120 characters; the host drops and logs an over-limit keyword instead
   of refusing the batch.

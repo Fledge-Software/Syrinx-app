@@ -228,6 +228,22 @@ fn a_301_or_302_after_a_post_becomes_a_bodiless_get_and_never_repeats_the_write(
 }
 
 #[test]
+fn a_307_or_308_after_a_post_repeats_it_on_the_address() {
+    for status in [307, 308] {
+        let transport = Scripted::new(vec![redirect(status, "/moved"), ok(200, Vec::new(), b"")]);
+        let door = door(transport.clone());
+        door.request(Method::Post, "/notes", Vec::new(), b"data", BUDGET)
+            .expect("answered");
+        let second = &transport.sent()[1];
+        assert_eq!(
+            (second.method, second.path.as_str(), second.body.as_slice()),
+            (Method::Post, "/moved", &b"data"[..]),
+            "{status}"
+        );
+    }
+}
+
+#[test]
 fn a_303_after_a_head_stays_a_head() {
     let transport = Scripted::new(vec![redirect(303, "/result"), ok(200, Vec::new(), b"")]);
     let door = door(transport.clone());
