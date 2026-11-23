@@ -47,8 +47,9 @@ fn loopback_socket(address: &ServiceAddress) -> Result<SocketAddr, TransportErro
     Ok(SocketAddr::new(ip, address.port()))
 }
 
+/// Before anything is written: running out of time here means nothing was sent.
 fn set_timeouts(stream: &TcpStream, deadline: Instant) -> Result<(), TransportError> {
-    let left = remaining(deadline)?;
+    let left = remaining(deadline).map_err(|_| TransportError::Unreachable)?;
     let unset = |_| TransportError::Unreachable;
     stream.set_read_timeout(Some(left)).map_err(unset)?;
     stream.set_write_timeout(Some(left)).map_err(unset)

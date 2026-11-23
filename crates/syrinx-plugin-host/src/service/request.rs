@@ -6,13 +6,11 @@ use crate::limits;
 
 use super::{Credential, ServiceRefusal};
 
-/// Headers only the host or its transport may set: routing, length, connection handling,
-/// cookies and every credential header.
-const RESERVED_HEADERS: &[&str] = &[
-    "authorization",
+/// Headers that frame or route the request: only the transport sets them, and a credential
+/// sent under one could smuggle a second request past a naive transport.
+pub(super) const FRAMING_HEADERS: &[&str] = &[
     "connection",
     "content-length",
-    "cookie",
     "expect",
     "host",
     "keep-alive",
@@ -21,6 +19,9 @@ const RESERVED_HEADERS: &[&str] = &[
     "transfer-encoding",
     "upgrade",
 ];
+
+/// Besides the framing headers, the credentials only the host may set.
+const CREDENTIAL_HEADERS: &[&str] = &["authorization", "cookie"];
 
 /// Refuse a path that is not one absolute path on the approved address.
 pub(super) fn check_path(path: &str) -> Result<(), ServiceRefusal> {
@@ -74,11 +75,7 @@ pub(super) fn check_headers(
     if headers.len() > limits::MAX_SERVICE_HEADERS {
         return Err(ServiceRefusal::InvalidHeader("there are too many headers"));
     }
-    let total: usize = headers
-        .iter()
-        .map(|header| header.name.len() + header.value.len())
-        .sum();
-    if total > limits::MAX_SERVICE_HEADER_BYTES {
+    if header_bytes(headers) > limits::MAX_SERVICE_HEADER_BYTES {
         return Err(ServiceRefusal::InvalidHeader("the headers are too large"));
     }
     for header in headers {
@@ -106,11 +103,20 @@ fn check_header(header: &Header, credential: Option<&Credential>) -> Result<(), 
     Ok(())
 }
 
-/// Whether only the host may set `name`: one of `RESERVED_HEADERS`, a `proxy-` or `sec-`
+/// The bytes of every header's name and value together.
+pub(super) fn header_bytes(headers: &[Header]) -> usize {
+    headers
+        .iter()
+        .map(|header| header.name.len() + header.value.len())
+        .sum()
+}
+
+/// Whether only the host may set `name`: a framing or credential header, a `proxy-` or `sec-`
 /// header, or the credential's own.
 fn is_reserved_header(name: &str, credential: Option<&Credential>) -> bool {
     let name = name.to_ascii_lowercase();
-    RESERVED_HEADERS.contains(&name.as_str())
+    FRAMING_HEADERS.contains(&name.as_str())
+        || CREDENTIAL_HEADERS.contains(&name.as_str())
         || name.starts_with("proxy-")
         || name.starts_with("sec-")
         || credential.is_some_and(|credential| credential.header() == name)

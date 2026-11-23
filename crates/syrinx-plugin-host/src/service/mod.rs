@@ -121,8 +121,9 @@ pub enum ServiceRefusal {
     TimedOut,
     /// A reading request got a cut-off or malformed answer; asking again is safe.
     BadResponse,
-    /// A writing request may have reached the server but its answer was lost; never resend it.
-    Uncertain,
+    /// A writing request reached, or may have reached, the server and then failed for the rule
+    /// named here; never resend it.
+    Uncertain(&'static str),
     /// Nothing was sent: the address could not be reached.
     Unreachable,
 }
@@ -145,7 +146,7 @@ impl ServiceRefusal {
             Self::ResponseTooLarge => "response-too-large",
             Self::TimedOut => "timed-out",
             Self::BadResponse => "bad-response",
-            Self::Uncertain => "uncertain",
+            Self::Uncertain(_) => "uncertain",
             Self::Unreachable => "unreachable",
         }
     }
@@ -175,9 +176,10 @@ impl ServiceRefusal {
             ),
             Self::TimedOut => "the server did not answer in time".into(),
             Self::BadResponse => "the server's answer was cut off or malformed".into(),
-            Self::Uncertain => "the request may have reached the server, but its answer was \
-                                lost; do not send it again"
-                .into(),
+            Self::Uncertain(cause) => format!(
+                "the request may have reached the server before it failed ({cause}); \
+                 do not send it again"
+            ),
             Self::Unreachable => "the approved address could not be reached".into(),
         }
     }
@@ -213,7 +215,7 @@ impl From<ServiceRefusal> for PluginError {
             | ServiceRefusal::TimedOut
             | ServiceRefusal::BadResponse
             | ServiceRefusal::Unreachable => Self::Unavailable(text),
-            ServiceRefusal::Uncertain => Self::Internal(text),
+            ServiceRefusal::Uncertain(_) => Self::Internal(text),
         }
     }
 }

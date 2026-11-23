@@ -65,8 +65,10 @@ host's contract tests check them:
   refusal's text starts with its rule's name, as in
   `denied("redirect-off-host: ...")`. `unavailable` means asking again
   cannot repeat a write: nothing was sent, or the request was a GET or HEAD.
-  A POST, PUT, PATCH or DELETE whose answer was lost after it may have
-  reached the server is `internal("uncertain: ...")`, and is never resent.
+  Once a POST, PUT, PATCH or DELETE may have reached the server, any failure
+  after that point (a lost or oversized answer, a refused redirect, a later
+  hop that cannot be sent) is `internal("uncertain: ...")`, naming the rule
+  that failed, and the request is never resent.
 - **Search keywords.** A catalogue entry carries at most 16 keywords of at
   most 120 characters; the host drops and logs an over-limit keyword instead
   of refusing the batch.

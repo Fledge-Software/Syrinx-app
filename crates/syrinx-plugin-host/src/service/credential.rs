@@ -4,21 +4,7 @@
 use std::fmt;
 
 use super::AddressError;
-use super::request::{is_header_value, is_token};
-
-/// Headers that frame or route the request; a credential sent under one could smuggle a
-/// second request past a naive transport.
-const FRAMING_HEADERS: &[&str] = &[
-    "connection",
-    "content-length",
-    "expect",
-    "host",
-    "keep-alive",
-    "te",
-    "trailer",
-    "transfer-encoding",
-    "upgrade",
-];
+use super::request::{FRAMING_HEADERS, is_header_value, is_token};
 
 /// The header the host adds to every request, such as an `authorization` token. Its value is
 /// never shown: not by `Debug`, not in an error, a log or the plugin's response.

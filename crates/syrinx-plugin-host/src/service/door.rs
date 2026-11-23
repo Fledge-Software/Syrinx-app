@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 use crate::bindings::syrinx::plugin::service::{Header, Method, Response};
 use crate::limits;
 
-use super::request::{check_headers, check_path, is_withheld_response_header};
+use super::request::{check_headers, check_path, header_bytes, is_withheld_response_header};
 use super::{
     Credential, IncomingResponse, OutgoingRequest, OwnerTyping, ServiceAddress, ServiceRefusal,
     Transport, TransportError,
@@ -72,20 +72,27 @@ impl ServiceDoor {
     }
 
     /// Send hops until one is not a redirect, at most `MAX_SERVICE_REDIRECTS` redirects later.
+    /// Once a writing hop has been answered, the write is done: any later failure is `uncertain`.
     fn follow(
         &self,
         mut hop: Hop,
         headers: &[Header],
         deadline: Instant,
     ) -> Result<IncomingResponse, ServiceRefusal> {
+        let mut wrote = false;
         for _ in 0..=limits::MAX_SERVICE_REDIRECTS {
-            let response = self.send(&hop, headers, deadline)?;
+            let response = self
+                .send(&hop, headers, deadline)
+                .map_err(|refusal| after_write(refusal, wrote))?;
+            wrote |= !is_reading(hop.method);
             let Some(location) = redirect_location(&response) else {
                 return Ok(response);
             };
-            hop = self.redirected(hop, response.status, location)?;
+            hop = self
+                .redirected(hop, response.status, location)
+                .map_err(|refusal| after_write(refusal, wrote))?;
         }
-        Err(ServiceRefusal::TooManyRedirects)
+        Err(after_write(ServiceRefusal::TooManyRedirects, wrote))
     }
 
     /// Send one hop, unless the owner is typing or no time is left; every hop is a request.
@@ -111,12 +118,14 @@ impl ServiceDoor {
             timeout,
             max_response_bytes: limits::MAX_SERVICE_RESPONSE_BYTES,
         };
-        let response = self
+        let answered = self
             .transport
             .send(&outgoing)
             .map_err(|error| refusal_for(error, hop.method))?;
-        check_response_size(&response)?;
-        Ok(response)
+        // An oversized answer to a write still means the write was carried out.
+        check_response_size(&answered)
+            .map_err(|refusal| after_write(refusal, !is_reading(hop.method)))?;
+        Ok(answered)
     }
 
     /// The next hop after a redirect, if it stays on the approved address. A 303 becomes a
@@ -187,29 +196,37 @@ impl ServiceDoor {
     }
 }
 
-/// A transport failure as the plugin is told it. Only GET and HEAD are safe to ask again once
-/// the request may have reached the server; a lost answer to any other method is `uncertain`.
-fn refusal_for(error: TransportError, method: Method) -> ServiceRefusal {
-    let reading = matches!(method, Method::Get | Method::Head);
-    match error {
-        TransportError::Unreachable => ServiceRefusal::Unreachable,
-        TransportError::ResponseTooLarge => ServiceRefusal::ResponseTooLarge,
-        TransportError::TimedOut if reading => ServiceRefusal::TimedOut,
-        TransportError::BadResponse if reading => ServiceRefusal::BadResponse,
-        TransportError::TimedOut | TransportError::BadResponse => ServiceRefusal::Uncertain,
+/// GET and HEAD read; every other method may change something on the server.
+fn is_reading(method: Method) -> bool {
+    matches!(method, Method::Get | Method::Head)
+}
+
+/// A refusal as the plugin must hear it once a write may have reached the server: `uncertain`,
+/// naming the rule that failed, so it is never taken as safe to resend.
+fn after_write(refusal: ServiceRefusal, wrote: bool) -> ServiceRefusal {
+    if !wrote || matches!(refusal, ServiceRefusal::Uncertain(_)) {
+        return refusal;
     }
+    ServiceRefusal::Uncertain(refusal.name())
+}
+
+/// A transport failure as the plugin is told it. Only a read is safe to ask again once the
+/// request may have reached the server; for a write every such failure is `uncertain`.
+fn refusal_for(error: TransportError, method: Method) -> ServiceRefusal {
+    let refusal = match error {
+        TransportError::Unreachable => return ServiceRefusal::Unreachable,
+        TransportError::ResponseTooLarge => ServiceRefusal::ResponseTooLarge,
+        TransportError::TimedOut => ServiceRefusal::TimedOut,
+        TransportError::BadResponse => ServiceRefusal::BadResponse,
+    };
+    after_write(refusal, !is_reading(method))
 }
 
 /// A transport that read past a bound is held to it here too, headers included.
 fn check_response_size(response: &IncomingResponse) -> Result<(), ServiceRefusal> {
-    let header_bytes: usize = response
-        .headers
-        .iter()
-        .map(|header| header.name.len() + header.value.len())
-        .sum();
     let too_large = response.body.len() > limits::MAX_SERVICE_RESPONSE_BYTES
         || response.headers.len() > limits::MAX_SERVICE_RESPONSE_HEADERS
-        || header_bytes > limits::MAX_SERVICE_RESPONSE_HEADER_BYTES;
+        || header_bytes(&response.headers) > limits::MAX_SERVICE_RESPONSE_HEADER_BYTES;
     if too_large {
         return Err(ServiceRefusal::ResponseTooLarge);
     }

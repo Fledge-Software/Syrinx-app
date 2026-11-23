@@ -181,6 +181,7 @@ fn a_redirect_off_the_approved_host_is_refused_and_not_followed() {
         "{error}"
     );
     assert_eq!(fixture.server.requests().len(), 1);
+    assert_eq!(fixture.server.problems(), Vec::<String>::new());
 }
 
 #[test]
@@ -189,6 +190,7 @@ fn a_redirect_within_the_approved_host_is_followed() {
     assert_eq!(run(&mut fixture, "variant.redirect-home"), Ok(()));
     assert!(logged(&fixture).contains(&format!("200 {}", server::NOTES)));
     assert_eq!(fixture.server.requests().len(), 2);
+    assert_eq!(fixture.server.problems(), Vec::<String>::new());
 }
 
 #[test]
@@ -203,6 +205,7 @@ fn a_redirect_loop_is_ended() {
         fixture.server.requests().len(),
         limits::MAX_SERVICE_REDIRECTS + 1
     );
+    assert_eq!(fixture.server.problems(), Vec::<String>::new());
 }
 
 #[test]

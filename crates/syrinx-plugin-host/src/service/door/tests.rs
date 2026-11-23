@@ -22,6 +22,8 @@ struct Scripted {
     sent: Mutex<Vec<Sent>>,
     /// Set as the first request is sent, as if the owner started typing during it.
     typing_after_first: Option<OwnerTyping>,
+    /// How long each send takes, so a test can see the time left shrink.
+    delay: Duration,
 }
 
 impl Scripted {
@@ -30,6 +32,16 @@ impl Scripted {
             answers: Mutex::new(answers.into_iter().rev().collect()),
             sent: Mutex::default(),
             typing_after_first: None,
+            delay: Duration::ZERO,
+        })
+    }
+
+    fn slow(answers: Vec<Result<IncomingResponse, TransportError>>, delay: Duration) -> Arc<Self> {
+        Arc::new(Self {
+            answers: Mutex::new(answers.into_iter().rev().collect()),
+            sent: Mutex::default(),
+            typing_after_first: None,
+            delay,
         })
     }
 
@@ -41,6 +53,7 @@ impl Scripted {
             answers: Mutex::new(answers.into_iter().rev().collect()),
             sent: Mutex::default(),
             typing_after_first: Some(typing),
+            delay: Duration::ZERO,
         })
     }
 
@@ -61,6 +74,7 @@ impl Transport for Scripted {
         if let Some(typing) = &self.typing_after_first {
             typing.set(true);
         }
+        std::thread::sleep(self.delay);
         self.answers
             .lock()
             .expect("unpoisoned")
@@ -248,7 +262,11 @@ fn a_redirect_hop_is_not_sent_once_the_owner_types() {
 
 #[test]
 fn each_hop_gets_only_the_time_left_within_both_bounds() {
-    let transport = Scripted::new(vec![redirect(302, "/next"), ok(200, Vec::new(), b"")]);
+    let delay = Duration::from_millis(30);
+    let transport = Scripted::slow(
+        vec![redirect(302, "/next"), ok(200, Vec::new(), b"")],
+        delay,
+    );
     let door = door(transport.clone());
     let long_budget = limits::SERVICE_REQUEST_DEADLINE * 4;
     door.request(Method::Get, "/x", Vec::new(), b"", long_budget)
@@ -258,12 +276,59 @@ fn each_hop_gets_only_the_time_left_within_both_bounds() {
         sent[0].timeout <= limits::SERVICE_REQUEST_DEADLINE,
         "{sent:?}"
     );
-    assert!(sent[1].timeout <= sent[0].timeout, "{sent:?}");
+    assert!(sent[1].timeout + delay <= sent[0].timeout, "{sent:?}");
     let transport = Scripted::new(vec![ok(200, Vec::new(), b"")]);
     let door = self::door(transport.clone());
     door.request(Method::Get, "/x", Vec::new(), b"", BUDGET / 10)
         .expect("answered");
     assert!(transport.sent()[0].timeout <= BUDGET / 10);
+}
+
+#[test]
+fn once_a_write_is_answered_every_later_failure_is_uncertain() {
+    let post = |door: &ServiceDoor| door.request(Method::Post, "/x", Vec::new(), b"data", BUDGET);
+    let cases = [
+        (
+            vec![redirect(303, "/result"), Err(TransportError::TimedOut)],
+            ServiceRefusal::Uncertain("timed-out"),
+        ),
+        (
+            vec![redirect(302, "https://other.example.test/")],
+            ServiceRefusal::Uncertain("redirect-off-host"),
+        ),
+        (
+            vec![redirect(307, "/a/../b")],
+            ServiceRefusal::Uncertain("invalid-redirect"),
+        ),
+        (
+            vec![redirect(307, "/next"), Err(TransportError::Unreachable)],
+            ServiceRefusal::Uncertain("unreachable"),
+        ),
+        (
+            vec![Err(TransportError::ResponseTooLarge)],
+            ServiceRefusal::Uncertain("response-too-large"),
+        ),
+        (
+            vec![ok(
+                200,
+                vec![header("x-a", "v"); limits::MAX_SERVICE_RESPONSE_HEADERS + 1],
+                b"",
+            )],
+            ServiceRefusal::Uncertain("response-too-large"),
+        ),
+    ];
+    for (answers, refusal) in cases {
+        assert_eq!(
+            post(&door(Scripted::new(answers))),
+            Err(refusal.clone()),
+            "{refusal}"
+        );
+    }
+    let typing = OwnerTyping::new();
+    let transport = Scripted::typing_after_first(vec![redirect(307, "/next")], typing.clone());
+    let address = ServiceAddress::parse("https://notes.example.test").expect("valid");
+    let door = ServiceDoor::new(address, None, transport, typing);
+    assert_eq!(post(&door), Err(ServiceRefusal::Uncertain("owner-typing")));
 }
 
 #[test]
@@ -282,12 +347,12 @@ fn a_lost_answer_to_a_write_is_uncertain_and_to_a_read_may_be_asked_again() {
         (
             Method::Post,
             TransportError::TimedOut,
-            ServiceRefusal::Uncertain,
+            ServiceRefusal::Uncertain("timed-out"),
         ),
         (
             Method::Delete,
             TransportError::BadResponse,
-            ServiceRefusal::Uncertain,
+            ServiceRefusal::Uncertain("bad-response"),
         ),
         (
             Method::Put,
@@ -308,7 +373,7 @@ fn a_lost_answer_to_a_write_is_uncertain_and_to_a_read_may_be_asked_again() {
         );
         assert_eq!(
             retry_safe,
-            refusal != ServiceRefusal::Uncertain,
+            !matches!(refusal, ServiceRefusal::Uncertain(_)),
             "{refusal}"
         );
     }

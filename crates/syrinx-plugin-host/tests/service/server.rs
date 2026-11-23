@@ -102,7 +102,13 @@ fn serve(listener: &TcpListener, seen: &Arc<Seen>, stopping: &Arc<AtomicBool>) {
         if stopping.load(Ordering::SeqCst) {
             return;
         }
-        let stream = stream.expect("the server accepts a connection");
+        let stream = match stream {
+            Ok(stream) => stream,
+            Err(error) => {
+                Seen::note(&seen.problems, format!("accepting a connection: {error}"));
+                continue;
+            }
+        };
         let (seen, stopping) = (seen.clone(), stopping.clone());
         std::thread::spawn(move || answer(stream, &seen, &stopping));
     }
