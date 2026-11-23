@@ -373,7 +373,7 @@ for `apps/client/src/`. #281 is the slice proposed to change these defaults.
 | Listening address | `0.0.0.0` (all interfaces), port 8080 | ini `[Network] host`, `port`; env `TRILIUM_NETWORK_HOST`, `TRILIUM_HOST`, `TRILIUM_NETWORK_PORT`, `TRILIUM_PORT` | `server/services/config.ts`, `server/services/host.ts`, `server/services/port.ts`, `server/www.ts` |
 | Login check | on | ini `[General] noAuthentication` (default false); env `TRILIUM_GENERAL_NOAUTHENTICATION` | `server/services/auth.ts` |
 | CORS headers | no `Access-Control-*` headers; CORP `same-origin` | ini `[Network] corsAllowOrigin`, `corsAllowMethods`, `corsAllowHeaders` (empty), `corsResourcePolicy` | `server/services/config.ts`, `server/app.ts` |
-| First-run setup routes | `/api/setup/*` open before the database is initialised; `/set-password` open after it until a password is set | no setting; turning it off needs a fork change | `server/routes/routes.ts`, `core/routes/index.ts`, `server/services/auth.ts` |
+| First-run setup routes | the `/api/setup/*` routes, including backup restore, open before the database is initialised; `/set-password` open after it until a password is set | no setting; turning it off needs a fork change | `server/routes/routes.ts`, `core/routes/index.ts`, `server/services/auth.ts` |
 | ETAPI, `/etapi/*` | mounted; needs a user-created token | no setting; turning it off needs a fork change | `server/etapi/`, `server/routes/routes.ts` |
 | `/custom/*path` | mounted; no login, no CSRF (cross-site request forgery) check | no setting for the route; handlers need `backendScriptingEnabled`, resource providers do not | `server/routes/custom.ts`, `core/routes/custom.ts` |
 | MCP (Model Context Protocol, an endpoint AI agents call) server, `/mcp` | off | option `mcpEnabled` (false); needs an ETAPI token | `server/routes/mcp.ts` |
@@ -402,34 +402,33 @@ for `apps/client/src/`. #281 is the slice proposed to change these defaults.
 
 Notes on the tables:
 
-- **A loopback recipe for #281.** Three things together, not one:
-  (a) `127.0.0.1` must be set where nothing can override it. Environment
-  variables win over `config.ini`, and `server/services/host.ts` reads
-  `TRILIUM_HOST` before
-  either, so the launcher (#279) must set or clear every `TRILIUM_*`
-  variable it passes on, or the fork must change the default in code.
-  (b) Loopback alone is no boundary against a web page that uses DNS
-  rebinding (a name that first resolves to a public server and then to
-  `127.0.0.1`, so the page's script reaches the local port as its own
-  origin). The server checks no `Host` header. `/mcp` sets
-  `enableDnsRebindingProtection: false` (`server/routes/mcp.ts`) but is off
-  by default and relies on its required ETAPI bearer token instead; the
-  routes that check no token (setup, `/custom/*path`, `/share/`) are the
-  reason a `Host` allow-list (`127.0.0.1:<port>` only) is a recommended
-  #281 change. (c) The three CORS keys stay empty, so no
-  other origin is invited to read responses.
-- **First-run setup routes.** `POST /api/setup/new-document`,
-  `POST /api/setup/sync-from-server` and `POST /api/setup/sync-seed`
-  (`core/routes/index.ts`) answer before the database is initialised;
-  `GET` and `POST /set-password` (`server/routes/routes.ts`) answer after
-  it, until a password is set. None needs a login: `checkSetupAuth` in
-  `server/services/auth.ts` applies only once data exists and a password is
-  set (`isSetupAuthRequired` in `core/services/setup_auth.ts`). Whoever
-  reaches the port first can set the password or seed the database from a
-  sync server of their choosing. The
-  recommendation for #281 is to initialise the database and set the
-  Syrinx-issued credential before the listener opens, or to keep these
-  routes closed until then.
+- **A loopback recipe for #281.** Three things together, not one: (a)
+  `127.0.0.1` must be set where nothing can override it. Environment variables
+  win over `config.ini`, and `server/services/host.ts` reads `TRILIUM_HOST`
+  before either, so the launcher (#279) must set or clear every `TRILIUM_*`
+  variable it passes on, or the fork must change the default in code. (b)
+  Loopback alone is no boundary against a web page that uses DNS rebinding (a
+  name that first resolves to a public server and then to `127.0.0.1`, so the
+  page's script reaches the local port as its own origin). The server checks
+  no `Host` header. `/mcp` sets `enableDnsRebindingProtection: false`
+  (`server/routes/mcp.ts`) but is off by default and relies on its required
+  ETAPI bearer token instead; the routes that check no token (setup,
+  `/custom/*path`, `/share/`) are the reason a `Host` allow-list
+  (`127.0.0.1:<port>` only) is a recommended #281 change. (c) The three CORS
+  keys stay empty, so no other origin is invited to read responses.
+- **First-run setup routes.** `POST /api/setup/new-document`, `POST
+  /api/setup/sync-from-server` and `POST /api/setup/sync-seed`
+  (`core/routes/index.ts`), and the backup-restore upload routes
+  `/api/setup/restore/upload/*` (`server/routes/routes.ts`), answer before the
+  database is initialised; `GET` and `POST /set-password`
+  (`server/routes/routes.ts`) answer after it, until a password is set. None
+  needs a login: `checkSetupAuth` in `server/services/auth.ts` applies only
+  once data exists and a password is set (`isSetupAuthRequired` in
+  `core/services/setup_auth.ts`). Whoever reaches the port first can set the
+  password, restore a backup of their own or seed the database from a sync
+  server of their choosing. The recommendation for #281 is to initialise the
+  database and set the Syrinx-issued credential before the listener opens, or
+  to keep these routes closed until then.
 - **`/custom/*path`.** `server/routes/custom.ts` mounts it for every method,
   "explicitly" without CSRF protection, and `core/routes/custom.ts` answers
   from the first note labelled `#customRequestHandler` or
@@ -461,7 +460,7 @@ Notes on the tables:
   loopback origin is excluded. Requests the page itself makes (update check,
   map tiles, frontend scripts) leave from that tab. The Notes plugin's own
   HTTP goes only through #280, the slice that gives the Notes plugin HTTP
-  to one owner-approved address, limited to the fork's address.
+  to one owner-approved address, the fork's.
 - **Telemetry.** A search of the server, core and client sources for
   telemetry, analytics or crash-reporting services (Sentry, PostHog,
   Plausible, Umami, Google Analytics) found none. The Claude agent SDK's
