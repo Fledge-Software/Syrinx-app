@@ -14,6 +14,7 @@ pub mod manifest;
 #[cfg(feature = "store")]
 pub mod owner;
 mod registry;
+pub mod service;
 pub mod session;
 pub mod test_host;
 mod ticker;

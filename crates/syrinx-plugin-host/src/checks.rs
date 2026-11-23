@@ -10,7 +10,7 @@ use crate::{HostError, wasi};
 pub const CONTRACT_PACKAGE: &str = "syrinx:plugin";
 pub const CONTRACT_TRACK: &str = "0.1";
 /// The newest `syrinx:plugin` version this host links.
-pub const CONTRACT_VERSION: &str = "0.1.0";
+pub const CONTRACT_VERSION: &str = "0.1.1";
 
 /// The interfaces every plugin exports.
 pub(crate) const REQUIRED_EXPORTS: &[&str] = &[
@@ -23,7 +23,7 @@ pub(crate) const REQUIRED_EXPORTS: &[&str] = &[
 ];
 
 /// The `syrinx:plugin` interfaces a plugin may import.
-const PROVIDED_IMPORTS: &[&str] = &["types", "host"];
+const PROVIDED_IMPORTS: &[&str] = &["types", "host", "service"];
 
 /// List every reason the component does not fit, so one refusal names them all.
 pub fn component_fits(engine: &Engine, component: &Component) -> Result<(), HostError> {
@@ -150,16 +150,17 @@ mod tests {
     #[test]
     fn a_contract_import_must_be_on_this_track_and_known() {
         assert_eq!(unsupported_import("syrinx:plugin/host@0.1.0"), None);
-        let newer = unsupported_import("syrinx:plugin/host@0.1.1").expect("refused");
-        assert!(newer.contains("built for syrinx:plugin@0.1.1"), "{newer}");
+        assert_eq!(unsupported_import("syrinx:plugin/service@0.1.1"), None);
+        let newer = unsupported_import("syrinx:plugin/host@0.1.2").expect("refused");
+        assert!(newer.contains("built for syrinx:plugin@0.1.2"), "{newer}");
         let other_track = unsupported_import("syrinx:plugin/host@0.2.0").expect("refused");
         assert!(
             other_track.contains("runs syrinx:plugin@0.1.x"),
             "{other_track}"
         );
-        let pre_release = unsupported_import("syrinx:plugin/host@0.1.1-pre").expect("refused");
+        let pre_release = unsupported_import("syrinx:plugin/host@0.1.2-pre").expect("refused");
         assert!(
-            pre_release.contains("built for syrinx:plugin@0.1.1-pre"),
+            pre_release.contains("built for syrinx:plugin@0.1.2-pre"),
             "{pre_release}"
         );
         let unknown = unsupported_import("syrinx:plugin/documents@0.1.0").expect("refused");

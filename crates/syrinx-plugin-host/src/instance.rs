@@ -7,7 +7,7 @@ use wasmtime::component::{Component, HasSelf, Linker};
 use wasmtime::{Engine, Store, StoreLimits, StoreLimitsBuilder};
 
 use crate::bindings::syrinx::plugin::types::Outcome;
-use crate::bindings::syrinx::plugin::{host, types};
+use crate::bindings::syrinx::plugin::{host, service, types};
 use crate::bindings::{LinkOptions, Plugin, PluginPre};
 use crate::deadline::{CallDeadline, Export};
 use crate::manifest::CapabilityKind;
@@ -15,7 +15,7 @@ use crate::wasi::{self, WasiState};
 use crate::{Failure, HostError, Runtime, limits};
 
 /// What Syrinx answers when a plugin calls one of its `syrinx:plugin` imports.
-pub trait PluginHost: types::Host + host::Host + Send + 'static {
+pub trait PluginHost: types::Host + host::Host + service::Host + Send + 'static {
     /// An export is about to run until `deadline`. The epoch deadline cannot interrupt a
     /// host function the guest waits on, so a service that may block answers by then.
     fn begin_export(&mut self, _deadline: CallDeadline) {}

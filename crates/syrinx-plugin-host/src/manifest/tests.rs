@@ -303,6 +303,29 @@ fn scope_fields_follow_their_kind() {
 }
 
 #[test]
+fn a_service_request_takes_a_reason_and_no_address_or_trust() {
+    let reason = "Read your notes' titles and text from the notes server you approve.";
+    let service = with(&format!(
+        "[[capabilities]]\nkind = \"service\"\nreason = \"{reason}\""
+    ));
+    let manifest = parse(&service).expect("a service request parses");
+    let request = manifest.capabilities().last().expect("the service request");
+    assert_eq!(
+        (request.kind, request.reason.as_str()),
+        (CapabilityKind::Service, reason)
+    );
+    let full = with("[[capabilities]]\nkind = \"service\"\ntrust = \"full\"\nreason = \"x\"");
+    assert_eq!(
+        parse(&full),
+        Err(ManifestError::TrustMismatch(CapabilityKind::Service))
+    );
+    // The plugin cannot name its address: the owner approves it.
+    let addressed =
+        with("[[capabilities]]\nkind = \"service\"\naddress = \"https://x.test\"\nreason = \"x\"");
+    assert!(parse(&addressed).is_err());
+}
+
+#[test]
 fn an_over_long_capability_reason_is_an_invalid_field() {
     let long = "x".repeat(limits::MAX_MESSAGE_CHARS + 1);
     let text = with(&format!(

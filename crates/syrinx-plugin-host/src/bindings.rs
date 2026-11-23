@@ -1,4 +1,4 @@
-//! Host-side bindings for `syrinx:plugin@0.1.0`, generated from the same WIT plugins build against.
+//! Host-side bindings for `syrinx:plugin@0.1.x`, generated from the same WIT plugins build against.
 
 wasmtime::component::bindgen!({
     path: "../../wit/v0_1",

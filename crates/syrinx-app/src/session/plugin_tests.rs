@@ -14,7 +14,7 @@ use syrinx_store::{PluginInstall, PluginState};
 
 use super::*;
 
-const WORLD: &str = "syrinx:plugin/plugin@0.1.0";
+const WORLD: &str = "syrinx:plugin/plugin@0.1.1";
 
 #[path = "../../tests/support/plugin_fixture.rs"]
 mod plugin_fixture;

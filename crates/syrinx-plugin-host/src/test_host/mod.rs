@@ -4,6 +4,7 @@
 //! It is a `Session` over synthetic services, so it keeps exactly the delivery
 //! order and request rules the per-plugin workers keep.
 
+mod loopback;
 mod synthetic;
 
 use std::sync::Arc;
@@ -12,9 +13,11 @@ use std::sync::Arc;
 /// repositories can test what their plugin does when a capability is `denied` or `revoked`.
 pub use crate::grants::GrantSet as SyntheticGrants;
 pub use crate::views::ViewRecord;
+pub use loopback::LoopbackTransport;
 pub use synthetic::{SYNTHETIC_NOW, SyntheticHost};
 
 use crate::bindings::syrinx::plugin::host::LogLevel;
+use crate::service::ServiceDoor;
 pub use crate::session::{CallResult, Declarations, DeclaredCommand};
 use crate::session::{Mediator, RequestIds, Session};
 use crate::{LoadedPlugin, PreparedPlugin, Runtime};
@@ -73,6 +76,12 @@ impl Session<SyntheticHost> {
     /// `None` when the view is not open.
     pub fn take_view_events(&mut self, view: u64) -> Option<Vec<String>> {
         self.services_mut().book.take_view_events(view)
+    }
+
+    /// Approve `door`'s address and credential for this plugin's `service` requests, as the
+    /// owner will; the grant itself is still the `service` capability in the grant set.
+    pub fn approve_service(&mut self, door: ServiceDoor) {
+        self.services_mut().door = Some(door);
     }
 
     pub fn logs(&self) -> &[(LogLevel, String)] {

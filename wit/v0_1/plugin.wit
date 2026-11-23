@@ -1,12 +1,13 @@
 // SPDX-License-Identifier: MPL-2.0
 //
 // The contract between Syrinx and every plugin: the `syrinx:plugin` world,
-// version 0.1.0. Its shape was approved by the owner on 2026-10-26 (G9 in
-// docs/decisions.md) and counts as frozen once #28's contract tests pass.
+// version 0.1.1. Its shape was approved by the owner on 2026-10-26 (G9 in
+// docs/decisions.md) and counts as frozen once #28's contract tests pass;
+// 0.1.1 adds the `service` import (#280).
 // Rules for changing it, and the WIT keywords no name may use, are in
 // wit/v0_1/README.md.
 
-package syrinx:plugin@0.1.0;
+package syrinx:plugin@0.1.1;
 
 /// Shared value types. Ids are validated by the host: dot-separated lowercase
 /// ASCII segments, bounded in length.
@@ -68,7 +69,24 @@ interface host {
 //   open-external -> open-external          (Notes, #37)
 //   index         -> no import; the manifest's feeds are pulled through search-feed
 //   storage       -> host.settings-get and host.settings-set
+//   service       -> service                (#280)
 //   parse, terminal, git, language-servers -> parse, terminal, git, lsp (Forge)
+
+/// HTTP requests to the one address the owner approved for this plugin: the
+/// `service` capability (#280). The plugin names only a path; the host supplies
+/// the scheme, host and port, adds any credential and never returns it, follows
+/// no redirect off that address, and bounds each request's size and time.
+@since(version = 0.1.1)
+interface service {
+    use types.{plugin-error};
+    enum method { get, head, post, put, patch, delete }
+    record header { name: string, value: string }
+    record response { status: u16, headers: list<header>, body: list<u8> }
+    /// `path` starts with `/` and may carry a query; it never names a host.
+    /// Refusals name their rule first, as in `denied("redirect-off-host: ...")`.
+    request: func(method: method, path: string, headers: list<header>, body: list<u8>)
+        -> result<response, plugin-error>;
+}
 
 interface lifecycle {
     use types.{plugin-error};
@@ -173,6 +191,8 @@ interface widgets {
 world plugin {
     import types;
     import host;
+    @since(version = 0.1.1)
+    import service;
     export lifecycle;
     export commands;
     export forms;

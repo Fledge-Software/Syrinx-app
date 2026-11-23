@@ -1,4 +1,4 @@
-//! A synthetic plugin implementing every `syrinx:plugin@0.1.0` export, with
+//! A synthetic plugin implementing every `syrinx:plugin@0.1.x` export, with
 //! commands that misbehave on purpose, for the host's contract tests.
 
 mod bindings {

@@ -15,7 +15,7 @@ use syrinx_update::{
     UpdateError, VerifiedPluginPackage, Version, read_bounded, sha256, verify_plugin_package,
 };
 
-const WORLD: &str = "syrinx:plugin/plugin@0.1.0";
+const WORLD: &str = "syrinx:plugin/plugin@0.1.1";
 const MODULE_FILE: &str = "plugin.wasm";
 const READ_LIMIT: usize = 64 * 1024 * 1024;
 

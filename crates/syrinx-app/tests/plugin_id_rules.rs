@@ -6,7 +6,7 @@ use syrinx_update::{
     FileEntry, MAX_PLUGIN_ID_BYTES, PackagePath, PluginPackageList, Version, sha256,
 };
 
-const WORLD: &str = "syrinx:plugin/plugin@0.1.0";
+const WORLD: &str = "syrinx:plugin/plugin@0.1.1";
 
 /// Whether a manifest naming `id` passes the plugin host's rules.
 fn manifest_accepts(id: &str) -> bool {

@@ -7,6 +7,7 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use crate::PluginHost;
 use crate::bindings::exports::syrinx::plugin::views::ViewRequest;
 use crate::bindings::syrinx::plugin::host::{self, LogLevel};
+use crate::bindings::syrinx::plugin::service::{self, Header, Method, Response};
 use crate::bindings::syrinx::plugin::types::{self, Outcome, PluginError, Timestamp};
 use crate::deadline::CallDeadline;
 use crate::grants::GrantSet;
@@ -260,6 +261,21 @@ impl<S: PluginHost> PluginHost for Mediator<S> {
 }
 
 impl<S: PluginHost> types::Host for Mediator<S> {}
+
+/// Only under a current `service` grant does a request reach the services, which hold the
+/// owner's approved address and keep the request's own rules (`crate::service`).
+impl<S: PluginHost> service::Host for Mediator<S> {
+    fn request(
+        &mut self,
+        method: Method,
+        path: String,
+        headers: Vec<Header>,
+        body: Vec<u8>,
+    ) -> Result<Response, PluginError> {
+        self.require(CapabilityKind::Service)?;
+        self.services.request(method, path, headers, body)
+    }
+}
 
 impl<S: PluginHost> host::Host for Mediator<S> {
     fn log(&mut self, level: LogLevel, message: String) {

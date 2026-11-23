@@ -11,6 +11,7 @@ pub enum CapabilityKind {
     Drafts,
     Index,
     OpenExternal,
+    Service,
     Parse,
     Terminal,
     Git,
@@ -19,12 +20,13 @@ pub enum CapabilityKind {
 
 impl CapabilityKind {
     /// Every kind, in the order the manifest documentation lists them.
-    pub const ALL: [Self; 9] = [
+    pub const ALL: [Self; 10] = [
         Self::Storage,
         Self::Folder,
         Self::Drafts,
         Self::Index,
         Self::OpenExternal,
+        Self::Service,
         Self::Parse,
         Self::Terminal,
         Self::Git,
@@ -44,6 +46,7 @@ impl CapabilityKind {
             Self::Drafts => "drafts",
             Self::Index => "index",
             Self::OpenExternal => "open-external",
+            Self::Service => "service",
             Self::Parse => "parse",
             Self::Terminal => "terminal",
             Self::Git => "git",
@@ -61,6 +64,8 @@ impl CapabilityKind {
             | Self::Drafts
             | Self::Index
             | Self::OpenExternal
+            // HTTP to one address the owner approved, never a program (#280).
+            | Self::Service
             | Self::Parse => false,
         }
     }
@@ -75,6 +80,7 @@ impl CapabilityKind {
             // An index is pulled through the exported `search-feed`; it imports nothing.
             Self::Index => &[],
             Self::OpenExternal => &["open-external"],
+            Self::Service => &["service"],
             Self::Parse => &["parse"],
             Self::Terminal => &["terminal"],
             Self::Git => &["git"],
@@ -108,7 +114,8 @@ mod tests {
             CapabilityKind::Folder => CapabilityKind::Drafts,
             CapabilityKind::Drafts => CapabilityKind::Index,
             CapabilityKind::Index => CapabilityKind::OpenExternal,
-            CapabilityKind::OpenExternal => CapabilityKind::Parse,
+            CapabilityKind::OpenExternal => CapabilityKind::Service,
+            CapabilityKind::Service => CapabilityKind::Parse,
             CapabilityKind::Parse => CapabilityKind::Terminal,
             CapabilityKind::Terminal => CapabilityKind::Git,
             CapabilityKind::Git => CapabilityKind::LanguageServers,
@@ -157,5 +164,14 @@ mod tests {
             Some(CapabilityKind::Folder)
         );
         assert_eq!(CapabilityKind::unlocking("host"), None);
+    }
+
+    #[test]
+    fn service_unlocks_only_its_own_interface() {
+        assert_eq!(
+            CapabilityKind::unlocking("service"),
+            Some(CapabilityKind::Service)
+        );
+        assert!(!CapabilityKind::Service.is_full_trust());
     }
 }

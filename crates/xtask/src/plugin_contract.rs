@@ -7,7 +7,7 @@ use wit_parser::Resolve;
 
 /// The package and world every plugin targets.
 const CONTRACT_FOLDER: &str = "wit/v0_1";
-const CONTRACT_PACKAGE: &str = "syrinx:plugin@0.1.0";
+const CONTRACT_PACKAGE: &str = "syrinx:plugin@0.1.1";
 const CONTRACT_WORLD: &str = "plugin";
 
 pub fn check(root: &Path) -> Result<(), String> {
@@ -66,7 +66,7 @@ mod tests {
         assert!(describe(&keyword).is_err());
         let version = scratch("version", "package syrinx:plugin@0.2.0;\nworld plugin {}\n");
         let error = describe(&version).expect_err("refused");
-        assert!(error.contains("expected syrinx:plugin@0.1.0"), "{error}");
+        assert!(error.contains("expected syrinx:plugin@0.1.1"), "{error}");
         for folder in [keyword, version] {
             fs::remove_dir_all(folder).expect("scratch folder removed");
         }

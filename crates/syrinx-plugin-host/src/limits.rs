@@ -70,3 +70,16 @@ pub const MAX_CURSOR_BYTES: usize = 1024;
 /// Keywords per catalogue entry, and characters per keyword (G9, item 7).
 pub const MAX_KEYWORDS: usize = 16;
 pub const MAX_KEYWORD_CHARS: usize = 120;
+
+/// HTTP requests through the `service` import (#280). A request also ends by half of what is
+/// left of its export's deadline (`CallDeadline::service_budget`), whichever comes first.
+pub const SERVICE_REQUEST_DEADLINE: Duration = Duration::from_secs(5);
+pub const MAX_SERVICE_PATH_BYTES: usize = 2 * 1024;
+pub const MAX_SERVICE_HEADERS: usize = 32;
+/// Every header name and value the plugin sends, together.
+pub const MAX_SERVICE_HEADER_BYTES: usize = 16 * 1024;
+pub const MAX_SERVICE_REQUEST_BYTES: usize = 1024 * 1024;
+/// Well under `MEMORY_BYTES`, which the response is copied into.
+pub const MAX_SERVICE_RESPONSE_BYTES: usize = 4 * 1024 * 1024;
+/// Redirects followed within the approved address; one off it is refused at once.
+pub const MAX_SERVICE_REDIRECTS: usize = 3;

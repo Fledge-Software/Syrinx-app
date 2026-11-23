@@ -1,10 +1,11 @@
-//! Contract tests for `syrinx:plugin@0.1.0`: synthetic plugins loaded by the
+//! Contract tests for `syrinx:plugin@0.1.x`: synthetic plugins loaded by the
 //! test host, without a window. Each negative test names how it must fail.
 
 mod lifecycle;
 #[cfg(feature = "store")]
 mod owner;
 mod package;
+mod service;
 mod support;
 
 use syrinx_plugin_host::bindings::exports::syrinx::plugin::forms::{
@@ -15,7 +16,9 @@ use syrinx_plugin_host::bindings::syrinx::plugin::types::{Icon, Outcome, PluginE
 use syrinx_plugin_host::deadline::Export;
 use syrinx_plugin_host::manifest::CapabilityKind;
 use syrinx_plugin_host::test_host::{SYNTHETIC_NOW, SyntheticGrants, TestHost};
-use syrinx_plugin_host::{Failure, HostError, OUTPUT_LIMIT_BYTES, Runtime, limits};
+use syrinx_plugin_host::{
+    CONTRACT_VERSION, Failure, HostError, OUTPUT_LIMIT_BYTES, Runtime, limits,
+};
 use wasmtime::Trap;
 
 use support::{
@@ -73,7 +76,7 @@ fn the_full_plugin_loads_and_every_name_carries_its_version() {
         "events",
     ] {
         assert!(
-            exports.contains(&format!("syrinx:plugin/{interface}@0.1.0")),
+            exports.contains(&format!("syrinx:plugin/{interface}@{CONTRACT_VERSION}")),
             "{exports:?}"
         );
     }
@@ -82,7 +85,7 @@ fn the_full_plugin_loads_and_every_name_carries_its_version() {
         .map(|(name, _)| name.to_owned())
         .collect();
     assert!(
-        imports.contains(&"syrinx:plugin/host@0.1.0".to_owned()),
+        imports.contains(&format!("syrinx:plugin/host@{CONTRACT_VERSION}")),
         "{imports:?}"
     );
     assert!(
@@ -149,13 +152,32 @@ fn a_plugin_built_for_0_2_0_is_refused_by_name() {
 }
 
 #[test]
-fn a_plugin_using_a_since_0_1_1_import_needs_a_0_1_1_host() {
-    let reasons = incompatible(load_refused(&support::bytes(variant("since-0-1-1"))));
+fn a_plugin_using_a_since_0_1_2_import_needs_a_0_1_2_host() {
+    let reasons = incompatible(load_refused(&support::bytes(variant("since-0-1-2"))));
     assert!(
-        reasons.contains("built for syrinx:plugin@0.1.1"),
+        reasons.contains("built for syrinx:plugin@0.1.2"),
         "{reasons}"
     );
-    assert!(reasons.contains("syrinx:plugin/extra@0.1.1"), "{reasons}");
+    assert!(reasons.contains("syrinx:plugin/extra@0.1.2"), "{reasons}");
+}
+
+#[test]
+fn a_plugin_built_for_0_1_0_still_loads_and_runs() {
+    let bytes = support::bytes(variant("contract-0-1-0"));
+    let runtime = Runtime::new().expect("engine");
+    let component = runtime.compile(&bytes).expect("compiles");
+    let exports: Vec<String> = component
+        .component_type()
+        .exports(runtime.engine())
+        .map(|(name, _)| name.to_owned())
+        .collect();
+    assert!(
+        exports.contains(&"syrinx:plugin/commands@0.1.0".to_owned()),
+        "{exports:?}"
+    );
+    let mut host =
+        TestHost::load(&bytes, one_command("variant", "variant.go")).expect("a 0.1.0 plugin loads");
+    assert_eq!(host.run_command("variant.go").expect("runs"), Ok(()));
 }
 
 #[test]
