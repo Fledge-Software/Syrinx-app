@@ -14,7 +14,7 @@ use std::fmt;
 use std::time::{Duration, Instant};
 
 use syrinx_plugin_host::HostError;
-use syrinx_plugin_host::bindings::exports::syrinx::plugin::search_feed::Batch;
+use syrinx_plugin_host::bindings::exports::syrinx::plugin::search_feed::{Batch, Change};
 use syrinx_plugin_host::bindings::syrinx::plugin::types::PluginError;
 use syrinx_plugin_host::owner::OwnerRuntime;
 use syrinx_plugin_host::session::CallResult;
@@ -167,8 +167,8 @@ pub(super) struct PluginFeeds {
     /// How long pulling has held the session's idle work off; kept here, beside the pulls
     /// it measures, so the session worker in session.rs needs no field of its own.
     pub(super) idle_clock: IdleClock,
-    /// Whether this session has looked for text a removed plugin left in the index.
-    swept: bool,
+    /// Whether this session has found the text a removed plugin left in the index.
+    sweep: removal::Sweep,
     /// When the owner last typed in the palette; pulls wait `TYPING_PAUSE` after it (D9).
     typed_at: Option<Instant>,
 }
@@ -491,14 +491,29 @@ fn keep_documents(
     if kept.clear_first {
         committed(index.reset(namespace)).map_err(FeedError::Index)?;
     }
-    for change in kept.changes {
-        // One at a time, so a deletion sees a document staged earlier in the same batch.
+    if let Err(error) = stage_documents(index, namespace, kept.changes, now) {
+        // Half a batch must not ride on the next commit, page text's included.
+        index.discard().map_err(FeedError::Index)?;
+        return Err(error);
+    }
+    committed(index.commit()).map_err(FeedError::Index)
+}
+
+/// Stages a batch's documents and deletions one at a time, so a deletion sees a document
+/// staged earlier in the same batch.
+fn stage_documents(
+    index: &mut dyn FeedIndex,
+    namespace: &Namespace,
+    changes: &[Change],
+    now: i64,
+) -> Result<(), FeedError> {
+    for change in changes {
         let Some(staged) = batch::document_change(index, namespace, change, now)? else {
             continue;
         };
         index.stage(&[staged], now).map_err(FeedError::Index)?;
     }
-    committed(index.commit()).map_err(FeedError::Index)
+    Ok(())
 }
 
 /// Marks the feed as fed once its cursor is kept; a separate small commit only when the

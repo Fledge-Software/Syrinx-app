@@ -105,6 +105,7 @@ fn a_failed_index_commit_keeps_the_old_cursor_and_the_next_pull_completes_both_t
         passes: 0,
         failures: 1,
         remove_failures: 0,
+        held_failures: Cell::new(0),
     };
     let failed = settle_with(
         &mut feeds,
@@ -186,6 +187,7 @@ fn a_failed_store_commit_on_a_refeed_from_the_start_pulls_from_the_start_again()
     let failing = FailingStore {
         store: &store,
         failures: Cell::new(1),
+        installed_failures: Cell::new(0),
     };
     announce(&mut feeds);
     let failed = settle_with(
@@ -415,6 +417,7 @@ fn a_failed_fed_marker_still_shows_the_rows_the_store_kept() {
         passes: 1,
         failures: 1,
         remove_failures: 0,
+        held_failures: Cell::new(0),
     };
     let failed = settle_with(
         &mut feeds,
@@ -836,5 +839,56 @@ fn an_index_emptied_between_two_batches_of_one_pull_is_fed_again_from_the_start(
         documents(&emptied, "quillmark"),
         ["a"],
         "the first batch's text is in the emptied index again"
+    );
+}
+
+#[test]
+fn a_batch_that_fails_part_way_through_staging_leaves_nothing_for_another_commit() {
+    let folder = Folder::new();
+    let store = folder.store();
+    let mut index = folder.index("fulltext");
+    let mut catalogue = Catalogue::new();
+    let mut feeds = PluginFeeds::default();
+    // The document is staged, then looking up the deletion's revision fails.
+    let half = batch(
+        vec![
+            document("a", 1, "quillmark"),
+            Change::Delete("gone".to_owned()),
+        ],
+        "c1",
+        false,
+    );
+    let mut plugin = Scripted::default().answer(None, half);
+    announce(&mut feeds);
+    let mut failing = FailingIndex {
+        index: &mut index,
+        passes: 0,
+        failures: 0,
+        remove_failures: 0,
+        held_failures: Cell::new(1),
+    };
+    let failed = settle_with(
+        &mut feeds,
+        &mut plugin,
+        &store,
+        &mut failing,
+        &mut catalogue,
+    );
+    assert_eq!(failed, Err(FeedError::Index(FullTextError::Damaged)));
+    assert_eq!(store.plugin_feed_cursor(PLUGIN, FEED), Ok(None));
+
+    // Page-text maintenance is not refused, and the next commit, page text's for one, does
+    // not carry half of the plugin's batch.
+    assert_eq!(index.expire(NOW), Ok(0));
+    index.commit().expect("an empty commit");
+    assert!(documents(&index, "quillmark").is_empty());
+
+    // The next announcement pulls the batch again and keeps all of it.
+    announce(&mut feeds);
+    settle(&mut feeds, &mut plugin, &store, &mut index, &mut catalogue);
+    assert_eq!(documents(&index, "quillmark"), ["a"]);
+    assert_eq!(
+        store.plugin_feed_cursor(PLUGIN, FEED),
+        Ok(Some("c1".to_owned()))
     );
 }

@@ -201,6 +201,7 @@ fn a_removal_the_open_index_refused_is_tried_again_only_at_the_next_idle_tick() 
         passes: 0,
         failures: 0,
         remove_failures: 1,
+        held_failures: Cell::new(0),
     };
     let mut sinks = Sinks {
         store: &store,
@@ -267,4 +268,55 @@ fn a_plugin_removed_and_added_again_has_its_next_stall_shown_again() {
     announce(&mut feeds);
     let again = settle_with(&mut feeds, &mut plugin, &store, &mut index, &mut catalogue);
     assert_eq!(again, stalled);
+}
+
+#[test]
+fn a_sweep_that_cannot_read_the_installs_is_tried_again_at_the_next_idle_tick() {
+    let folder = Folder::new();
+    let store = folder.store();
+    let mut index = folder.index("fulltext");
+    let mut catalogue = Catalogue::new();
+    let mut feeds = PluginFeeds::default();
+    let mut plugin = Scripted::default().answer(None, first_batch());
+    announce(&mut feeds);
+    settle(&mut feeds, &mut plugin, &store, &mut index, &mut catalogue);
+
+    // Removed while the index was closed, so a new session's sweep must find the text.
+    assert_eq!(store.remove_plugin(PLUGIN.to_owned()), Ok(true));
+    let closed = feeds.forget_plugin(PLUGIN, None, &mut catalogue);
+    assert_eq!(closed, Err(FeedError::Index(FullTextError::NeedsReopen)));
+    let mut feeds = PluginFeeds::restore(&store, &mut catalogue).expect("nothing kept");
+
+    // The first sweep cannot read the installs.
+    let busy = FailingStore {
+        store: &store,
+        failures: Cell::new(0),
+        installed_failures: Cell::new(1),
+    };
+    let mut sinks = Sinks {
+        store: &busy,
+        index: Some(&mut index),
+        catalogue: &mut catalogue,
+        now: NOW,
+        at: Instant::now(),
+    };
+    let refused = feeds.pump(&mut plugin, &mut sinks);
+    assert_eq!(refused, Err(FeedError::Store(StoreError::Busy)));
+    // The next turn neither asks again nor reports it again.
+    assert_eq!(feeds.pump(&mut plugin, &mut sinks), Ok(()));
+    assert_eq!(documents(&index, "quillmark"), ["a"]);
+
+    // The idle tick makes the sweep due again, and the next turn removes the text.
+    feeds.retry_removals();
+    let mut sinks = Sinks {
+        store: &busy,
+        index: Some(&mut index),
+        catalogue: &mut catalogue,
+        now: NOW,
+        at: Instant::now(),
+    };
+    feeds
+        .pump(&mut plugin, &mut sinks)
+        .expect("the sweep again");
+    assert!(documents(&index, "quillmark").is_empty());
 }

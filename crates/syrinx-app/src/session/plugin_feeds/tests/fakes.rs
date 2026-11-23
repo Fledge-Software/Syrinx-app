@@ -98,10 +98,12 @@ impl FeedSource for Endless {
     }
 }
 
-/// The store, failing its next feed commits as a crash before the commit would.
+/// The store, failing its next feed commits as a crash before the commit would, and its
+/// next reads of the installed plugins as a busy database would.
 pub(super) struct FailingStore<'a> {
     pub(super) store: &'a Store,
     pub(super) failures: Cell<u32>,
+    pub(super) installed_failures: Cell<u32>,
 }
 
 impl FeedStore for FailingStore<'_> {
@@ -118,6 +120,11 @@ impl FeedStore for FailingStore<'_> {
     }
 
     fn installed(&self) -> Result<BTreeSet<String>, StoreError> {
+        if self.installed_failures.get() > 0 {
+            self.installed_failures
+                .set(self.installed_failures.get() - 1);
+            return Err(StoreError::Busy);
+        }
         self.store.installed()
     }
 }
@@ -130,6 +137,8 @@ pub(super) struct FailingIndex<'a> {
     pub(super) failures: u32,
     /// Plugin removals that fail, as a failing disk would, before they work again.
     pub(super) remove_failures: u32,
+    /// Revision lookups that fail, as a damaged segment would, before they work again.
+    pub(super) held_failures: Cell<u32>,
 }
 
 impl FeedIndex for FailingIndex<'_> {
@@ -146,6 +155,10 @@ impl FeedIndex for FailingIndex<'_> {
     }
 
     fn held_revision(&self, namespace: &Namespace, id: &str) -> Result<Option<u64>, FullTextError> {
+        if self.held_failures.get() > 0 {
+            self.held_failures.set(self.held_failures.get() - 1);
+            return Err(FullTextError::Damaged);
+        }
         FeedIndex::held_revision(&*self.index, namespace, id)
     }
 
@@ -169,6 +182,10 @@ impl FeedIndex for FailingIndex<'_> {
             return Err(FullTextError::Io);
         }
         FeedIndex::commit(&mut *self.index)
+    }
+
+    fn discard(&mut self) -> Result<(), FullTextError> {
+        FeedIndex::discard(&mut *self.index)
     }
 
     fn plugin_ids(&self) -> Result<BTreeSet<String>, FullTextError> {

@@ -7,6 +7,18 @@ use syrinx_search::fulltext::FullTextError;
 use super::sinks::{FeedIndex, committed};
 use super::{FeedError, PluginFeeds, Sinks};
 
+/// Where the once-per-session search for a removed plugin's leftover text stands.
+#[derive(Default)]
+pub(super) enum Sweep {
+    /// The next turn with the index open looks.
+    #[default]
+    Due,
+    /// A look failed; the next idle tick makes it due again, so a failing store or index is
+    /// not asked, nor reported, at every wake-up.
+    Waiting,
+    Done,
+}
+
 impl PluginFeeds {
     /// Takes a removed plugin's rows out of the catalogue and its text out of the index; its
     /// store rows and cursors went with its install record.
@@ -24,6 +36,9 @@ impl PluginFeeds {
     /// The session calls this at each idle tick, whatever pulls are under way.
     pub(super) fn retry_removals(&mut self) {
         self.retry_due = true;
+        if matches!(self.sweep, Sweep::Waiting) {
+            self.sweep = Sweep::Due;
+        }
     }
 
     /// Drops a plugin's queued and running pulls, what they remembered, and its catalogue rows.
@@ -90,19 +105,18 @@ impl PluginFeeds {
 
     /// Once per session, with the index open, removes the text of every plugin the store no
     /// longer records as installed: one removed while the index was closed left it there.
+    /// A sweep that fails is tried again after the next idle tick.
     pub(super) fn sweep_once(&mut self, sinks: &mut Sinks<'_>) -> Result<(), FeedError> {
-        let Some(index) = sinks.index.as_deref_mut() else {
+        let (Sweep::Due, Some(index)) = (&self.sweep, sinks.index.as_deref_mut()) else {
             return Ok(());
         };
-        if self.swept {
-            return Ok(());
-        }
-        self.swept = true;
+        self.sweep = Sweep::Waiting;
         let installed = sinks.store.installed().map_err(FeedError::Store)?;
         let held = index.plugin_ids().map_err(FeedError::Index)?;
         for plugin in held.difference(&installed) {
             self.forget_plugin(plugin, Some(&mut *index), sinks.catalogue)?;
         }
+        self.sweep = Sweep::Done;
         Ok(())
     }
 }

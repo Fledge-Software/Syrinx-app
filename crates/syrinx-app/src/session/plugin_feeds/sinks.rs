@@ -44,6 +44,7 @@ pub(in crate::session) trait FeedIndex {
     fn mark_fed(&mut self, namespace: &Namespace) -> Result<(), FullTextError>;
     fn is_fed(&self, namespace: &Namespace) -> Result<bool, FullTextError>;
     fn commit(&mut self) -> Result<(), FullTextError>;
+    fn discard(&mut self) -> Result<(), FullTextError>;
     fn plugin_ids(&self) -> Result<BTreeSet<String>, FullTextError>;
     fn remove_plugin(&mut self, plugin: &str) -> Result<(), FullTextError>;
 }
@@ -75,6 +76,10 @@ impl FeedIndex for FullText {
 
     fn commit(&mut self) -> Result<(), FullTextError> {
         FullText::commit(self)
+    }
+
+    fn discard(&mut self) -> Result<(), FullTextError> {
+        FullText::discard(self)
     }
 
     fn plugin_ids(&self) -> Result<BTreeSet<String>, FullTextError> {
