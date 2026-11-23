@@ -18,10 +18,12 @@ use syrinx_plugin_host::manifest::{
     CapabilityKind, DiscoveryOptions, MANIFEST_FILE, PluginManifest,
 };
 use syrinx_plugin_host::owner::{
-    CacheSetup, Hasher, Offer, OwnerRuntime, Plan, Reviewed, UNSIGNED_PUBLISHER,
+    CacheSetup, Hasher, InstalledOffer, Offer, OwnerRuntime, Plan, Reviewed, UNSIGNED_PUBLISHER,
 };
 use syrinx_plugin_host::{PluginRegistry, SignedIdentity};
-use syrinx_store::{DirectoryLease, FolderAccess, LocationError, PluginInstall, Store};
+use syrinx_store::{
+    DirectoryLease, FolderAccess, LocationError, PluginGrant, PluginInstall, Store,
+};
 use syrinx_update::{
     Basis, DetachedSignature, FileEntry, Installed, KeyId, PACKAGE_FILE, PACKAGE_SIGNATURE_FILE,
     PackagePath, PinnedKey, PlacedPlugin, PluginFolders, PluginInstallError, PluginOffer,
@@ -258,10 +260,11 @@ impl Installer {
         let staged = stage_plugin(&self.folders, &offer).map_err(|error| error.to_string())?;
         let reviewed = self
             .runtime
-            .review(staged_offer(&staged)?, None)
+            .review_new(staged_offer(&staged)?)
             .map_err(|error| error.to_string())?;
+        // The review found no record for the id, so a folder a crash left is cleared.
         let placed = staged
-            .place(&self.folders)
+            .place_unrecorded(&self.folders)
             .map_err(|error| error.to_string())?;
         self.runtime
             .install_reviewed(reviewed, granted, &mut self.plugins, &mut self.commands, 20)
@@ -271,11 +274,11 @@ impl Installer {
     }
 
     /// The installed version read again from its own folder, as an update is reviewed against.
-    fn base_offer(&self) -> Result<Offer, String> {
+    fn base_offer(&self) -> Result<InstalledOffer, String> {
         let record = self.record();
         let placed = open_installed(&self.folders, installed(&record)?, self.developer_mode)
             .map_err(|error| error.to_string())?;
-        placed_offer(&placed)
+        placed_offer(&placed).map(InstalledOffer::new)
     }
 
     /// Stage, review and place an update of `test` from its install record. The placed
@@ -290,7 +293,7 @@ impl Installer {
         let staged = stage_plugin(&self.folders, &offer).map_err(|error| error.to_string())?;
         let reviewed = self
             .runtime
-            .review(staged_offer(&staged)?, Some(self.base_offer()?))
+            .review_update(staged_offer(&staged)?, self.base_offer()?)
             .map_err(|error| error.to_string())?;
         staged
             .place(&self.folders)
@@ -307,7 +310,7 @@ impl Installer {
             settle_pending_update(&self.folders, basis, self.developer_mode).expect("settled")?;
         let offer = placed_offer(&placed).expect("an offer");
         let base = self.base_offer().expect("the installed version");
-        Some(self.runtime.review(offer, Some(base)).expect("reviewed"))
+        Some(self.runtime.review_update(offer, base).expect("reviewed"))
     }
 
     fn update(&mut self, reviewed: Reviewed, granted: &[CapabilityKind]) -> Result<(), String> {
@@ -408,6 +411,36 @@ fn the_test_plugin_installs_from_a_signed_folder_and_records_what_loads() {
     );
     assert_eq!(record.signer_key, Publisher::Key(key(&signer)).to_record());
     installer.wait_for_compiled("test", module_hash(v(1)));
+    assert_eq!(installer.folders.versions("test").expect("listed"), [v(1)]);
+    installer.close();
+}
+
+#[test]
+fn a_folder_left_by_a_crash_before_recording_never_blocks_installing_again() {
+    let scratch = Scratch::new("crash");
+    let signer = TestKeyPair::generate().expect("a key");
+    let mut installer = Installer::start(&scratch);
+    let folder = package(&scratch, v(1), "", Some(&signer));
+
+    // Placed and kept, then nothing recorded, as if Syrinx had stopped in between.
+    let offer = PluginOffer {
+        folder: &folder,
+        basis: Basis::New {
+            trusted: Some(key(&signer)),
+        },
+        developer_mode: false,
+    };
+    stage_plugin(&installer.folders, &offer)
+        .expect("staged")
+        .place(&installer.folders)
+        .expect("placed")
+        .keep();
+    assert_eq!(installer.store.plugin_installs(), Ok(Vec::new()));
+
+    installer
+        .install(&folder, Some(key(&signer)), &[CapabilityKind::Storage])
+        .expect("installed again");
+    installer.echo();
     assert_eq!(installer.folders.versions("test").expect("listed"), [v(1)]);
     installer.close();
 }
@@ -536,33 +569,36 @@ const TWO_FOLDERS: &str = "[[capabilities]]\nkind = \"folder\"\naccess = \"read-
 const ONE_READ_FOLDER: &str = "[[capabilities]]\nkind = \"folder\"\naccess = \"read\"\ncount = 1\nreason = \"Reads one synthetic vault.\"\nrequired = false\n";
 const OPEN_EXTERNAL: &str = "[[capabilities]]\nkind = \"open-external\"\nreason = \"Opens synthetic links.\"\nrequired = false\n";
 
-/// The installed version as an update must leave it after failing.
+/// The installed version as an update must leave it after failing: its record, every grant in
+/// full, and each folder with its access.
 struct Snapshot {
     record: PluginInstall,
-    grants: Vec<(String, String)>,
+    grants: Vec<PluginGrant>,
     folders: Vec<(PathBuf, FolderAccess)>,
 }
 
 impl Snapshot {
+    /// Read the store, checking each folder hangs under the folder grant.
     fn of(installer: &Installer) -> Self {
-        let grants = installer
-            .store
-            .plugin_grants()
-            .expect("read")
-            .into_iter()
-            .map(|stored| (stored.grant.capability, stored.grant.scope_json))
-            .collect();
-        let folders = installer
-            .store
-            .plugin_folders("test")
-            .expect("read")
-            .into_iter()
-            .map(|folder| (folder.path, folder.access))
-            .collect();
+        let stored = installer.store.plugin_grants().expect("read");
+        let folder_grant = stored
+            .iter()
+            .find(|stored| stored.grant.capability == "folder")
+            .map(|stored| stored.grant_id);
+        let folders = installer.store.plugin_folders("test").expect("read");
+        assert!(
+            folders
+                .iter()
+                .all(|folder| Some(folder.grant_id) == folder_grant),
+            "every folder belongs to the folder grant"
+        );
         Self {
             record: installer.record(),
-            grants,
-            folders,
+            grants: stored.into_iter().map(|stored| stored.grant).collect(),
+            folders: folders
+                .into_iter()
+                .map(|folder| (folder.path, folder.access))
+                .collect(),
         }
     }
 }
