@@ -91,7 +91,19 @@ fn a_granted_feed_is_pulled_bounded_and_resolved() {
         .expect("a batch");
     assert_eq!(batch.next_cursor, "1");
     assert!(!batch.more);
-    assert_eq!(batch.changes.len(), 4);
+    // The feed declares only the catalogue tier, so the fixture's document is dropped.
+    assert_eq!(batch.changes.len(), 3);
+    assert!(
+        !batch
+            .changes
+            .iter()
+            .any(|change| matches!(change, Change::UpsertDocument(_)))
+    );
+    assert!(
+        logged(&mut runtime, "test")
+            .iter()
+            .any(|line| line.contains("full-text document for a tier the feed does not declare"))
+    );
     let Change::UpsertEntry(entry) = &batch.changes[1] else {
         panic!("the fixture's second change is an entry");
     };
@@ -105,5 +117,26 @@ fn a_granted_feed_is_pulled_bounded_and_resolved() {
         pull(&mut runtime, "test.undeclared"),
         Err(HostError::Refused(_))
     ));
+    close(runtime, store);
+}
+
+#[test]
+fn removing_a_plugin_tells_the_application_once_the_store_kept_it() {
+    let temp = TempStore::new();
+    let store = temp.open();
+    let mut runtime = start(&store);
+    install_asking_for_index(&mut runtime);
+    runtime.take_events();
+
+    runtime.remove("test").expect("removed");
+    let removed: Vec<String> = runtime
+        .take_events()
+        .into_iter()
+        .filter_map(|event| match event {
+            PluginEvent::Removed { plugin } => Some(plugin),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(removed, ["test"]);
     close(runtime, store);
 }

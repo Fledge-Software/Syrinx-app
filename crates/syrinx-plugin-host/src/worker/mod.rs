@@ -84,6 +84,11 @@ pub enum PluginEvent {
         plugin: String,
         feed: String,
     },
+    /// The owner removed the plugin and the store kept it (#141): what the application holds
+    /// for it outside the store, its search rows and full-text text, goes too.
+    Removed {
+        plugin: String,
+    },
 }
 
 /// The answer to one queued call, collected without blocking the caller.

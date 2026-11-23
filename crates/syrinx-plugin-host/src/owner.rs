@@ -23,11 +23,13 @@ pub use cache::{CacheSetup, Sha256};
 pub use services::StoreServices;
 
 use crate::bindings::exports::syrinx::plugin::search_feed::Batch;
+use crate::bindings::syrinx::plugin::host::{Host as _, LogLevel};
 use crate::bindings::syrinx::plugin::types::PluginError;
 use crate::grants::{DenyList, FolderRefusal, GrantSet};
 use crate::manifest::{CapabilityKind, FolderCount, PluginManifest, Scope};
 use crate::registry::RegisteredPlugin;
 use crate::session::{CallResult, Session};
+use crate::validate::{self, FeedTiers};
 use crate::worker::{Pending, PluginEvent, PluginStatus, Plugins, send_event};
 use crate::{CompileCounts, HostError, Runtime, limits};
 use cache::StoreCache;
@@ -37,7 +39,9 @@ const _: () = assert!(limits::MAX_SETTINGS_KEY_BYTES == syrinx_store::MAX_PLUGIN
 const _: () =
     assert!(limits::MAX_SETTINGS_VALUE_BYTES == syrinx_store::MAX_PLUGIN_SETTING_VALUE_BYTES);
 const _: () = assert!(limits::MAX_SETTINGS_KEYS == syrinx_store::MAX_PLUGIN_SETTINGS);
-// A search batch the host accepted always fits the store's feed tables (#141).
+// The store's feed tables share the contract's bounds; `validate::batch` also refuses every
+// other value the store or the full-text index would refuse, so a plugin's bad batch is the
+// plugin's error and never wedges its feed (#141).
 const _: () = assert!(limits::MAX_CURSOR_BYTES == syrinx_store::MAX_PLUGIN_FEED_CURSOR_BYTES);
 const _: () = assert!(limits::MAX_ENTRY_ID_BYTES == syrinx_store::MAX_PLUGIN_FEED_ENTRY_ID_BYTES);
 const _: () = assert!(limits::MAX_KEYWORDS == syrinx_store::MAX_PLUGIN_FEED_KEYWORDS);
@@ -341,8 +345,11 @@ impl OwnerRuntime {
         both_steps(workers, stored)
     }
 
-    /// Remove any installed plugin and everything keyed to it, its compiled code included;
-    /// the search index (#141) and recovery drafts (#37) join this when they keep anything.
+    /// Remove any installed plugin and everything keyed to it, its compiled code included.
+    /// Its search feed rows and cursors go with the install record by cascade (#141); once
+    /// the store kept the removal, `PluginEvent::Removed` tells the application to take the
+    /// plugin's rows out of the palette and its text out of the full-text index. Recovery
+    /// drafts (#37) join this when they keep anything.
     pub fn remove(&mut self, plugin: &str) -> Result<(), OwnerError> {
         self.require_record(plugin)?;
         let workers = match (self.added.remove(plugin), self.running.as_mut()) {
@@ -353,6 +360,12 @@ impl OwnerRuntime {
         let stored = self.store.remove_plugin(plugin.to_owned());
         if let Some(cache) = self.cache.as_ref() {
             cache.delete_entry_or_report(plugin);
+        }
+        if stored.is_ok() {
+            let removed = PluginEvent::Removed {
+                plugin: plugin.to_owned(),
+            };
+            send_event(&self.report, removed);
         }
         both_steps(workers, stored)
     }
@@ -382,10 +395,40 @@ impl OwnerRuntime {
         max: u32,
     ) -> CallResult<Pending<Result<Batch, PluginError>>> {
         self.require_index(plugin)?;
+        let tiers = self.declared_tiers(plugin, feed);
         let feed = feed.to_owned();
         self.call(plugin, move |session| {
-            session.changes(&feed, after.as_deref(), max)
+            let mut answer = session.changes(&feed, after.as_deref(), max)?;
+            if let Ok(batch) = &mut answer {
+                // A change for a tier the manifest does not declare is dropped and logged.
+                for dropped in validate::keep_declared_tiers(batch, tiers) {
+                    session
+                        .services_mut()
+                        .log(LogLevel::Warn, format!("dropped {dropped}"));
+                }
+            }
+            Ok(answer)
         })
+    }
+
+    /// The tiers `feed` declares in the plugin's manifest; none for a feed it does not
+    /// declare, which the session refuses anyway.
+    fn declared_tiers(&self, plugin: &str, feed: &str) -> FeedTiers {
+        let declared = self.added.get(plugin).and_then(|added| {
+            let feeds = added.manifest.search_feeds();
+            feeds.iter().find(|declared| declared.id == feed)
+        });
+        let Some(declared) = declared else {
+            return FeedTiers {
+                catalogue: false,
+                full_text: false,
+            };
+        };
+        let has = |tier: &str| declared.tiers.iter().any(|declared| declared == tier);
+        FeedTiers {
+            catalogue: has("catalogue"),
+            full_text: has("full-text"),
+        }
     }
 
     /// Queue `search-feed.resolve(feed, id)`: the address a chosen palette row opens (#141).
