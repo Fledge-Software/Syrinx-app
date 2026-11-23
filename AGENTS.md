@@ -340,8 +340,8 @@ style problem.
   crate are GPL-3.0 and stay out.
 - **Trilium is never a dependency.** No crate, npm package, vendored file,
   submodule or copied text from the AGPL Trilium fork comes into
-  Syrinx, the plugin template or the Notes plugin; it is a separate program
-  reached over HTTP (see "Plugins" above and `docs/dev/trilium-audit.md`).
+  Syrinx, the plugin template or the Notes plugin (see "Plugins" above and
+  `docs/dev/trilium-audit.md`).
 - **Approved narrow licence exception, 2026-10-10:** `unicode-ident 1.0.26`
   may carry Unicode-3.0 alongside its MIT/Apache-2.0 terms. The owner approved
   it for the pinned Windows bindings' build dependency. This does not choose

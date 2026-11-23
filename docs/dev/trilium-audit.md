@@ -15,11 +15,12 @@ packages, CKEditor 5's terms included), how Trilium is maintained and what its
 security record looks like, every feature that listens or reaches the
 network, and the bundling choice the owner has to make.
 
-Two later slices of #277 are named throughout: #279, the slice that starts
-the fork (Syrinx launching a program a plugin names), and #281, the slice
-that hardens the fork's defaults (loopback only, Syrinx-issued credentials,
-and a changes endpoint, an HTTP route that tells the Notes plugin which notes
-changed since it last asked). Where this file says what those slices should
+Four later slices of #277 are named throughout: #279, the slice that starts
+the fork (Syrinx launching a program a plugin names); #280, the slice that
+gives the Notes plugin HTTP to one owner-approved address, the fork's; #281,
+the slice that hardens the fork's defaults (loopback only, Syrinx-issued
+credentials, and a changes endpoint, an HTTP route that tells the Notes plugin
+which notes changed since it last asked); and #283, packaging. Where this file says what those slices should
 do, it is a recommendation; their scope is the owner's, and the proposals are
 gathered under "Needs the owner".
 
@@ -40,7 +41,11 @@ artefact. GitHub's API refused this session's requests for Trilium's
 repository (releases, security advisories and contributor statistics), so
 release dates, the maintainer list and the security record below come from
 git itself and from the release notes Trilium keeps in its repository; the
-published advisory list was not read. Each section says which it is.
+published advisory list was not read. A second review on the same day tried
+the public web pages instead (Trilium's advisories page on github.com, the
+GitHub Advisory Database page for one advisory, and osv.dev); this
+environment's network proxy refused all three, so the advisory list remains
+unverified. Each section says which it is.
 
 ## The commit the fork starts from
 
@@ -208,13 +213,16 @@ spread over the other permissive licences and the packages named below.
 
 **Every package that is not plainly permissive** is named here, with where it
 sits ("ships" means inside the lower bound, so certainly reachable at run
-time; "build" means only in the upper bound; "outside" means not reachable
+time; "upper only" means only in the upper bound, which may still ship,
+because esbuild bundles whatever the server imports, `devDependencies`
+included, so each such package is either a build tool or bundled code and
+was not told apart unless the entry says so; "outside" means not reachable
 from the shipping apps at all).
 
 - **CKEditor 5, GPL-2.0-or-later or a commercial licence (61 packages):**
   `ckeditor5@49.0.1` and 59 `@ckeditor/ckeditor5-*@49.0.1` packages, from
   `adapter-ckfinder` to `word-count` (ships), all declaring "SEE LICENSE IN
-  LICENSE.md"; plus `@ckeditor/ckeditor5-inspector@5.0.4` (build only, a
+  LICENSE.md"; plus `@ckeditor/ckeditor5-inspector@5.0.4` (upper only, a
   development tool). Set out in full below.
 - **`@anthropic-ai/claude-agent-sdk@0.3.318` (ships):** declares "SEE
   LICENSE IN README.md". The package's `LICENSE.md` reads "All rights
@@ -225,15 +233,15 @@ from the shipping apps at all).
   inside what a server build ships.
 - **`elkjs@0.12.1`, EPL-2.0 OR GPL-3.0-or-later (ships):** a graph-layout
   library pulled in by `mermaid@12.3.0`, the diagram renderer. Either
-  licence is copyleft; the Eclipse Public License is the weaker, file-level
-  one.
+  licence is copyleft; the Eclipse Public License is the weaker one, a
+  module-level copyleft that covers changes to elkjs itself.
 - **`lightningcss@1.33.0` and its eleven platform binaries, MPL-2.0
-  (build):** a CSS compiler used while building. MPL-2.0 is Syrinx's own
+  (upper only, a build tool):** a CSS compiler used while building. MPL-2.0 is Syrinx's own
   licence and file-level; it matters only if it ships, which a build tool
   does not.
 - **No licence in the registry metadata:** `buffers@0.1.1` and
   `khroma@2.1.0` (ships), `color-convert@0.5.3` and `exif-parser@0.1.12`
-  (build), `union@0.5.0` (outside). Their repositories were not checked.
+  (upper only), `union@0.5.0` (outside). Their repositories were not checked.
 - **`@img/sharp-*@0.35.5` and `@img/sharp-libvips-*@1.3.4`,
   LGPL-3.0-or-later alone or with Apache-2.0 and MIT (14 packages,
   outside):** the libvips image library's prebuilt binaries for the sharp
@@ -241,21 +249,24 @@ from the shipping apps at all).
 - **MPL-2.0 tooling for the web clipper (outside):** `addons-linter@10.14.0`,
   `addons-moz-compare@1.4.0`, `addons-scanner-utils@16.0.0`,
   `eslint-plugin-no-unsanitized@4.1.5`, `fx-runner@1.7.0`, `web-ext@10.8.0`.
-- **Creative Commons and OFL:** `caniuse-lite` (CC-BY-4.0, build data) and
+- **Creative Commons and OFL:** `caniuse-lite` (CC-BY-4.0, upper only,
+  browser data for build tools) and
   `@fontsource/arimo@5.3.0` (OFL-1.1, outside).
 - **The 13 dual licences with a permissive choice,** which a distributor
-  takes:
+  may elect (Trilium's builds as a whole are distributed under the AGPL
+  either way):
 
   | Sits | Packages |
   |---|---|
   | ships | `jszip@3.10.2` (MIT OR GPL-3.0-or-later), `dompurify@3.4.17` (MPL-2.0 OR Apache-2.0), `json-schema@0.4.0` (AFL-2.1 OR BSD-3-Clause), `boxicons@2.1.4` (CC-BY-4.0 OR OFL-1.1 OR MIT), `@maplibre/mlt@1.3.0` (MIT OR Apache-2.0) |
-  | build | `unorm@1.6.0` (MIT or GPL-2.0), `sanitize-filename@1.6.4` (WTFPL OR ISC), `utf8-byte-length@1.0.5` (WTFPL OR MIT), `type-fest@5.10.0` (MIT OR CC0-1.0) |
+  | upper only | `unorm@1.6.0` (MIT or GPL-2.0), `sanitize-filename@1.6.4` (WTFPL OR ISC), `utf8-byte-length@1.0.5` (WTFPL OR MIT), `type-fest@5.10.0` (MIT OR CC0-1.0) |
   | outside | `node-forge@1.4.2` (BSD-3-Clause OR GPL-2.0), `opener@1.5.2` (WTFPL OR MIT), `rc@1.2.8` (BSD-2-Clause OR MIT OR Apache-2.0), `type-fest@4.41.0` (MIT OR CC0-1.0) |
 
 None of this changes what Syrinx may contain: Syrinx takes none of these
 packages, because Syrinx takes nothing from the fork. It matters for what
-the fork's own builds carry and, if the owner ever bundles a build, for the
-licence notices Fledge-Software would then redistribute.
+the fork's own builds carry. Fledge-Software redistributes those packages,
+and owes their licence notices, whenever it publishes a fork build, whether
+the owner installs that build separately or Syrinx's release bundles it.
 
 ### CKEditor 5's terms
 
@@ -312,8 +323,8 @@ project's continuity, rests on one or two people.
 months, eight minor and seven patch releases: `v0.100.0` (2025-12-05),
 `v0.101.0` to `v0.101.3` (2025-12-25 to 2026-01-08), `v0.102.0` to
 `v0.102.2` (2026-03-01 to 2026-04-05), `v0.103.0` (2026-05-13), `v0.104.0`
-and `v0.104.1` (2026-07-18 and 07-25), `v0.105.0` (2026-08-19), `v0.106.0`
-and `v0.106.1` (2026-09-25 and 10-23) and `v0.107.0` (2026-11-08), with
+and `v0.104.1` (2026-07-18 and 2026-07-25), `v0.105.0` (2026-08-19),
+`v0.106.0` and `v0.106.1` (2026-09-25 and 2026-10-23) and `v0.107.0` (2026-11-08), with
 `v0.108.0-rc.1` on 2026-11-21. That is a minor release roughly every six
 weeks for the fork to merge.
 
@@ -372,14 +383,14 @@ for `apps/client/src/`. #281 is the slice proposed to change these defaults.
 |---|---|---|---|
 | Listening address | `0.0.0.0` (all interfaces), port 8080 | ini `[Network] host`, `port`; env `TRILIUM_NETWORK_HOST`, `TRILIUM_HOST`, `TRILIUM_NETWORK_PORT`, `TRILIUM_PORT` | `server/services/config.ts`, `server/services/host.ts`, `server/services/port.ts`, `server/www.ts` |
 | Login check | on | ini `[General] noAuthentication` (default false); env `TRILIUM_GENERAL_NOAUTHENTICATION` | `server/services/auth.ts` |
-| CORS headers | no `Access-Control-*` headers; CORP `same-origin` | ini `[Network] corsAllowOrigin`, `corsAllowMethods`, `corsAllowHeaders` (empty), `corsResourcePolicy` | `server/services/config.ts`, `server/app.ts` |
-| First-run setup routes | the `/api/setup/*` routes, including backup restore, open before the database is initialised; `/set-password` open whenever no password is set | no setting; turning it off needs a fork change | `server/routes/routes.ts`, `core/routes/index.ts`, `server/services/auth.ts` |
+| CORS (cross-origin resource sharing) headers | no `Access-Control-*` headers; CORP (cross-origin resource policy) `same-origin` | ini `[Network] corsAllowOrigin`, `corsAllowMethods`, `corsAllowHeaders` (empty), `corsResourcePolicy` | `server/services/config.ts`, `server/app.ts` |
+| First-run setup routes | most `/api/setup/*` routes (listed below), including backup restore, open before the database is initialised; `/set-password` open whenever no password is set | no setting; turning it off needs a fork change | `server/routes/routes.ts`, `core/routes/index.ts`, `server/services/auth.ts` |
 | ETAPI, `/etapi/*` | mounted; needs a user-created token | no setting; turning it off needs a fork change | `server/etapi/`, `server/routes/routes.ts` |
 | `/custom/*path` | mounted; no login, no CSRF (cross-site request forgery) check | no setting for the route; handlers need `backendScriptingEnabled`, resource providers do not | `server/routes/custom.ts`, `core/routes/custom.ts` |
 | MCP (Model Context Protocol, an endpoint AI agents call) server, `/mcp` | off | option `mcpEnabled` (false); needs an ETAPI token | `server/routes/mcp.ts` |
 | ACP (Agent Client Protocol) agents' MCP listener | off (only while an ACP agent runs) | follows the AI chat options | `server/services/llm/providers/acp_mcp_endpoint.ts` |
 | Web clipper, `/api/clipper/*` | mounted; needs an ETAPI token | no setting; turning it off needs a fork change | `server/routes/routes.ts` |
-| Sync target, `/api/sync/*` | mounted; needs the password | no setting; turning it off needs a fork change | `core/routes/api/sync.ts` |
+| Sync target, `/api/sync/*` | mounted; needs the password, except the read-only `GET /api/sync/stats` | no setting; turning it off needs a fork change | `core/routes/api/sync.ts` |
 | Public sharing, `/share/` | mounted; notes under `_share` served without login | no setting for the route; options `redirectBareDomain`, `showLoginInShareTheme` (false) | `server/share/routes.ts`, `core/share/share_root.ts` |
 
 **What reaches out.**
@@ -451,7 +462,8 @@ Notes on the tables:
 - **AI providers and agents.** With `aiEnabled` on, the server calls the
   providers in `llmProviders` (Anthropic, OpenAI, Google, DeepSeek,
   OpenRouter or a local model), a web-search provider (Brave, Tavily, Exa,
-  Serper, Perplexity or DeepSeek; `core/services/llm/web_search.ts`), and
+  Serper, Perplexity, DeepSeek, or a self-hosted SearXNG at any address;
+  `core/services/llm/web_search.ts`), and
   can start agent programs (Claude's agent SDK, Codex, Copilot,
   Antigravity). The Options screen looks up an Antigravity download from
   `dl.google.com`.
@@ -482,11 +494,19 @@ bundling is chosen.
 
 - **AGPL-3.0 §5, aggregates.** Putting an AGPL program on the same storage or
   distribution medium as "separate and independent works", which are not
-  "combined with it such as to form a larger program", does not make the
-  licence apply to the other works. Two programs that run as separate
-  processes and exchange HTTP messages are the standard example of separate
-  works; sharing a process, linking each other's code or exchanging
-  internal data structures would not be.
+  "combined with it such as to form a larger program" and are not by their
+  nature extensions of it, does not make the licence apply to the other
+  works, provided the compilation is not used to limit its users' rights
+  beyond what each work's licence allows. The licence does not itself say
+  where separate programs end; the Free Software Foundation's GPL FAQ reads
+  programs that run as separate processes and exchange messages as
+  ordinarily separate, while sharing a process, linking each other's code,
+  or communication so intimate that it exchanges complex internal data
+  structures, can make one program. (This summary of §5 was written from
+  the licence text as recalled; gnu.org was not read in this session.) The
+  borderline case a review would have to settle is the Notes plugin, which
+  exists only to drive the fork, together with the fork-specific changes
+  endpoint.
 - **AGPL-3.0 §6, corresponding source.** Whoever conveys the program in
   object form (a built archive) must also provide its complete
   corresponding source, including the scripts used to build it, for
@@ -503,7 +523,9 @@ bundling is chosen.
 - **MPL-2.0 §3.3, Larger Work.** Syrinx's licence lets Syrinx be distributed
   inside a larger work "under terms of Your choice", provided Syrinx's own
   files stay under MPL-2.0 and their source stays available. MPL-2.0 even
-  names AGPL-3.0 among the "Secondary Licenses" it can be combined with. So
+  names AGPL-3.0 among the "Secondary Licenses" (§1.12); that clause
+  concerns combining Syrinx's files with such code into one work, not
+  shipping two programs side by side, so bundling does not rely on it. So
   MPL-2.0 itself does not stop a Syrinx installer from also carrying an AGPL
   program; the stricter constraint is Syrinx's own "no GPL code" rule in
   `AGENTS.md`.
@@ -516,7 +538,9 @@ release stays exactly what `AGENTS.md` says it is, Syrinx's weekly preview
 workflow is unchanged, and Fledge-Software's AGPL duties are the ones any
 public fork already has. The costs are a second download, and a Syrinx version
 and a fork version that can drift apart, so the plugin has to check the fork's
-version when it connects. It also matches the owner's words in #277, "if the
+version when it connects. Publishing those builds is still distribution by
+Fledge-Software, so the Claude agent SDK question below applies here too. It
+also matches the owner's words in #277, "if the
 user has installed the notes app in syrinx plugins".
 
 **Option 2: bundled in Syrinx's release.** The installer would carry the
@@ -563,18 +587,28 @@ should link to that commit's source (§13).
    `main`, and #278's definition of done asks for the bundling decision to be
    recorded there. Agents do not write decisions; the owner (or an agent at
    the owner's request) adds the entry.
-4. **Reconcile `AGENTS.md` in that entry.** These passages still describe
-   the halted Notes plugin and now contradict the Trilium direction: in
-   "Layout", the bullet saying the built-in plugins, "Notes and later
-   Forge", each live in their own repository as signed packages, and the
-   bullet on Notes and Forge editing in one CodeMirror 6 component (D28);
-   and in "Work order", "Plugins go runtime, template, Notes, Forge", with
-   Notes as #35. This audit leaves them as they are.
+4. **Reconcile `AGENTS.md` in that entry.** These passages describe the
+   halted Notes plugin and now contradict the Trilium direction:
+   - "Where state lives": "Rust owns all state and logic", which restates
+     the spec's settled decision and names CodeMirror (D28) as its one
+     exception. Under #277, notes live in Trilium's own SQLite database and
+     are edited in CKEditor, a second exception only the owner can grant;
+   - "Layout": the bullet on Notes and Forge editing in one CodeMirror 6
+     component (D28). The bullet that the built-in plugins, Notes included,
+     each live in their own repository as signed packages still holds while
+     the Notes plugin stays a thin client of the fork;
+   - "Read this first" and "Work order": Notes queued as epic #35 ("Plugins
+     go runtime, template, Notes, Forge"), which #277 replaces.
+   `CLAUDE.md`'s opening paragraph (Notes as a built-in plugin in its own
+   repository) was checked and holds in the same way. This audit leaves all
+   of them as they are.
 5. **The Claude agent SDK inside Trilium's server build.** Its `LICENSE.md`
    reserves all rights and makes use subject to Anthropic's Legal
-   Agreements. Recommendation: keep AI chat off by default in the fork, and
-   if the owner chooses to bundle, have the licence review cover whether
-   that package may be redistributed, or build the fork without it.
+   Agreements, and the server build includes it, so any fork build
+   Fledge-Software publishes redistributes it, under either bundling option.
+   Recommendation: keep AI chat off by default in the fork, and before the
+   fork's first published build either have a licence review confirm the
+   package may be redistributed or build the fork without it.
 6. **Proposed additions to #281 and #279,** recommendations not yet in
    either issue; each is set out under "Notes on the tables" or "Bundling":
    the loopback recipe; closing the first-run setup routes; unmounting or
