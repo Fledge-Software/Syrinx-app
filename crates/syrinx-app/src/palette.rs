@@ -12,9 +12,9 @@ use futures::channel::mpsc::UnboundedSender;
 use gpui::{
     App, AppContext, Context, Div, Entity, InteractiveElement, IntoElement, KeyBinding,
     ParentElement, Render, ScrollHandle, Stateful, StatefulInteractiveElement, Styled,
-    Subscription, Window, actions, div, px,
+    Subscription, Window, actions, div,
 };
-use gpui_component::input::{Input, InputEvent, InputState, MoveDown, MoveUp};
+use gpui_component::input::{InputEvent, InputState, MoveDown, MoveUp};
 use syrinx_core::usage::{Feature, Timing, UsageRecorder};
 use syrinx_core::{CommandAction, CommandContext, CommandRegistry};
 use syrinx_platform::browser::BrowserShortcut;
@@ -22,17 +22,19 @@ use syrinx_search::{Scope, SearchResults, Target};
 
 pub use display::arrange;
 
+/// The popup's height with nothing under the bar: the bar and the panel's borders (#265).
+pub const BAR_ONLY_HEIGHT: f32 = render::PANEL_BORDERS + render::BAR_HEIGHT;
+
 use choices::PaletteChoices;
 use commands::{CommandMatcher, CommandMatches};
-use display::Preview;
 use query::{Chip, ParsedQuery, View};
 
 use crate::{acceptance::PresentProbe, session::SessionError, text_field, theme, ui};
 
 actions!(palette, [Dismiss, NextResult, PreviousResult, SearchWeb]);
 
-/// The preview pane is drawn only when the popup is at least this wide.
-const PREVIEW_MIN_WIDTH: f32 = 720.;
+/// The status line once the browser has stopped listening to the entry's channel.
+const BROWSER_GONE: &str = "The browser window is no longer available.";
 
 pub enum PaletteEvent {
     Query {
@@ -47,6 +49,8 @@ pub enum PaletteEvent {
     Activate(Target),
     Run(CommandAction),
     Shortcut(BrowserShortcut),
+    /// What the popup lists changed its height, so the browser refits the popup (#265).
+    Resized,
     Closed,
     /// A press in Syrinx's chrome ended the entry; focus stays where that press put it (#172).
     ClickedAway,
@@ -60,7 +64,7 @@ impl PaletteEvent {
             | Self::Run(_)
             | Self::Closed
             | Self::ClickedAway => true,
-            Self::Query { .. } | Self::Shortcut(_) => false,
+            Self::Query { .. } | Self::Shortcut(_) | Self::Resized => false,
         }
     }
 }
@@ -95,6 +99,10 @@ pub struct PaletteView {
     command_problem: Option<String>,
     context: CommandContext,
     chip: Chip,
+    /// Tab in the query shows the scope chips for the open entry; they start hidden (#265).
+    scopes_shown: bool,
+    /// The height the browser was last told to fit, so only a change is reported.
+    fitted: FittedHeight,
     view: View,
     scroll: ScrollHandle,
     native: PaletteNative,
@@ -152,6 +160,8 @@ impl PaletteView {
             command_problem,
             context: CommandContext::default(),
             chip: Chip::default(),
+            scopes_shown: false,
+            fitted: FittedHeight::default(),
             view: View::Everything,
             scroll: ScrollHandle::new(),
             native,
@@ -176,6 +186,7 @@ impl PaletteView {
         self.opening = Some(entry.opened);
         self.choices.reset();
         self.chip = Chip::default();
+        self.scopes_shown = false;
         self.view = View::Everything;
         self.scroll = ScrollHandle::new();
         self.input.update(cx, |input, cx| {
@@ -188,6 +199,38 @@ impl PaletteView {
         if let Some(problem) = &self.command_problem {
             self.choices.status = problem.clone();
         }
+        // The browser shows the popup at this height, so only later changes are reported.
+        self.fitted.reset(self.wanted_height());
+    }
+
+    /// The popup height that fits what is drawn now: the bar alone, or the bar and its rows.
+    pub fn wanted_height(&self) -> f32 {
+        render::height(self.scopes_shown, &self.choices, self.view)
+    }
+
+    /// Redraws after a change to what is drawn, asking the browser to refit the popup first
+    /// when its height changed. Every such change goes through here (#265), except `query`,
+    /// `refresh` and `choose_chip`: they only notify, because their reply refits the popup.
+    fn redraw(&mut self, cx: &mut Context<Self>) {
+        self.announce_height();
+        cx.notify();
+    }
+
+    /// Asks the browser to refit the popup when what is drawn changed its height.
+    fn announce_height(&mut self) {
+        if self.fitted.changed_to(self.wanted_height()) && !self.emit(PaletteEvent::Resized) {
+            self.choices.status = BROWSER_GONE.to_owned();
+        }
+    }
+
+    /// Shows the scope chips for the open entry; whether this call was the one that did.
+    fn show_scopes(&mut self, cx: &mut Context<Self>) -> bool {
+        if self.scopes_shown {
+            return false;
+        }
+        self.scopes_shown = true;
+        self.redraw(cx);
+        true
     }
 
     /// Whether an entry is open, so its keys and replies still mean something.
@@ -215,7 +258,7 @@ impl PaletteView {
     /// Reports how an open entry ended, then hides the popup.
     fn end_entry(&mut self, event: PaletteEvent, window: &mut Window, cx: &mut Context<Self>) {
         if self.is_open() {
-            self.emit(event);
+            self.send(event, cx);
         }
         self.close(window, cx);
     }
@@ -264,7 +307,7 @@ impl PaletteView {
             .choices
             .query_scoped(&input, self.view.accepts_address());
         self.probe_query(request_id);
-        self.send_query(request_id, parsed.text, parsed.prefix.is_some());
+        self.send_query(request_id, parsed.text, parsed.prefix.is_some(), cx);
         cx.notify();
     }
 
@@ -278,12 +321,12 @@ impl PaletteView {
         let parsed = ParsedQuery::parse(&input);
         let request_id = self.choices.refresh();
         self.probe_query(request_id);
-        self.send_query(request_id, parsed.text, parsed.prefix.is_some());
+        self.send_query(request_id, parsed.text, parsed.prefix.is_some(), cx);
         cx.notify();
     }
 
     /// Stages this request's commands, then asks the worker for its page rows and counts.
-    fn send_query(&mut self, request_id: u64, text: &str, prefixed: bool) {
+    fn send_query(&mut self, request_id: u64, text: &str, prefixed: bool, cx: &mut Context<Self>) {
         let matches = match self.commands.matches(text, self.view, self.context) {
             Ok(matches) => matches,
             Err(error) => {
@@ -294,11 +337,12 @@ impl PaletteView {
         };
         self.choices
             .stage_commands(matches, !text.is_empty(), prefixed);
-        self.emit(PaletteEvent::Query {
+        let query = PaletteEvent::Query {
             request_id,
             text: text.to_owned(),
             scope: self.view.search_scope(),
-        });
+        };
+        self.send(query, cx);
     }
 
     /// Shows the current request's rows, then applies an Enter that was waiting for them.
@@ -320,7 +364,7 @@ impl PaletteView {
             return true;
         }
         self.scroll_to_selection();
-        cx.notify();
+        self.redraw(cx);
         true
     }
 
@@ -360,13 +404,21 @@ impl PaletteView {
         self.choices.answered()
     }
 
-    fn emit(&mut self, event: PaletteEvent) {
+    /// Sends `event` on the open entry's channel; false only when the browser stopped listening.
+    fn emit(&self, event: PaletteEvent) -> bool {
         let Some(events) = &self.events else {
-            return;
+            return true;
         };
-        if events.unbounded_send(event).is_err() {
-            self.choices.status = "The browser window is no longer available.".to_owned();
+        events.unbounded_send(event).is_ok()
+    }
+
+    /// Sends `event`, and says so under the rows when the browser stopped listening.
+    fn send(&mut self, event: PaletteEvent, cx: &mut Context<Self>) {
+        if self.emit(event) {
+            return;
         }
+        self.choices.status = BROWSER_GONE.to_owned();
+        self.redraw(cx);
     }
 
     fn submit(&mut self, force_search: bool, window: &mut Window, cx: &mut Context<Self>) {
@@ -376,7 +428,7 @@ impl PaletteView {
         let text = self.input.read(cx).value().to_string();
         let Some(event) = self.choices.submission(text, force_search) else {
             // A waiting Enter shows its status until the reply applies it.
-            cx.notify();
+            self.redraw(cx);
             return;
         };
         self.finish(event, window, cx);
@@ -388,14 +440,14 @@ impl PaletteView {
             PaletteEvent::Activate(target @ Target::Command(_)) => {
                 let Some(command) = self.commands.command(target) else {
                     self.choices.status = "This command is no longer available.".to_owned();
-                    cx.notify();
+                    self.redraw(cx);
                     return;
                 };
                 PaletteEvent::Run(command.action.clone())
             }
             event => event,
         };
-        self.emit(event);
+        self.send(event, cx);
         self.close(window, cx);
     }
 
@@ -434,27 +486,25 @@ impl PaletteView {
         let child = render::child_index(&self.choices, row);
         self.scroll.scroll_to_item(child);
     }
+}
 
-    fn preview(&self) -> Option<Preview> {
-        let selected = self.choices.selected?;
-        if selected == 0
-            && let Some(address) = &self.choices.address
-        {
-            return Some(Preview::address(&self.choices.entry, address));
+/// The height the browser was last told to fit the popup to.
+#[derive(Default)]
+struct FittedHeight(f32);
+
+impl FittedHeight {
+    /// Records the height the popup is shown at, without reporting it.
+    fn reset(&mut self, shown: f32) {
+        self.0 = shown;
+    }
+
+    /// Whether `wanted` differs from the last reported height; if so it becomes that height.
+    fn changed_to(&mut self, wanted: f32) -> bool {
+        if (wanted - self.0).abs() < 0.5 {
+            return false;
         }
-        if selected == 0 && self.choices.web_search {
-            return Some(Preview::search(&self.choices.entry));
-        }
-        let hit = self.choices.selected_hit()?;
-        let Some(command) = self.commands.command(hit.target) else {
-            return Some(Preview::page(hit));
-        };
-        let plugin = match &command.scope {
-            syrinx_core::CommandScope::Plugin { plugin } => Some(plugin.as_str()),
-            syrinx_core::CommandScope::Browser => None,
-        };
-        let shortcut = command.shortcut.as_ref().map(syrinx_core::Shortcut::label);
-        Some(Preview::command(hit, plugin, shortcut))
+        self.0 = wanted;
+        true
     }
 }
 
@@ -503,18 +553,11 @@ impl Render for PaletteView {
             cx.defer(move |_| usage.time(Timing::PaletteOpenToPaint, opened.elapsed()));
         }
         let tokens = theme::current();
-        let wide = f32::from(window.viewport_size().width) >= PREVIEW_MIN_WIDTH;
-        let list = render::list(self, wide, cx);
-        let mut body = div()
-            .flex()
-            .flex_1()
-            .min_h_0()
-            .border_t_1()
-            .border_color(theme::rgba(tokens.panel_divider))
-            .child(list);
-        if wide {
-            body = body.child(render::preview(self.preview()));
-        }
+        // One bar; the scope chips, rows and status line appear only when there are any (#265).
+        let bar = render::bar(&self.input);
+        let chips = self.scopes_shown.then(|| render::chips(self, cx));
+        let list = render::list(self, cx);
+        let notice = render::notice(&self.choices.status);
         crate::controls::watch_pointer(div())
             .id("palette")
             .role(gpui::Role::Dialog)
@@ -543,63 +586,56 @@ impl Render for PaletteView {
             )
             .on_action(cx.listener(|this, _: &SearchWeb, window, cx| this.submit(true, window, cx)))
             // The popup queues browser actions without replacing its focused input or results.
-            .on_action(cx.listener(|this, _: &ui::NewTab, _, _| {
-                this.emit(PaletteEvent::Shortcut(BrowserShortcut::NewTab));
+            .on_action(cx.listener(|this, _: &ui::NewTab, _, cx| {
+                this.send(PaletteEvent::Shortcut(BrowserShortcut::NewTab), cx);
             }))
-            .on_action(cx.listener(|this, _: &ui::CloseTab, _, _| {
-                this.emit(PaletteEvent::Shortcut(BrowserShortcut::CloseTab));
+            .on_action(cx.listener(|this, _: &ui::CloseTab, _, cx| {
+                this.send(PaletteEvent::Shortcut(BrowserShortcut::CloseTab), cx);
             }))
-            .on_action(cx.listener(|this, _: &ui::Address, _, _| {
-                this.emit(PaletteEvent::Shortcut(BrowserShortcut::Address));
+            .on_action(cx.listener(|this, _: &ui::Address, _, cx| {
+                this.send(PaletteEvent::Shortcut(BrowserShortcut::Address), cx);
             }))
-            .on_action(cx.listener(|this, _: &ui::Palette, _, _| {
-                this.emit(PaletteEvent::Shortcut(BrowserShortcut::Palette));
+            .on_action(cx.listener(|this, _: &ui::Palette, _, cx| {
+                this.send(PaletteEvent::Shortcut(BrowserShortcut::Palette), cx);
             }))
-            .on_action(cx.listener(|this, _: &ui::NextTab, _, _| {
-                this.emit(PaletteEvent::Shortcut(BrowserShortcut::NextTab));
+            .on_action(cx.listener(|this, _: &ui::NextTab, _, cx| {
+                this.send(PaletteEvent::Shortcut(BrowserShortcut::NextTab), cx);
             }))
-            .on_action(cx.listener(|this, _: &ui::PreviousTab, _, _| {
-                this.emit(PaletteEvent::Shortcut(BrowserShortcut::PreviousTab));
+            .on_action(cx.listener(|this, _: &ui::PreviousTab, _, cx| {
+                this.send(PaletteEvent::Shortcut(BrowserShortcut::PreviousTab), cx);
             }))
-            .on_action(cx.listener(|this, _: &ui::ReopenTab, _, _| {
-                this.emit(PaletteEvent::Shortcut(BrowserShortcut::ReopenTab));
+            .on_action(cx.listener(|this, _: &ui::ReopenTab, _, cx| {
+                this.send(PaletteEvent::Shortcut(BrowserShortcut::ReopenTab), cx);
             }))
-            .on_action(cx.listener(|this, _: &ui::SavePage, _, _| {
-                this.emit(PaletteEvent::Shortcut(BrowserShortcut::SavePage));
+            .on_action(cx.listener(|this, _: &ui::SavePage, _, cx| {
+                this.send(PaletteEvent::Shortcut(BrowserShortcut::SavePage), cx);
             }))
-            .on_action(cx.listener(|this, _: &ui::Back, _, _| {
-                this.emit(PaletteEvent::Shortcut(BrowserShortcut::Back));
+            .on_action(cx.listener(|this, _: &ui::Back, _, cx| {
+                this.send(PaletteEvent::Shortcut(BrowserShortcut::Back), cx);
             }))
-            .on_action(cx.listener(|this, _: &ui::Forward, _, _| {
-                this.emit(PaletteEvent::Shortcut(BrowserShortcut::Forward));
+            .on_action(cx.listener(|this, _: &ui::Forward, _, cx| {
+                this.send(PaletteEvent::Shortcut(BrowserShortcut::Forward), cx);
             }))
-            .on_action(cx.listener(|this, _: &ui::ToggleSidebar, _, _| {
-                this.emit(PaletteEvent::Shortcut(BrowserShortcut::ToggleSidebar));
+            .on_action(cx.listener(|this, _: &ui::ToggleSidebar, _, cx| {
+                this.send(PaletteEvent::Shortcut(BrowserShortcut::ToggleSidebar), cx);
             }))
-            .on_action(cx.listener(|this, _: &ui::Reload, _, _| {
-                this.emit(PaletteEvent::Shortcut(BrowserShortcut::Reload));
+            .on_action(cx.listener(|this, _: &ui::Reload, _, cx| {
+                this.send(PaletteEvent::Shortcut(BrowserShortcut::Reload), cx);
             }))
-            // Tab leaves the query for the scope chips.
-            .on_action(|_: &ui::FocusNextControl, window, cx| window.focus_next(cx))
+            // The first Tab shows the scope chips; the next one moves to them.
+            .on_action(cx.listener(|this, _: &ui::FocusNextControl, window, cx| {
+                if !this.show_scopes(cx) {
+                    window.focus_next(cx);
+                }
+            }))
             .on_action(|_: &ui::FocusPreviousControl, window, cx| window.focus_prev(cx))
             .child(
                 self.query_container(window, cx)
-                    .child(
-                        div()
-                            .h(px(56.))
-                            .px_4()
-                            .flex()
-                            .items_center()
-                            .gap_3()
-                            .child(div().flex_1().child(
-                                Input::new(&self.input).aria_label(text_field::PALETTE_QUERY.label),
-                            ))
-                            .child(render::key_hint("Esc")),
-                    )
-                    .child(render::chips(self, cx))
-                    .child(body),
+                    .child(bar)
+                    .children(chips)
+                    .children(list),
             )
-            .child(render::footer(&self.choices.status))
+            .children(notice)
     }
 }
 
@@ -624,6 +660,67 @@ mod tests {
     use super::*;
 
     const ADDRESS: &str = "https://palette.example.test/Case?Key=Value";
+
+    fn tab_rows(count: u64) -> SearchResults {
+        SearchResults {
+            generation: 1,
+            counts: syrinx_search::ScopeCounts::default(),
+            hits: (1..=count)
+                .map(|id| syrinx_search::SearchHit {
+                    target: Target::Tab(TabId::new(id).expect("synthetic tab")),
+                    score: 1,
+                    title: "Synthetic tab".to_owned(),
+                    address: "https://fit.example.test/".to_owned(),
+                    title_matches: Vec::new(),
+                    address_matches: Vec::new(),
+                })
+                .collect(),
+        }
+    }
+
+    /// The popup's height for `choices`, as `wanted_height` measures it with the chips hidden.
+    fn drawn(choices: &PaletteChoices) -> f32 {
+        render::height(false, choices, View::Everything)
+    }
+
+    #[test]
+    fn only_a_reply_that_changes_the_drawn_height_asks_for_a_refit() {
+        let mut choices = PaletteChoices::default();
+        let mut fitted = FittedHeight::default();
+        // An entry starts at the bar's height, which the browser shows without a report.
+        let first = choices.query_scoped("", true);
+        fitted.reset(drawn(&choices));
+        assert!(!fitted.changed_to(drawn(&choices)), "nothing changed yet");
+
+        assert!(choices.receive(first, Ok(tab_rows(2))));
+        assert!(
+            fitted.changed_to(drawn(&choices)),
+            "two rows grow the popup"
+        );
+        assert!(!fitted.changed_to(drawn(&choices)), "reported once only");
+
+        let second = choices.refresh();
+        assert!(choices.receive(second, Ok(tab_rows(2))));
+        assert!(!fitted.changed_to(drawn(&choices)), "the same rows again");
+
+        let third = choices.refresh();
+        assert!(choices.receive(third, Ok(tab_rows(1))));
+        assert!(fitted.changed_to(drawn(&choices)), "one row shrinks it");
+
+        // A new entry forgets the old height: the popup is shown afresh at the bar's.
+        choices.reset();
+        choices.query_scoped("", true);
+        fitted.reset(drawn(&choices));
+        assert!(!fitted.changed_to(drawn(&choices)));
+    }
+
+    #[test]
+    fn showing_the_scope_chips_changes_the_drawn_height() {
+        let choices = PaletteChoices::default();
+        let mut fitted = FittedHeight::default();
+        fitted.reset(render::height(false, &choices, View::Everything));
+        assert!(fitted.changed_to(render::height(true, &choices, View::Everything)));
+    }
 
     #[test]
     fn only_an_entry_that_was_active_closes_when_focus_leaves_it() {

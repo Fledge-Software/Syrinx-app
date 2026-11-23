@@ -25,7 +25,10 @@ pub(super) struct PaletteChoices {
     pub(super) results: Vec<SearchHit>,
     pub(super) selected: Option<usize>,
     refresh_selection: Option<RefreshSelection>,
+    /// A problem or a wait worth one line under the rows; empty when there is nothing to say.
     pub(super) status: String,
+    /// Why the typed text was refused as an address, kept while that text stands.
+    refusal: Option<String>,
     /// Locally matched commands for the current request; the first `staged_strong` lead pages.
     staged: Vec<SearchHit>,
     staged_strong: usize,
@@ -68,10 +71,16 @@ impl PaletteChoices {
             .request_id
             .checked_add(1)
             .expect("palette request IDs exhausted");
-        self.status = "Searching locally…".to_owned();
+        // Routine progress is not shown (#265); the line is kept for problems.
+        self.show_refusal();
         self.results.clear();
         self.awaiting_reply = true;
         self.request_id
+    }
+
+    /// Leaves only the standing refusal, if any, on the status line.
+    fn show_refusal(&mut self) {
+        self.status = self.refusal.clone().unwrap_or_default();
     }
 
     #[cfg(test)]
@@ -87,15 +96,17 @@ impl PaletteChoices {
         self.entry = text.trim().to_owned();
         self.matched = ParsedQuery::parse(text).text.trim().to_owned();
         self.web_search = accepts_address && matches!(recognized, Ok(None));
+        // A refused address explains itself only where an address could be entered, and an
+        // empty bar has nothing to explain.
+        self.refusal = recognized
+            .as_ref()
+            .err()
+            .filter(|_| accepts_address && !text.trim().is_empty())
+            .map(|error| (*error).to_owned());
+        self.show_refusal();
         self.address = match recognized {
             Ok(address) if accepts_address => address,
-            Ok(_) => None,
-            Err(error) => {
-                if accepts_address {
-                    self.status = error.to_owned();
-                }
-                None
-            }
+            _ => None,
         };
         self.selected = Some(0);
         self.refresh_selection = None;
@@ -178,10 +189,8 @@ impl PaletteChoices {
         let succeeded = result.is_ok();
         match result {
             Ok(results) => {
-                self.status = format!(
-                    "{} tabs · {} saved pages",
-                    results.counts.tabs, results.counts.saved
-                );
+                // The reply ends "Waiting for local results…"; a refusal still stands.
+                self.show_refusal();
                 self.counts = ChipCounts::new(results.counts, self.staged_counts, self.typed);
                 let (strong, weak) = self.staged.split_at(self.staged_strong);
                 self.results = strong
@@ -538,8 +547,9 @@ mod tests {
             let mut choices = PaletteChoices::default();
             let request = choices.query(input);
             assert_eq!(choices.address, None);
-            if let Err(error) = navigation::recognized_address(input) {
-                assert_eq!(choices.status, error);
+            match navigation::recognized_address(input) {
+                Err(error) if !input.is_empty() => assert_eq!(choices.status, error),
+                _ => assert_eq!(choices.status, "", "an empty bar shows no status line"),
             }
             assert!(choices.submission(input.to_owned(), false).is_none());
             assert!(choices.receive(request, Ok(results(&targets()))));
@@ -1099,16 +1109,16 @@ mod tests {
         let mut choices = PaletteChoices::default();
         let old = choices.query("");
         assert!(choices.receive(old, Ok(results(&[first, second]))));
-        assert_eq!(choices.status, "2 tabs · 0 saved pages");
+        assert_eq!(choices.status, "");
 
         let refreshed = choices.refresh();
         assert!(choices.results.is_empty());
-        assert_eq!(choices.status, "Searching locally…");
+        assert_eq!(choices.status, "");
         assert!(choices.submission(String::new(), false).is_none());
         assert!(choices.activation(old, second).is_none());
         assert!(!choices.receive(old, Ok(results(&[first, second]))));
         assert!(choices.receive(refreshed, Ok(results(&[first]))));
-        assert_eq!(choices.status, "1 tabs · 0 saved pages");
+        assert_eq!(choices.status, "");
         assert_eq!(choices.results.len(), 1);
         assert_target(&mut choices, first);
         assert!(choices.activation(refreshed, second).is_none());
@@ -1244,7 +1254,7 @@ mod tests {
         current.hits[0].title = "Changed synthetic title".to_owned();
         current.hits[0].address = "https://changed.example.test/".to_owned();
         assert!(choices.receive(refresh, Ok(current)));
-        assert_eq!(choices.status, "1 tabs · 1 saved pages");
+        assert_eq!(choices.status, "");
         assert_eq!(choices.results[0].title, "Changed synthetic title");
         assert_eq!(choices.results[0].address, "https://changed.example.test/");
         assert_search(&mut choices, "synthetic");
@@ -1253,7 +1263,7 @@ mod tests {
 
         let removed = choices.refresh();
         assert!(choices.receive(removed, Ok(results(&[tab]))));
-        assert_eq!(choices.status, "1 tabs · 0 saved pages");
+        assert_eq!(choices.status, "");
         assert!(choices.activation(removed, saved).is_none());
     }
 
@@ -1532,12 +1542,12 @@ mod tests {
         let mut choices = PaletteChoices::default();
         let request = choices.query_scoped(ADDRESS, false);
         assert_eq!(choices.address, None);
-        assert_eq!(choices.status, "Searching locally…");
+        assert_eq!(choices.status, "");
         assert!(choices.receive(request, Ok(results(&targets()))));
         assert_target(&mut choices, targets()[0]);
 
         // Refused addresses only explain themselves where an address could be entered.
         choices.query_scoped("JAVASCRIPT:1", false);
-        assert_eq!(choices.status, "Searching locally…");
+        assert_eq!(choices.status, "");
     }
 }
