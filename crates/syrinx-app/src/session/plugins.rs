@@ -11,7 +11,7 @@ use syrinx_platform::CacheFolder;
 use syrinx_plugin_host::bindings::syrinx::plugin::types::Outcome;
 use syrinx_plugin_host::grants::{DenyList, Protected};
 use syrinx_plugin_host::owner::{CacheSetup, OwnerRuntime};
-use syrinx_plugin_host::worker::PluginEvent;
+use syrinx_plugin_host::worker::{PluginEvent, StopReason};
 use syrinx_plugin_host::{CacheError, Failure, Refusal};
 use syrinx_store::{LocationError, Store, StoreError};
 
@@ -86,24 +86,30 @@ fn compiled_sha256(bytes: &[u8]) -> Result<[u8; 32], String> {
     syrinx_update::sha256(bytes).map_err(|error| error.to_string())
 }
 
-/// Stop every plugin and report what the runtime raised, stopping included, release the
-/// cache folder, then hand back the store, which nothing else holds any more, for the
-/// session to close.
+/// Stop every plugin and report what the runtime raised, stopping included, then hand back
+/// the store, which nothing else holds any more, for the session to close.
 pub(super) fn close(plugins: Option<SessionPlugins>, store: Arc<Store>) -> Result<(), StoreError> {
-    if let Some(SessionPlugins {
-        runtime,
-        cache_folder,
-    }) = plugins
-    {
-        log_lines(describe_all(&runtime.shutdown()));
-        // Only once no plugin can write to it.
-        drop(cache_folder);
+    if let Some(plugins) = plugins {
+        log_lines(stop(plugins));
     }
     match Arc::try_unwrap(store) {
         Ok(store) => store.shutdown(),
         // Dropping the last holder closes it anyway, reporting only to stderr.
         Err(_) => Err(StoreError::WorkerUnavailable),
     }
+}
+
+/// Stop every plugin, then release the cache folder; one line for each event the runtime
+/// raised that nobody had taken, stopping included.
+pub(super) fn stop(plugins: SessionPlugins) -> Vec<String> {
+    let SessionPlugins {
+        runtime,
+        cache_folder,
+    } = plugins;
+    let lines = describe_all(&runtime.shutdown());
+    // Only once no plugin can write to it.
+    drop(cache_folder);
+    lines
 }
 
 /// Report what the workers queued since the last look, so the queue never grows unread.
@@ -114,8 +120,8 @@ pub(super) fn report_events(plugins: Option<&SessionPlugins>) {
 }
 
 /// One diagnostic line for each event queued since the last look.
-pub(super) fn drain(plugins: &OwnerRuntime) -> Vec<String> {
-    describe_all(&plugins.take_events())
+pub(super) fn drain(runtime: &OwnerRuntime) -> Vec<String> {
+    describe_all(&runtime.take_events())
 }
 
 /// One diagnostic line for each of `events`, in the order they were queued.
@@ -147,8 +153,7 @@ fn describe(event: &PluginEvent) -> String {
             format!("Plugin {plugin} stopped: {}", failure_kind(failure))
         }
         PluginEvent::Deactivated { plugin, reason } => {
-            // Every reason's text is the host's own.
-            format!("Plugin {plugin} was deactivated: {reason}")
+            format!("Plugin {plugin} was deactivated: {}", stop_kind(reason))
         }
         PluginEvent::Cache {
             plugin: Some(plugin),
@@ -165,7 +170,7 @@ fn describe(event: &PluginEvent) -> String {
             cache_kind(error)
         ),
         PluginEvent::PrepareFailed { plugin, .. } => format!(
-            "Plugin {plugin} could not be compiled in the background; its first use compiles it"
+            "Plugin {plugin} could not be compiled in the background; its first use tries again"
         ),
     }
 }
@@ -188,6 +193,17 @@ fn failure_kind(failure: &Failure) -> String {
         Failure::OverBudget => "one call and its deferred calls took too long".to_owned(),
         Failure::Load(_) => "it could not be compiled, linked or started".to_owned(),
         Failure::ActivationRefused(_) => "it refused to activate".to_owned(),
+    }
+}
+
+/// Why a plugin was deactivated, in the host's words.
+fn stop_kind(reason: &StopReason) -> String {
+    match reason {
+        StopReason::Shutdown => "Syrinx is closing".to_owned(),
+        StopReason::Uninstalled => "the plugin was uninstalled".to_owned(),
+        StopReason::CapabilityRevoked(kind) => {
+            format!("the required {} capability was revoked", kind.name())
+        }
     }
 }
 

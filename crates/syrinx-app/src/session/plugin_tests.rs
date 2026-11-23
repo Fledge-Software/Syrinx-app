@@ -15,8 +15,10 @@ use syrinx_plugin_host::manifest::{
 use syrinx_plugin_host::owner::{OwnerError, OwnerRuntime};
 use syrinx_plugin_host::session::CallResult;
 use syrinx_plugin_host::worker::{PluginEvent, PluginStatus, StopReason};
-use syrinx_plugin_host::{CacheError, Failure, HostError, Refusal};
-use syrinx_plugin_host::{CompileCounts, PluginRegistry, SignedIdentity, check_signed};
+use syrinx_plugin_host::{
+    CacheError, CompileCounts, Failure, HostError, PluginRegistry, Refusal, SignedIdentity,
+    check_signed,
+};
 use syrinx_store::{PluginInstall, PluginState};
 
 use super::*;
@@ -138,6 +140,7 @@ fn the_test_plugin_runs_through_the_sessions_own_route() {
     assert_eq!(plugins::close(Some(session_plugins), store), Ok(()));
     fixture.cleanup();
 }
+
 /// A fresh synthetic session with the full fixture installed and granted storage, and its lease.
 fn installed(
     fixture: &Fixture,
@@ -154,6 +157,7 @@ fn installed(
     runtime
         .install(registered, Arc::from(full_component()), install_record())
         .expect("installed");
+    // Installing also starts a background compile, which reports nothing when it succeeds.
     // `test.echo` keeps a synthetic setting, so it needs storage.
     runtime
         .grant("test", CapabilityKind::Storage, 20)
@@ -333,7 +337,7 @@ fn every_event_is_described_without_text_from_the_plugin_or_the_system() {
             "Plugin test: its compiled code was not kept or used: the store could not read or keep its record",
             "Plugin test: its compiled code was not kept or used: its SHA-256 could not be computed",
             "The compiled plugin code cache could not be used: the compiled code could not be written out",
-            "Plugin test could not be compiled in the background; its first use compiles it",
+            "Plugin test could not be compiled in the background; its first use tries again",
         ]
     );
     assert!(lines.iter().all(|line| !line.contains("secret-7f3a")));
@@ -347,15 +351,10 @@ fn shutdown_hands_back_what_stopping_the_plugins_raised() {
         matches!(run(&mut session_plugins.runtime, "test.echo"), Ok(Ok(()))),
         "the fixture is active"
     );
-    let plugins::SessionPlugins {
-        runtime,
-        cache_folder,
-    } = session_plugins;
     assert_eq!(
-        plugins::describe_all(&runtime.shutdown()),
+        plugins::stop(session_plugins),
         vec!["Plugin test was deactivated: Syrinx is closing".to_owned()]
     );
-    drop(cache_folder);
     let store = Arc::try_unwrap(store).unwrap_or_else(|_| panic!("nothing else holds the store"));
     assert_eq!(store.shutdown(), Ok(()));
     drop(lease);
@@ -477,7 +476,7 @@ fn a_damaged_cache_entry_is_reported_while_the_plugin_still_loads() {
 }
 
 const PREPARE_FAILED: &str =
-    "Plugin test could not be compiled in the background; its first use compiles it";
+    "Plugin test could not be compiled in the background; its first use tries again";
 
 #[test]
 fn a_failed_background_compile_is_reported() {
@@ -505,7 +504,8 @@ fn a_failed_background_compile_is_reported() {
         std::thread::sleep(Duration::from_millis(10));
         lines.extend(plugins::drain(&session_plugins.runtime));
     }
-    assert_eq!(lines, vec![PREPARE_FAILED.to_owned()]);
+    lines.extend(plugins::drain(&session_plugins.runtime));
+    assert_eq!(lines, vec![PREPARE_FAILED.to_owned()], "nothing else");
     assert_eq!(plugins::close(Some(session_plugins), store), Ok(()));
     fixture.cleanup();
 }
