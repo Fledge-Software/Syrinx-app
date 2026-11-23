@@ -1,7 +1,7 @@
 //! Starts and stops the plugin runtime the session owns (#136): the owner's grants read from
 //! the store, the deny list built from Syrinx's own folders and the system's, and the
-//! compiled-code cache in its folder beside the database (#137), and the runtime's events
-//! reported on the local diagnostic path (#268).
+//! compiled-code cache in its folder beside the database (#137). It also reports the runtime's
+//! events on the local diagnostic path (#268).
 
 use std::ffi::OsString;
 use std::path::Path;
@@ -130,7 +130,8 @@ pub(super) fn describe_all(events: &[PluginEvent]) -> Vec<String> {
     events.iter().map(describe).collect()
 }
 
-/// Events go to stderr only; none is counted or shown in the window yet (#268).
+/// Events go to stderr only, which a normal Windows launch has no console for; none is counted,
+/// and whether the window shows them is the owner's to decide with #140.
 fn log_lines(lines: Vec<String>) {
     for line in lines {
         eprintln!("{line}");
