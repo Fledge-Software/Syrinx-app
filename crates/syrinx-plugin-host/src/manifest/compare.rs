@@ -8,7 +8,8 @@ use super::{CapabilityKind, CapabilityRequest, FolderCount, PluginManifest, Scop
 pub struct CapabilityChanges {
     /// Kinds asked for afresh, a full-trust kind included.
     pub added: Vec<CapabilityKind>,
-    /// Kinds asked for with a wider scope in any respect, even if narrower in another.
+    /// Kinds asked for with a wider scope in any respect, even if narrower in another, or that
+    /// were optional and are now required.
     pub widened: Vec<CapabilityKind>,
     /// Kinds asked for with a scope narrower in some respect and wider in none.
     pub narrowed: Vec<CapabilityKind>,
@@ -41,7 +42,10 @@ pub fn compare(old: &PluginManifest, new: &PluginManifest) -> CapabilityChanges 
             changes.added.push(request.kind);
             continue;
         };
+        // A request that becomes required asks for more: the plugin no longer runs without it.
+        let became_required = request.required && !before.required;
         match reach(&before.scope, &request.scope) {
+            _ if became_required => changes.widened.push(request.kind),
             Reach::Wider => changes.widened.push(request.kind),
             Reach::Narrower => changes.narrowed.push(request.kind),
             Reach::Same if before.reason != request.reason => changes.reworded.push(request.kind),
@@ -254,6 +258,16 @@ tiers = ["catalogue"]
         assert_eq!(reach(&none, &folder), Reach::Wider);
         assert_eq!(reach(&folder, &none), Reach::Wider);
         assert_eq!(reach(&none, &none), Reach::Same);
+    }
+
+    #[test]
+    fn a_request_that_becomes_required_needs_consent() {
+        let optional = manifest(&[("storage", "required = false", "Keeps settings.")]);
+        let required = manifest(&[("storage", "required = true", "Keeps settings.")]);
+        let changes = compare(&optional, &required);
+        assert_eq!(changes.widened, [CapabilityKind::Storage]);
+        assert!(changes.needs_consent());
+        assert!(!compare(&required, &optional).needs_consent());
     }
 
     #[test]

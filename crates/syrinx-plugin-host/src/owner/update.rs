@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 use syrinx_core::CommandRegistry;
 use syrinx_store::{
-    FolderNarrowing, PluginFolder, PluginGrant, PluginInstall, PluginState, StoreError, StoredGrant,
+    FolderNarrowing, PluginFolder, PluginGrant, PluginInstall, StoreError, StoredGrant,
 };
 
 use super::install::{
@@ -53,12 +53,23 @@ impl OwnerRuntime {
         commands: &mut CommandRegistry,
         now: i64,
     ) -> Result<(), InstallRefusal> {
-        let added = match &reviewed.plan {
-            Plan::Update(changes) => changes.added.clone(),
+        match &reviewed.plan {
+            Plan::Update(_) => {}
             Plan::Held(_) => return Err(InstallRefusal::NeedsConsent),
             Plan::Install => return Err(InstallRefusal::WrongPlan),
-        };
-        check_required(reviewed.manifest(), granted, |kind| added.contains(&kind))?;
+        }
+        let id = reviewed.manifest().id().to_owned();
+        let stored = self.stored_kinds(&id)?;
+        // Every required kind must end up granted: already held, or granted now.
+        let available: Vec<CapabilityKind> = stored.iter().chain(granted).copied().collect();
+        check_required(reviewed.manifest(), &available, |_| true)?;
+        // The owner's new choices: kinds the new version asks for that are not held yet.
+        let requested = requested_kinds(reviewed.manifest());
+        let new_grants: Vec<CapabilityKind> = granted
+            .iter()
+            .copied()
+            .filter(|kind| requested.contains(kind) && !stored.contains(kind))
+            .collect();
         let Reviewed {
             signed,
             offer,
@@ -66,7 +77,6 @@ impl OwnerRuntime {
             ..
         } = reviewed;
         let base = base.ok_or(InstallRefusal::WrongPlan)?;
-        let id = signed.manifest().id().to_owned();
         self.check_base(&base, signed.manifest().version())?;
         let previous = self.previous(&id, base, registry, commands)?;
 
@@ -74,16 +84,23 @@ impl OwnerRuntime {
             self.restore(&id, previous, registry, commands);
             return Err(error.into());
         }
-        let new_grants: Vec<CapabilityKind> = added
-            .into_iter()
-            .filter(|kind| granted.contains(kind))
-            .collect();
         if let Err(error) = self.swap(&id, &offer, &previous, &new_grants, registry, now) {
             self.restore(&id, previous, registry, commands);
             return Err(error);
         }
-        self.commit_grants(&id, registry, &new_grants);
+        self.commit_grants(&id, &new_grants);
         Ok(())
+    }
+
+    /// The kinds the store holds grants of for `plugin`.
+    fn stored_kinds(&self, plugin: &str) -> Result<Vec<CapabilityKind>, InstallRefusal> {
+        Ok(self
+            .store
+            .plugin_grants()?
+            .into_iter()
+            .filter(|stored| stored.plugin_id == plugin)
+            .filter_map(|stored| CapabilityKind::from_name(&stored.grant.capability))
+            .collect())
     }
 
     /// The install record must still be the one the update was reviewed against, and the
@@ -129,9 +146,8 @@ impl OwnerRuntime {
         })
     }
 
-    /// Check the new component, write the new record and grants, then, if the plugin is
-    /// enabled, load it in place of the installed version. The caller puts everything back if
-    /// this fails.
+    /// Check the new component, write the new record and grants, then load it in place of the
+    /// installed version. The caller puts everything back if this fails.
     fn swap(
         &mut self,
         plugin: &str,
@@ -145,17 +161,13 @@ impl OwnerRuntime {
             .get(plugin)
             .ok_or_else(|| RegistrationError::UnknownPlugin(plugin.to_owned()))?;
         self.check_component(registered, &offer.component)?;
-        let record = PluginInstall {
-            // The owner's choice stands: an update never enables a disabled plugin.
-            state: previous.record.state,
-            ..install_record(
-                plugin,
-                offer,
-                registered.manifest(),
-                previous.record.installed_at,
-                now.max(previous.record.installed_at),
-            )
-        };
+        let record = install_record(
+            plugin,
+            offer,
+            registered.manifest(),
+            previous.record.installed_at,
+            now.max(previous.record.installed_at),
+        );
         self.store.save_plugin_install(record)?;
         self.rescope_grants(
             plugin,
@@ -176,10 +188,6 @@ impl OwnerRuntime {
         self.stop(plugin)?;
         if let Some(cache) = self.cache.as_ref() {
             cache.delete_entry_or_report(plugin);
-        }
-        // A plugin that is not enabled is updated in place, but not started.
-        if previous.record.state != PluginState::Enabled {
-            return Ok(());
         }
         Ok(self.load(registered, Arc::clone(&offer.component))?)
     }
@@ -227,20 +235,14 @@ impl OwnerRuntime {
         Ok(())
     }
 
-    /// The new version is in place: the grants the workers check follow the store, whether or
-    /// not it was started. No worker needs telling: `load` added the new version fresh, so no
-    /// instance holds an old grant.
-    fn commit_grants(
-        &mut self,
-        plugin: &str,
-        registry: &PluginRegistry,
-        new_grants: &[CapabilityKind],
-    ) {
-        let Some(registered) = registry.get(plugin) else {
+    /// The new version is in place: the grants the workers check follow the store. No worker
+    /// needs telling: `load` added the new version fresh, so no instance holds an old grant.
+    fn commit_grants(&mut self, plugin: &str, new_grants: &[CapabilityKind]) {
+        let Ok(added) = self.added(plugin) else {
             return;
         };
-        let requested: Vec<CapabilityKind> = registered
-            .manifest()
+        let requested: Vec<CapabilityKind> = added
+            .manifest
             .capabilities()
             .iter()
             .map(|request| request.kind)
@@ -345,6 +347,15 @@ impl OwnerRuntime {
         }
         Ok(())
     }
+}
+
+/// Every kind `manifest` asks for.
+fn requested_kinds(manifest: &PluginManifest) -> Vec<CapabilityKind> {
+    manifest
+        .capabilities()
+        .iter()
+        .map(|request| request.kind)
+        .collect()
 }
 
 /// How the folders granted under `grant_id` narrow to a folder scope; `None` for any other

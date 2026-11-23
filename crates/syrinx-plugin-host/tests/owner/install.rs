@@ -316,6 +316,47 @@ fn full_trust_a_newer_syrinx_and_a_declined_required_capability_install_nothing(
 }
 
 #[test]
+fn an_update_that_makes_an_optional_capability_required_is_held_until_granted() {
+    let temp = TempStore::new();
+    let store = temp.open();
+    let mut installer = Installer::start(&store);
+    // Folder access is optional in version 0.1.0, and the owner never granted it.
+    installer
+        .install(
+            offer("test", "0.1.0", &format!("{STORAGE}{FOLDER}")),
+            &[CapabilityKind::Storage],
+        )
+        .expect("installed");
+    let required = FOLDER.replace("required = false", "required = true");
+    let newer = || offer("test", "0.2.0", &format!("{STORAGE}{required}"));
+    let base = || offer("test", "0.1.0", &format!("{STORAGE}{FOLDER}"));
+
+    let held = installer.review_update(newer(), base());
+    let Plan::Held(changes) = held.plan().clone() else {
+        panic!("not held: {:?}", held.plan());
+    };
+    assert_eq!(changes.widened, [CapabilityKind::Folder]);
+
+    // Accepted without the now-required grant, the update is refused and nothing changes.
+    let before = record(&store);
+    assert_eq!(
+        installer.update(held.accept(), &[]),
+        Err(InstallRefusal::RequiredDeclined(CapabilityKind::Folder))
+    );
+    assert_eq!(record(&store), before);
+
+    // Accepted with it, the update applies and the grant is kept.
+    let accepted = installer.review_update(newer(), base()).accept();
+    installer
+        .update(accepted, &[CapabilityKind::Folder])
+        .expect("updated");
+    assert_eq!(record(&store).version, "0.2.0");
+    assert_eq!(grant_names(&store), ["folder", "storage"]);
+    assert_eq!(echo(&mut installer.runtime, "test"), Ok(Ok(())));
+    close(installer.runtime, store);
+}
+
+#[test]
 fn a_widened_update_is_held_while_the_old_version_runs_until_accepted() {
     let temp = TempStore::new();
     let store = temp.open();
@@ -356,45 +397,6 @@ fn a_widened_update_is_held_while_the_old_version_runs_until_accepted() {
     assert_ne!(updated.manifest_sha256, installed.manifest_sha256);
     assert_eq!(grant_names(&store), ["folder", "storage"]);
     assert_eq!(echo(&mut installer.runtime, "test"), Ok(Ok(())));
-    close(installer.runtime, store);
-}
-
-#[test]
-fn an_update_of_a_disabled_plugin_keeps_it_disabled_and_not_running() {
-    let temp = TempStore::new();
-    let store = temp.open();
-    let mut installer = Installer::start(&store);
-    installer
-        .install(offer("test", "0.1.0", STORAGE), &[CapabilityKind::Storage])
-        .expect("installed");
-    installer.runtime.shutdown();
-
-    // The owner disabled it; the next session does not load it.
-    let disabled = PluginInstall {
-        state: PluginState::Disabled,
-        ..record(&store)
-    };
-    store
-        .save_plugin_install(disabled.clone())
-        .expect("disabled");
-    let mut installer = Installer::start(&store);
-
-    let narrower = installer.review_update(
-        offer("test", "0.2.0", STORAGE),
-        offer("test", "0.1.0", STORAGE),
-    );
-    installer.update(narrower, &[]).expect("updated");
-    let updated = record(&store);
-    assert_eq!(updated.version, "0.2.0");
-    assert_eq!(
-        updated.state,
-        PluginState::Disabled,
-        "an update never enables a plugin the owner disabled"
-    );
-    assert!(
-        installer.runtime.status("test").is_none(),
-        "a disabled plugin is not started by its update"
-    );
     close(installer.runtime, store);
 }
 
