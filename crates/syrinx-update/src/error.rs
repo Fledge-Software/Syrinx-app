@@ -76,6 +76,11 @@ pub enum UpdateError {
     Clock,
     /// A signing key is not an ECDSA P-256 key, or its stored public half is malformed.
     UnsuitableSigningKey,
+    /// A published release is for another version than the tag being re-signed (#55).
+    UnexpectedVersion {
+        expected: Version,
+        published: Version,
+    },
     /// A plugin package signed for one id sits where another id's package belongs.
     WrongPlugin { expected: String, signed: String },
 }
@@ -250,6 +255,13 @@ impl fmt::Display for UpdateError {
             Self::UnsuitableSigningKey => {
                 formatter.write_str("signing key is not an ECDSA P-256 key")
             }
+            Self::UnexpectedVersion {
+                expected,
+                published,
+            } => write!(
+                formatter,
+                "the published release is version {published}, not the expected {expected}"
+            ),
             Self::WrongPlugin { expected, signed } => {
                 write!(formatter, "package is signed for {signed}, not {expected}")
             }

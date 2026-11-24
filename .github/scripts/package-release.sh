@@ -27,6 +27,8 @@ size=$(awk -v bytes="$(stat -c %s "target/package/$asset")" 'BEGIN { printf "%.1
 
 echo "asset=$asset" >> "$GITHUB_OUTPUT"
 echo "zip=$zip" >> "$GITHUB_OUTPUT"
+# The package folder beside the zip holds the unsigned update manifest that signing reads.
+echo "folder=${zip%.zip}" >> "$GITHUB_OUTPUT"
 echo "sha256=$sha256" >> "$GITHUB_OUTPUT"
 echo "size=$size" >> "$GITHUB_OUTPUT"
 echo "Packaged $asset ($size), SHA-256 $sha256, and $zip"

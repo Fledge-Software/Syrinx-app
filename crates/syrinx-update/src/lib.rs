@@ -10,6 +10,8 @@ mod error;
 pub mod install;
 mod keys;
 mod latest;
+#[cfg(any(test, feature = "release-tool"))]
+mod layout;
 mod manifest;
 #[cfg(feature = "release-tool")]
 mod ncrypt;
@@ -32,6 +34,10 @@ mod version;
 mod tests;
 #[cfg(test)]
 mod tests_plugin_package;
+#[cfg(all(test, feature = "release-tool"))]
+mod tests_release_key;
+#[cfg(test)]
+mod tests_resign;
 #[cfg(test)]
 mod tests_statement;
 
@@ -45,11 +51,13 @@ pub use keys::{KeyId, KeySet, PRODUCTION_KEYS, PinnedKey};
 pub use latest::{
     AcceptedStatement, MAX_ISSUED_AHEAD_SECONDS, VerifiedStatement, verify_statement,
 };
+#[cfg(any(test, feature = "release-tool"))]
+pub use layout::{HostFiles, write_host_layout};
 pub use manifest::{
     FileEntry, MAX_FILE_BYTES, MAX_FILES, MAX_MANIFEST_BYTES, MAX_TOTAL_BYTES, Manifest,
 };
 #[cfg(feature = "release-tool")]
-pub use ncrypt::{KeyStorage, StoredKey};
+pub use ncrypt::{KeyStorage, StoredKey, delete_software_key, import_software_key};
 pub use path::{MAX_COMPONENT_BYTES, MAX_COMPONENTS, MAX_PATH_BYTES, PackagePath};
 pub use payload::{Payload, VerifiedFile, VerifiedPayload, read_bounded};
 pub use plugin_package::{
@@ -57,7 +65,10 @@ pub use plugin_package::{
     VerifiedPluginPackage, verify_plugin_package,
 };
 #[cfg(any(test, feature = "release-tool"))]
-pub use sign::{SignedRelease, Signer, StatementTerms, sign_release};
+pub use sign::{
+    PublishedRelease, SignedRelease, SignedStatement, Signer, StatementTerms, resign_statement,
+    sign_release, verify_published,
+};
 pub use signature::{DetachedSignature, SIGNATURE_BYTES, SignatureKind};
 pub use statement::{MAX_STATEMENT_BYTES, MAX_STATEMENT_LIFETIME_SECONDS, Statement};
 pub use time::{SECONDS_PER_DAY, Timestamp};

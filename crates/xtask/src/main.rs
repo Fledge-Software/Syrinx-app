@@ -17,7 +17,7 @@ use std::process::{Command, ExitCode, Stdio};
 
 use serde_json::Value;
 
-const USAGE: &str = "Usage: cargo xtask <check | check-deps | check-licences | check-plugin-contract | check-javascript | check-deferred | check-packaging | write-registration | package | sign-update <options> | bench | palette-acceptance>";
+const USAGE: &str = "Usage: cargo xtask <check | check-deps | check-licences | check-plugin-contract | check-javascript | check-deferred | check-packaging | write-registration | package | sign-update <options> | verify-release <options> | resign-statement <options> | import-release-key <options> | delete-release-key <options> | pinned-release-keys | host-layout <options> | bench | palette-acceptance>";
 
 fn main() -> ExitCode {
     // Return a failing process status for every failed gate or invalid invocation.
@@ -39,15 +39,12 @@ fn run() -> Result<(), String> {
     let rest: Vec<_> = arguments.collect();
     let root = workspace_root()?;
 
-    // Only `sign-update` takes options, which the release tool itself checks.
-    if command == "sign-update" {
-        if !cfg!(windows) {
-            return Err(
-                "`cargo xtask sign-update` uses Windows key storage and runs only on Windows."
-                    .to_owned(),
-            );
+    // Only the release-tool commands take options, which the release tool itself checks.
+    if let Some(name) = command.to_str() {
+        let options = unicode_arguments(rest.clone())?;
+        if let Some(result) = packaging::run_forwarded(&root, name, &options) {
+            return result;
         }
-        return packaging::sign_update(&root, &unicode_arguments(rest)?);
     }
     if !rest.is_empty() {
         return Err(USAGE.to_owned());

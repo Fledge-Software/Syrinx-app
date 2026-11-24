@@ -34,15 +34,20 @@ next_version() {
 if ! on_ten_am_new_york; then
   echo "Not 10:00 in New York for this schedule line; the other line releases."
   output release false
+  output resign false
   exit 0
 fi
 
 source=$(git rev-parse origin/main)
 latest=$(git tag --list 'v*' --sort=-v:refname | head -n 1)
 
+output latest_tag "$latest"
+
+# A quiet week still re-signs the latest statement, so it never expires (#55).
 if [ -n "$latest" ] && [ "$(source_of "$latest")" = "$source" ] && [ "$FORCE" != "true" ]; then
-  echo "main has no commits since $latest; skipping this week."
+  echo "main has no commits since $latest; skipping this week's release and re-signing $latest's statement."
   output release false
+  output resign true
   exit 0
 fi
 
@@ -54,6 +59,7 @@ fi
 version=$(next_version "$latest")
 echo "Releasing $version from $source (previous: ${latest:-none})."
 output release true
+output resign false
 output version "$version"
 output previous_tag "$latest"
 output source "$source"
