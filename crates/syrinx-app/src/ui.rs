@@ -34,6 +34,7 @@ mod panes;
 mod peek;
 mod peek_state;
 mod permissions;
+mod plugin_commands;
 mod popups;
 mod process_recovery;
 mod recovery;
@@ -377,6 +378,8 @@ pub struct BrowserView {
     message: String,
     failure: Option<String>,
     focus: FocusHandle,
+    /// The palette's plugin command and form, which the session's answers update (#29).
+    plugin_commands: syrinx_core::plugin_forms::PluginCommands,
     /// The open palette entry; `None` while the kept popup is hidden.
     palette: Option<palette_popup::PalettePopup>,
     /// The open drop-down menu, if any; it draws in its own popup window (#12).
@@ -508,6 +511,7 @@ impl BrowserView {
             message: "Opening your workspace…".to_owned(),
             failure: None,
             focus: cx.focus_handle(),
+            plugin_commands: syrinx_core::plugin_forms::PluginCommands::default(),
             palette: None,
             menu: None,
             menu_generation: 0,
@@ -876,6 +880,9 @@ impl BrowserView {
                 }
             }
             SessionEvent::UpdateSnapshot(result) => self.update_snapshot_taken(result, cx),
+            SessionEvent::Plugin(answer) => self.plugin_answered(answer, cx),
+            SessionEvent::PluginOutcome(late) => self.plugin_outcome(late, cx),
+            SessionEvent::PluginStopped { plugin } => self.plugin_stopped(&plugin, cx),
             SessionEvent::Usage { status, problem } => {
                 self.usage_status_received(status, problem);
             }
@@ -1592,10 +1599,13 @@ impl BrowserView {
     }
 
     fn run_command(&mut self, action: CommandAction, window: &mut Window, cx: &mut Context<Self>) {
-        let CommandAction::Browser(action) = action else {
-            self.message = "Plugin actions need the plugin runtime, which is not built yet.".into();
-            self.focus_page(window, cx);
-            return;
+        let action = match action {
+            CommandAction::Browser(action) => action,
+            CommandAction::Plugin { plugin, action } => {
+                self.run_plugin_command(&plugin, &action, cx);
+                self.focus_page(window, cx);
+                return;
+            }
         };
         // Find keeps focus in its Syrinx input; activating natively now means no later
         // activation takes the keys back, and Syrinx never takes the foreground (2026-10-12).

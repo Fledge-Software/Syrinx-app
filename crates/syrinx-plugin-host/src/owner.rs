@@ -25,8 +25,8 @@ pub use services::StoreServices;
 use crate::grants::{DenyList, FolderRefusal, GrantSet};
 use crate::manifest::{CapabilityKind, FolderCount, PluginManifest, Scope};
 use crate::registry::RegisteredPlugin;
-use crate::session::{CallResult, Session};
-use crate::worker::{Pending, PluginEvent, PluginStatus, Plugins, send_event};
+use crate::session::{CallResult, Declarations, Session};
+use crate::worker::{EventWatch, Pending, PluginEvent, PluginStatus, Plugins, send_event};
 use crate::{CompileCounts, HostError, Runtime, limits};
 use cache::StoreCache;
 
@@ -171,6 +171,8 @@ pub struct OwnerRuntime {
     /// compiles' and the cache's; `report` is its sending end.
     events: Receiver<PluginEvent>,
     report: Sender<PluginEvent>,
+    /// Hears each event a plugin's worker raises as it is raised; see `set_event_watch`.
+    watch: EventWatch,
 }
 
 impl OwnerRuntime {
@@ -201,6 +203,7 @@ impl OwnerRuntime {
             cache,
             events,
             report,
+            watch: EventWatch::default(),
         })
     }
 
@@ -366,9 +369,30 @@ impl OwnerRuntime {
         running.plugins.call(plugin, call)
     }
 
+    /// Whether an added plugin's manifest declares `command` with a form, which decides between
+    /// `commands.run` and `forms` (`wit/v0_1/README.md`, "Forms"); `None` for a plugin not
+    /// added this session or a command it does not declare.
+    pub fn command_has_form(&self, plugin: &str, command: &str) -> Option<bool> {
+        let declarations = Declarations::from(&self.added.get(plugin)?.manifest);
+        declarations.command(command).map(|declared| declared.form)
+    }
+
     /// Where an added plugin is in its life; `None` for one not added this session.
     pub fn status(&self, plugin: &str) -> Option<PluginStatus> {
         self.running.as_ref()?.plugins.status(plugin)
+    }
+
+    /// Call `watch` on a plugin's worker thread with each event that worker raises (a write it
+    /// settled, then a failure or a deactivation), just after it is queued for `take_events`;
+    /// the watch only means the application need not wait for its next look. A runtime has one
+    /// watcher, owned by the session; setting another replaces it, for workers already running
+    /// too. It runs on a plugin's thread, so it must not block or take locks.
+    pub fn set_event_watch(&self, watch: impl Fn(&PluginEvent) + Send + Sync + 'static) {
+        let mut kept = self
+            .watch
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        *kept = Some(Arc::new(watch));
     }
 
     /// What the runtime, its workers, its background compiles and its compiled-code cache
@@ -479,7 +503,9 @@ impl OwnerRuntime {
             factory,
             self.report.clone(),
         );
-        Ok(Running { plugins })
+        Ok(Running {
+            plugins: plugins.watched_by(Arc::clone(&self.watch)),
+        })
     }
 }
 

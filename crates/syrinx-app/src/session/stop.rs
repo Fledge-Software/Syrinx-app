@@ -79,6 +79,7 @@ impl SessionCommand {
             Self::SavePageTextSetting(_) => {
                 "saving the page text setting (Syrinx tries again until it is saved)"
             }
+            Self::Plugin(_) => "running a plugin command",
             Self::Shutdown => "shutting down",
         }
     }

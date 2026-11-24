@@ -13,7 +13,7 @@ use crate::manifest::PluginManifest;
 use crate::session::{JobLimits, Mediator, RequestIds, Session};
 use crate::{Failure, HostError, LoadedPlugin, PluginHost, PreparedPlugin, Runtime, limits};
 
-use super::{PluginEvent, PluginStatus, ServiceFactory, StopReason};
+use super::{EventWatch, PluginEvent, PluginStatus, ServiceFactory, StopReason};
 
 /// The outcome the host reports for a write whose plugin stopped before it was known.
 const STOPPED_WRITE: &str = "the plugin stopped before the outcome was known";
@@ -110,6 +110,7 @@ pub(super) struct Worker<S: 'static> {
     pub(super) host_version: String,
     pub(super) shared: Arc<Shared>,
     pub(super) events: Sender<PluginEvent>,
+    pub(super) watch: EventWatch,
     pub(super) jobs: Receiver<Job<S>>,
     /// Hands over the plugin's previous worker, possibly still stopping, once this thread
     /// runs; two instances never run at once.
@@ -267,9 +268,23 @@ impl<S: PluginHost> Worker<S> {
     }
 
     /// Tell the application; once it stopped listening there is no one left to tell.
+    /// Every event goes through here in the order it is raised: `finish` and `fail` settle the
+    /// writes in flight (`Outcome`) before they report `Deactivated` or `Failed`.
     fn send(&self, event: PluginEvent) {
+        let watcher = self
+            .watch
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone();
+        // Only a watched event is kept to show after it is queued.
+        let watched = watcher.map(|watcher| (watcher, event.clone()));
         if self.events.send(event).is_err() {
             self.shared.request_stop(StopReason::Shutdown);
+            return;
+        }
+        // Queued first, then the application hears of it at once, outside the lock.
+        if let Some((watcher, event)) = watched {
+            watcher(&event);
         }
     }
 }

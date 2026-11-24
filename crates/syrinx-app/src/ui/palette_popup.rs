@@ -406,9 +406,12 @@ impl BrowserView {
             view.update(cx, |palette, cx| palette.focus_input(popup, cx));
         });
         if refocused.is_err() {
-            self.end_palette_entry();
+            let (_, notice) = self.end_palette_entry_quietly();
             self.kept_palette = None;
-            self.message = "The palette window is no longer available. Open it again.".to_owned();
+            let lost = "The palette window is no longer available. Open it again.";
+            // A plugin notice the end raised is kept beside it.
+            self.message =
+                notice.map_or_else(|| lost.to_owned(), |notice| format!("{lost} {notice}"));
             cx.notify();
             return;
         }
@@ -458,14 +461,26 @@ impl BrowserView {
     }
 
     /// Ends the open entry on every path (#14): drops its queued replies and Home intent,
-    /// takes the popup and puts back the status line it replaced. Returns the popup to hide.
+    /// takes the popup and puts back the status line it replaced, unless a plugin notice
+    /// replaces it (#29). Returns the popup to hide.
     pub(super) fn end_palette_entry(&mut self) -> Option<PalettePopup> {
-        end_entry(
+        let (popup, notice) = self.end_palette_entry_quietly();
+        if let Some(notice) = notice {
+            self.message = notice;
+        }
+        popup
+    }
+
+    /// `end_palette_entry`, handing back a plugin notice instead of showing it.
+    fn end_palette_entry_quietly(&mut self) -> (Option<PalettePopup>, Option<String>) {
+        let popup = end_entry(
             &mut self.palette,
             &mut self.pending_query,
             &mut self.home_palette,
             &mut self.message,
-        )
+        );
+        // A form belongs to this entry; late answers then change nothing (#29).
+        (popup, self.abandon_plugin_form())
     }
 
     /// Removes the kept popup at shutdown.

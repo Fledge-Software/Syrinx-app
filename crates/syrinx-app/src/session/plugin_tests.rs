@@ -32,19 +32,39 @@ use plugin_fixture::fixture_workspace;
 
 /// The full fixture's component, built into the folder the integration tests use
 /// (`<target>/tmp/plugin-fixtures`); this test binary is `<target>/<profile>/deps/<name>`.
-fn full_component() -> &'static [u8] {
+pub(super) fn full_component() -> &'static [u8] {
     let executable = std::env::current_exe().expect("the test binary's path");
     let target = executable.ancestors().nth(3).expect("the target folder");
     plugin_fixture::full_component(&target.join("tmp").join("plugin-fixtures"))
 }
 
 /// The full fixture's real manifest, asking for `storage`, registered with matching lines.
-fn registered_fixture(registry: &mut PluginRegistry) -> &syrinx_plugin_host::RegisteredPlugin {
+pub(super) fn registered_fixture(
+    registry: &mut PluginRegistry,
+) -> &syrinx_plugin_host::RegisteredPlugin {
+    registered_fixture_requiring_storage(registry, false)
+}
+
+/// `registered_fixture`, with `storage` marked `required` or not.
+pub(super) fn registered_fixture_requiring_storage(
+    registry: &mut PluginRegistry,
+    required: bool,
+) -> &syrinx_plugin_host::RegisteredPlugin {
+    registered_fixture_declaring(registry, required, "")
+}
+
+/// `registered_fixture_requiring_storage`, with `extra` manifest text appended.
+fn registered_fixture_declaring<'registry>(
+    registry: &'registry mut PluginRegistry,
+    required: bool,
+    extra: &str,
+) -> &'registry syrinx_plugin_host::RegisteredPlugin {
     let mut text = fs::read_to_string(fixture_workspace().join("full").join(MANIFEST_FILE))
         .expect("the fixture's manifest");
-    text.push_str(
-        "\n[[capabilities]]\nkind = \"storage\"\nreason = \"Keeps synthetic settings.\"\nrequired = false\n",
-    );
+    text.push_str(&format!(
+        "\n[[capabilities]]\nkind = \"storage\"\nreason = \"Keeps synthetic settings.\"\nrequired = {required}\n",
+    ));
+    text.push_str(extra);
     let manifest =
         PluginManifest::parse(text.as_bytes(), DiscoveryOptions::default()).expect("manifest");
     let lines = SignedIdentity::from_signed_lines(manifest.id(), manifest.version(), WORLD);
@@ -56,14 +76,24 @@ fn registered_fixture(registry: &mut PluginRegistry) -> &syrinx_plugin_host::Reg
 
 /// Install the full fixture's manifest with `component` under `record`.
 fn install_fixture(runtime: &mut OwnerRuntime, component: Arc<[u8]>, record: PluginInstall) {
+    install_fixture_declaring(runtime, component, record, "");
+}
+
+/// `install_fixture`, with `extra` manifest text appended.
+fn install_fixture_declaring(
+    runtime: &mut OwnerRuntime,
+    component: Arc<[u8]>,
+    record: PluginInstall,
+    extra: &str,
+) {
     let mut registry = PluginRegistry::new();
-    let registered = registered_fixture(&mut registry);
+    let registered = registered_fixture_declaring(&mut registry, false, extra);
     runtime
         .install(registered, component, record)
         .expect("installed");
 }
 
-fn install_record() -> PluginInstall {
+pub(super) fn install_record() -> PluginInstall {
     PluginInstall {
         plugin_id: "test".to_owned(),
         version: "0.1.0".to_owned(),
@@ -78,7 +108,7 @@ fn install_record() -> PluginInstall {
 
 /// The session's store and plugin runtime over the fixture's folder, with the cache folder
 /// beside the database, as `serve_accepted` starts them.
-fn started(fixture: &Fixture) -> (Arc<Store>, plugins::SessionPlugins) {
+pub(super) fn started(fixture: &Fixture) -> (Arc<Store>, plugins::SessionPlugins) {
     let (_lease, store, session_plugins) = started_with_lease(fixture);
     (store, session_plugins)
 }
@@ -154,10 +184,23 @@ fn installed(
     Arc<Store>,
     plugins::SessionPlugins,
 ) {
+    installed_declaring(fixture, "")
+}
+
+/// `installed`, with `extra` manifest text appended to the fixture's manifest.
+pub(super) fn installed_declaring(
+    fixture: &Fixture,
+    extra: &str,
+) -> (
+    Arc<WindowsDirectoryLease>,
+    Arc<Store>,
+    plugins::SessionPlugins,
+) {
     create_database(fixture);
     let (lease, store, mut session_plugins) = started_with_lease(fixture);
     let runtime = &mut session_plugins.runtime;
-    install_fixture(runtime, Arc::from(full_component()), install_record());
+    let component = Arc::from(full_component());
+    install_fixture_declaring(runtime, component, install_record(), extra);
     // Installing also starts a background compile, which reports nothing when it succeeds.
     // `test.echo` keeps a synthetic setting, so it needs storage.
     runtime
@@ -509,7 +552,7 @@ fn a_failed_background_compile_is_reported() {
 }
 
 /// Starts and stops a fresh worker, so the database exists at the current schema.
-fn create_database(fixture: &Fixture) {
+pub(super) fn create_database(fixture: &Fixture) {
     let (handle, mut events) = fixture.start();
     state(&mut events);
     stop(handle, &mut events);

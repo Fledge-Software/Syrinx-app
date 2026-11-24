@@ -7,6 +7,7 @@ mod history;
 mod history_repair;
 mod page_text;
 mod page_text_setting;
+mod plugin_commands;
 mod plugins;
 mod preferences;
 mod recovery;
@@ -38,6 +39,7 @@ use std::{
 
 use futures::channel::mpsc::{UnboundedReceiver, UnboundedSender, unbounded};
 use history::{HistoryRecorder, Observation};
+use syrinx_core::plugin_forms::{LateOutcome, PluginAnswer, PluginCall};
 use syrinx_core::usage::{ErrorCategory, Feature, ReportPeriod, Timing, UsageDate, UsageRecorder};
 use syrinx_core::{
     Activation, BookmarkImport, DestinationEdit, DestinationError, DestinationSurface,
@@ -229,6 +231,8 @@ pub enum SessionCommand {
     /// and excluding a site erases that site's, before the save and whatever it returns; a
     /// refused save is retried until it is kept.
     SavePageTextSetting(PageTextSetting),
+    /// A plugin command or form call from the palette, answered by `SessionEvent::Plugin` (#29).
+    Plugin(PluginCall),
     /// Earlier commands finish first; commands sent after this are not accepted.
     Shutdown,
 }
@@ -355,6 +359,14 @@ pub enum SessionEvent {
     },
     /// Connections have closed before this event; joining the worker is now safe.
     Stopped,
+    /// The answer to `SessionCommand::Plugin`, named by the call's token (#29).
+    Plugin(PluginAnswer),
+    /// A write the host settled after its submission answered pending (#29).
+    PluginOutcome(LateOutcome),
+    /// A plugin's worker stopped, after the writes it settled were sent (#29).
+    PluginStopped {
+        plugin: String,
+    },
 }
 
 /// Saved zoom levels by host (#90). Hosts are browsing data, so `Debug` shows only a count.
@@ -660,10 +672,10 @@ fn serve_accepted(
     // The session owns the plugin runtime, which shares its store; plugins never stop browsing.
     let store = Arc::new(store);
     let (plugins, problems) = plugins::start(&store, data_dir, plugin_cache);
-    worker.plugins = plugins;
     let started = problems
         .into_iter()
         .try_for_each(|error| emit_recoverable(events, error));
+    worker.attach_plugins(plugins, events);
     let result = started.and_then(|()| {
         serve_counted(
             &usage,
@@ -938,7 +950,8 @@ struct Worker {
     unsaved: unsaved::Unsaved,
     /// Whether the window missed the zoom levels a clear applied; an idle tick resends them (#196).
     zoom_levels: zoom_levels::ZoomLevelsReport,
-    /// The plugin runtime while the loop serves; its events are reported at each wake-up (#268).
+    /// The plugin runtime while the loop serves: its events are reported at each wake-up
+    /// (#268), and it carries the palette's plugin calls (#29). Set by `attach_plugins`.
     plugins: Option<plugins::SessionPlugins>,
 }
 
@@ -956,6 +969,19 @@ struct Persisted {
 }
 
 impl Worker {
+    /// Give the loop the plugin runtime and let the window hear of the writes it settles and
+    /// the plugins that stop, in one step so neither is set without the other (#29).
+    fn attach_plugins(
+        &mut self,
+        plugins: Option<plugins::SessionPlugins>,
+        events: &UnboundedSender<SessionEvent>,
+    ) {
+        if let Some(plugins) = &plugins {
+            plugin_commands::watch_outcomes(&plugins.runtime, events);
+        }
+        self.plugins = plugins;
+    }
+
     fn restore(
         store: &Store,
         mut deletions: DeletionJournal,
@@ -1247,6 +1273,11 @@ impl Worker {
             }
             SessionCommand::StorePageText(page) => {
                 self.page_text.store(page, utc_seconds()?);
+                return Ok(());
+            }
+            SessionCommand::Plugin(call) => {
+                let runtime = self.plugins.as_mut().map(|plugins| &mut plugins.runtime);
+                plugin_commands::start(runtime, call, events);
                 return Ok(());
             }
             SessionCommand::SavePageTextSetting(setting) => {
@@ -1885,6 +1916,7 @@ fn reopens_a_page(command: &SessionCommand) -> bool {
         | SessionCommand::UsageReport { .. }
         | SessionCommand::StorePageText(_)
         | SessionCommand::SavePageTextSetting(_)
+        | SessionCommand::Plugin(_)
         | SessionCommand::Shutdown => false,
     }
 }
@@ -2063,6 +2095,7 @@ fn apply_model(model: &mut TabModel, command: SessionCommand) -> Result<(), Sess
         | SessionCommand::UsageReport { .. }
         | SessionCommand::StorePageText(_)
         | SessionCommand::SavePageTextSetting(_)
+        | SessionCommand::Plugin(_)
         | SessionCommand::Shutdown => {}
     }
     Ok(())

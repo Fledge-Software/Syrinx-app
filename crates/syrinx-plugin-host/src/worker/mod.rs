@@ -26,6 +26,13 @@ use thread::{Job, Prepared, Shared, Worker};
 /// Makes the services behind a plugin's imports, once per instance.
 pub type ServiceFactory<S> = Arc<dyn Fn(&PluginManifest) -> S + Send + Sync>;
 
+/// Hears each event a worker raises, on that worker's thread, once it is queued for the
+/// application's next look; empty until the application sets it (#29).
+pub(crate) type EventWatch = Arc<Mutex<Option<Watcher>>>;
+
+/// The one watcher a runtime has; see `OwnerRuntime::set_event_watch`.
+pub(crate) type Watcher = Arc<dyn Fn(&PluginEvent) + Send + Sync>;
+
 /// Where a plugin is in its life, as the owner is shown it.
 #[derive(Debug, Clone, PartialEq)]
 pub enum PluginStatus {
@@ -120,6 +127,7 @@ pub struct Plugins<S: PluginHost> {
     services: ServiceFactory<S>,
     host_version: String,
     events: Sender<PluginEvent>,
+    watch: EventWatch,
     slots: BTreeMap<String, Slot<S>>,
     /// Worker threads no slot owns any more, still stopping, at most one per plugin id; a
     /// plugin added again waits for its own, and shutdown joins the rest.
@@ -183,10 +191,17 @@ impl<S: PluginHost> Plugins<S> {
             services: Arc::new(services),
             host_version: host_version.into(),
             events,
+            watch: EventWatch::default(),
             slots: BTreeMap::new(),
             stopping: BTreeMap::new(),
             preparing: Vec::new(),
         }
+    }
+
+    /// Every worker started from now on tells `watch` of each event it raises.
+    pub(crate) fn watched_by(mut self, watch: EventWatch) -> Self {
+        self.watch = watch;
+        self
     }
 
     /// Add a registered plugin and its component's bytes. Nothing is compiled or run.
@@ -377,6 +392,7 @@ impl<S: PluginHost> Plugins<S> {
             host_version: self.host_version.clone(),
             shared: Arc::clone(&shared),
             events: self.events.clone(),
+            watch: Arc::clone(&self.watch),
             jobs: queued,
             handover: handed_over,
         };
