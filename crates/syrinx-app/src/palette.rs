@@ -184,7 +184,8 @@ impl PaletteView {
         self.active_this_entry = false;
         self.context = entry.context;
         self.opening = Some(entry.opened);
-        self.choices.reset();
+        // A registry problem stands for the whole entry, so the first height includes it.
+        self.choices.reset(self.command_problem.clone());
         self.chip = Chip::default();
         self.scopes_shown = false;
         self.view = View::Everything;
@@ -196,9 +197,6 @@ impl PaletteView {
         });
         // `set_value` does not emit a change event, so query explicitly.
         self.query(cx);
-        if let Some(problem) = &self.command_problem {
-            self.choices.status = problem.clone();
-        }
         // The browser shows the popup at this height, so only later changes are reported.
         self.fitted.reset(self.wanted_height());
     }
@@ -211,6 +209,13 @@ impl PaletteView {
     /// Redraws after a change to what is drawn, asking the browser to refit the popup first
     /// when its height changed. Every such change goes through here (#265), except `query`,
     /// `refresh` and `choose_chip`: they only notify, because their reply refits the popup.
+    /// Show `status` on this entry's status line, after any registry problem (#274): a plugin
+    /// command's outcome while the palette is open (#29).
+    pub fn show_status(&mut self, status: String, cx: &mut Context<Self>) {
+        self.choices.status = status;
+        self.redraw(cx);
+    }
+
     fn redraw(&mut self, cx: &mut Context<Self>) {
         self.announce_height();
         cx.notify();
@@ -557,7 +562,7 @@ impl Render for PaletteView {
         let bar = render::bar(&self.input);
         let chips = self.scopes_shown.then(|| render::chips(self, cx));
         let list = render::list(self, cx);
-        let notice = render::notice(&self.choices.status);
+        let notice = render::notice(&self.choices);
         crate::controls::watch_pointer(div())
             .id("palette")
             .role(gpui::Role::Dialog)
@@ -708,7 +713,7 @@ mod tests {
         assert!(fitted.changed_to(drawn(&choices)), "one row shrinks it");
 
         // A new entry forgets the old height: the popup is shown afresh at the bar's.
-        choices.reset();
+        choices.reset(None);
         choices.query_scoped("", true);
         fitted.reset(drawn(&choices));
         assert!(!fitted.changed_to(drawn(&choices)));

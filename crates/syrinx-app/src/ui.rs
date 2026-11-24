@@ -880,9 +880,9 @@ impl BrowserView {
                 }
             }
             SessionEvent::UpdateSnapshot(result) => self.update_snapshot_taken(result, cx),
-            SessionEvent::Plugin(answer) => self.plugin_answered(answer),
-            SessionEvent::PluginOutcome(late) => self.plugin_outcome(late),
-            SessionEvent::PluginStopped { plugin } => self.plugin_stopped(&plugin),
+            SessionEvent::Plugin(answer) => self.plugin_answered(answer, cx),
+            SessionEvent::PluginOutcome(late) => self.plugin_outcome(late, cx),
+            SessionEvent::PluginStopped { plugin } => self.plugin_stopped(&plugin, cx),
             SessionEvent::Usage { status, problem } => {
                 self.usage_status_received(status, problem);
             }
@@ -1602,7 +1602,7 @@ impl BrowserView {
         let action = match action {
             CommandAction::Browser(action) => action,
             CommandAction::Plugin { plugin, action } => {
-                self.run_plugin_command(&plugin, &action);
+                self.run_plugin_command(&plugin, &action, cx);
                 self.focus_page(window, cx);
                 return;
             }

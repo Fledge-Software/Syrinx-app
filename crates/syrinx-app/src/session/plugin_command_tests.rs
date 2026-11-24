@@ -9,11 +9,10 @@ use syrinx_core::plugin_forms::{
     PluginCall, PluginCommands, PluginReply, Refusal, Submitted,
 };
 use syrinx_plugin_host::PluginRegistry;
-use syrinx_plugin_host::manifest::CapabilityKind;
 use syrinx_plugin_host::owner::OwnerRuntime;
 
 use super::plugin_tests::{
-    create_database, full_component, install_record, registered_fixture_declaring,
+    create_database, full_component, install_record, installed_declaring,
     registered_fixture_requiring_storage, started,
 };
 use super::*;
@@ -41,19 +40,7 @@ const SLOW_CHAIN: &str =
 impl Route {
     fn new() -> Self {
         let fixture = Fixture::new();
-        create_database(&fixture);
-        let (store, mut plugins) = started(&fixture);
-        let mut registry = PluginRegistry::new();
-        let registered = registered_fixture_declaring(&mut registry, false, SLOW_CHAIN);
-        plugins
-            .runtime
-            .install(registered, Arc::from(full_component()), install_record())
-            .expect("installed");
-        // `test.echo` keeps a synthetic setting, so it needs `storage`.
-        plugins
-            .runtime
-            .grant("test", CapabilityKind::Storage, 20)
-            .expect("granted");
+        let (_lease, store, plugins) = installed_declaring(&fixture, SLOW_CHAIN);
         let (sender, receiver) = unbounded();
         plugin_commands::watch_outcomes(&plugins.runtime, &sender);
         Self {

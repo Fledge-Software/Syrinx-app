@@ -950,7 +950,8 @@ struct Worker {
     unsaved: unsaved::Unsaved,
     /// Whether the window missed the zoom levels a clear applied; an idle tick resends them (#196).
     zoom_levels: zoom_levels::ZoomLevelsReport,
-    /// The plugin runtime while the loop serves, for the palette's plugin calls (#29).
+    /// The plugin runtime while the loop serves: its events are reported at each wake-up
+    /// (#268), and it carries the palette's plugin calls (#29). Set by `attach_plugins`.
     plugins: Option<plugins::SessionPlugins>,
 }
 
@@ -1090,6 +1091,8 @@ impl Worker {
                 None => wait,
             };
             let received = commands.recv_timeout(wait);
+            // Every wake-up, at least once a minute, empties the plugin workers' queue (#268).
+            plugins::report_events(self.plugins.as_ref());
             // The worker's existing wake-ups carry the five-minute usage write; it adds none,
             // and reads no clock unless a write is waiting.
             if usage.pending()

@@ -7,7 +7,7 @@ use super::*;
 
 impl BrowserView {
     /// The owner chose a plugin's command in the palette.
-    pub(super) fn run_plugin_command(&mut self, plugin: &str, command: &str) {
+    pub(super) fn run_plugin_command(&mut self, plugin: &str, command: &str, cx: &mut App) {
         // Today `PaletteEvent::Run` has already ended the entry, so a form cannot be shown.
         let in_palette = self.palette.is_some();
         // The title the palette showed names the command if it is set aside later.
@@ -18,7 +18,7 @@ impl BrowserView {
         let (call, forgotten) = self
             .plugin_commands
             .choose(plugin, command, &title, in_palette);
-        self.tell_plugin_notice(forgotten);
+        self.tell_plugin_notice(forgotten, cx);
         self.command(SessionCommand::Plugin(call));
     }
 
@@ -29,32 +29,40 @@ impl BrowserView {
     }
 
     /// A plugin's worker stopped; each submission still waiting on it is told so, on one line.
-    pub(super) fn plugin_stopped(&mut self, plugin: &str) {
+    pub(super) fn plugin_stopped(&mut self, plugin: &str, cx: &mut App) {
         let notices = self.plugin_commands.plugin_stopped(plugin);
-        self.tell_plugin_notices(notices);
+        self.tell_plugin_notices(notices, cx);
     }
 
-    fn tell_plugin_notice(&mut self, notice: Option<Notice>) {
-        self.tell_plugin_notices(notice);
+    fn tell_plugin_notice(&mut self, notice: Option<Notice>, cx: &mut App) {
+        self.tell_plugin_notices(notice, cx);
     }
 
-    /// Show `notices` on the status line, joined in order; none leaves it as it is.
-    fn tell_plugin_notices(&mut self, notices: impl IntoIterator<Item = Notice>) {
-        if let Some(text) = notices_text(notices) {
-            self.message = text;
+    /// Show `notices`, joined in order, on the window's status line, where they stay once the
+    /// palette closes, and on an open palette's own line too; none leaves both as they are.
+    fn tell_plugin_notices(&mut self, notices: impl IntoIterator<Item = Notice>, cx: &mut App) {
+        let Some(text) = notices_text(notices) else {
+            return;
+        };
+        if let Some(popup) = &self.palette {
+            let shown = text.clone();
+            popup
+                .view
+                .update(cx, |palette, cx| palette.show_status(shown, cx));
         }
+        self.message = text;
     }
 
     /// The session's answer to a plugin call; one for an abandoned command changes nothing.
-    pub(super) fn plugin_answered(&mut self, answer: PluginAnswer) {
+    pub(super) fn plugin_answered(&mut self, answer: PluginAnswer, cx: &mut App) {
         let notice = self.plugin_commands.receive(answer);
-        self.tell_plugin_notice(notice);
+        self.tell_plugin_notice(notice, cx);
     }
 
     /// The outcome of a submission that answered pending, if it is still the one awaited.
-    pub(super) fn plugin_outcome(&mut self, late: LateOutcome) {
+    pub(super) fn plugin_outcome(&mut self, late: LateOutcome, cx: &mut App) {
         let notice = self.plugin_commands.receive_outcome(late);
-        self.tell_plugin_notice(notice);
+        self.tell_plugin_notice(notice, cx);
     }
 }
 
