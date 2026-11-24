@@ -17,6 +17,134 @@ Since 2026-10-16 open deferred work is tracked by GitHub issue number
 instead (`docs/dev/deferred-work.md`); where an item became an issue, the
 entry names it.
 
+## 2026-11-24
+
+- **Development happens on a private Forgejo server; GitHub is pushed to
+  afterwards (owner's own instruction, 2026-11-24).** The owner's words:
+  "make sure your agents.md is saying to use forgejo and we push to github
+  after dev on forgejo private server." Forgejo is a self-hosted Git
+  service the owner runs. Only the quoted words are the owner's; the rest
+  is recorded by the agent, and the owner may correct it.
+  - **What changes, as recorded.** Branches, reviews and work in progress
+    go to the Forgejo remote; a change reaches GitHub once it is finished
+    there. `AGENTS.md` ("Work order" and "Version control") and `CLAUDE.md`
+    now say so. The server's address and any token for it stay out of the
+    repositories, because `Syrinx-app` is public.
+  - **Not yet recorded, and the owner's to say.** Where issues and pull
+    requests live from now on (2026-10-16 puts outstanding work in GitHub
+    issues, which this entry does not change), whether reviews happen on
+    Forgejo, and how a cloud agent session, which today can reach only
+    GitHub, is given the Forgejo remote. This entry and the one below were
+    themselves pushed straight to GitHub, at the owner's request for a pull
+    request, from a session with no Forgejo remote.
+
+- **Trilium's source is vendored in the Notes plugin's repository, not kept
+  as a separate fork, and the old Notes plugin repository becomes Forge's
+  (owner's own decisions, 2026-11-24; #277).** On where Trilium's code
+  goes, the owner wrote: "wouldnt it go in vendor folder? its something
+  like that right? or it goes in the plugin repo in a vendor folder any
+  way." On the halted plugin: "Rename and reuse the old note plugin for
+  forge." Only the quoted words are the owner's; the rest is recorded by
+  the agent, and the owner may correct it.
+  - **What changes, as recorded.** The 2026-11-23 entry put the fork "in
+    its own repository". Instead, the new Notes plugin's repository holds
+    both halves: the small MPL-2.0 plugin, and Trilium's source under a
+    `vendor/` folder, kept under the AGPL with its licence file and a
+    provenance record, as `Syrinx-app` keeps its own vendored packages.
+    `Fledge-Software/Syrinx-Notes-Plugin` is to be renamed
+    `Fledge-Software/Syrinx-Forge-Plugin` and becomes the Forge plugin's
+    repository (#42); its plugin scaffold, test host and search feed are
+    reused, and its vault-specific code is removed when Forge's first slice
+    starts.
+  - **What it does not change.** Trilium's source does not go in
+    `Syrinx-app`'s `vendor/` folder. That folder holds packages compiled
+    into Syrinx itself, so AGPL code there would be part of the MPL-2.0
+    program and its release, which "no GPL code" forbids. In the plugin's
+    repository it is a separate program beside the plugin, and the two
+    still exchange only HTTP messages. Forge still starts only after Notes
+    is the owner's daily notes tool.
+  - **Open.** The rename itself is the owner's to make in the repository's
+    settings: an agent session is not permitted to change them (tried and
+    refused on 2026-11-24). The new Notes repository is likewise the
+    owner's to create (`AGENTS.md`, "Operator work"). The name `Syrinx-Forge-Plugin` is the
+    agent's choice, following the old name's pattern. Taking upstream
+    Trilium changes into a vendored copy needs a recorded method (#278).
+
+## 2026-11-23
+
+- **Notes becomes a fork of Trilium Notes; the Syrinx-built Notes plugin is
+  halted (owner's own decision, 2026-11-23; epic #277).** The owner's
+  words: "WE need to halt on our Notes app. We should just port trilium
+  notes to be inside syrinx, Syrinx is already open-source, and the plug in
+  just makes sense since it already has a lot of it made and more features
+  that already work and open-sourced so we could fork and build onto it".
+  Asked how it should fit, the owner wrote: "I want Trilium as a plugin to
+  be queryed the way we are doing it now. It opens as a webapp in the
+  browser, everything just is unified for this fork". Asked how its server
+  runs: "Syrinx starts it for you if the user has installed the notes app in
+  syrinx plugins". Asked whether plugins may make HTTP requests to one
+  address the owner approves, the owner chose "any one address" over "local
+  address only". Only the quoted words and that choice are the owner's;
+  everything below is recorded by the agent, and the owner may correct it.
+  - **What Trilium is.** [Trilium Notes](https://github.com/TriliumNext/Trilium)
+    is an open-source notes application: a server written in TypeScript
+    that runs on Node, keeps its notes in its own SQLite database, and
+    serves a web application the owner uses in a browser. Its licence is
+    AGPL-3.0-or-later (read from its `LICENSE` and `package.json` on
+    2026-11-23, version 0.108.0-rc.1).
+  - **What changes, as recorded.** Notes is no longer the Markdown-vault
+    plugin of epic #35. It is three parts. (1) A fork of Trilium in its own
+    repository, which stays a separate program under the AGPL. (2) A small
+    Notes plugin, made from the plugin template under MPL-2.0, whose search
+    feed pulls note titles and text from the fork over HTTP, so notes are
+    found in the palette exactly as #141 describes for any plugin feed.
+    (3) Two additions to the plugin host: a capability that lets an
+    installed plugin name a program Syrinx starts and stops for it, and a
+    capability that lets a plugin make HTTP requests to one address the
+    owner approves. Choosing a note opens the fork's own web application in
+    an ordinary page tab.
+  - **What it supersedes, as recorded.** For Notes only: D27 (an
+    Obsidian-compatible vault of Markdown files as the source of truth),
+    D28's CodeMirror editor (Trilium brings its own editors; D28 still
+    governs Forge), decisions N1, N2 and N4 of #35, the 2026-10-25 folders
+    decision (#168), and the `folder`, `drafts` and `watch` capability
+    shapes that existed only for the vault. Product-wide, three guardrails
+    in `AGENTS.md` gain a narrow exception, each for this plugin only:
+    "a plugin reaches Syrinx only through the world's imports" and has "no
+    network of its own" (the new HTTP capability, one approved address);
+    "the host owns every risky service" and running a program is full
+    trust (the new program capability, shown to the owner as "Can run
+    programs on your computer with your permissions"); and the frozen
+    `syrinx:plugin` world gains two `@since(0.1.x)` imports.
+  - **What it does not change.** `Syrinx-app` stays MPL-2.0 and takes no
+    AGPL or GPL code: the fork's source lives only in its own repository,
+    and Syrinx talks to it only as a separate process over HTTP. The
+    page-web-view rules are not relaxed for the tab that shows Trilium (no
+    IPC handler, no injected script, no custom user agent). Search stays
+    pull-based with no plugin call while typing (D48, #141). Third-party
+    plugins still get no full-trust capability in v1. The order runtime,
+    template, Notes, Forge stands, with Notes now meaning this epic.
+  - **Why, as the agent reads it.** The owner's reason is in the quote:
+    Trilium already has most of what Notes was to become, working and
+    open-source, so building on it is faster than finishing #36 to #41.
+    Rejected: copying Trilium's code into `Syrinx-app` or into a sandboxed
+    plugin, which the AGPL and the sandbox both rule out (Trilium needs
+    Node, a database and a listening port, none of which a WebAssembly
+    plugin has); rebuilding Trilium's features from scratch in the existing
+    plugin, which is the slow path the owner is leaving; the owner starting
+    Trilium by hand, which the owner chose against.
+  - **Open, and the owner's to decide (listed on #277).** Whether the
+    Trilium package ships inside Syrinx's release or is installed
+    separately. The agent reads "if the user has installed the notes app in
+    syrinx plugins" as installed separately, which also keeps AGPL code out
+    of the MPL-2.0 release; bundling it would need a licence review first.
+    What becomes of the notes promise "leaving Syrinx does not strand the
+    notes", now that notes live in Trilium's database (Trilium exports
+    Markdown and HTML). Who builds the shared document service Forge was to
+    reuse from #37. Whether `Syrinx-Notes-Plugin` is archived or reused as
+    the new plugin's repository. Creating the fork's repository is the
+    owner's (`AGENTS.md`, "Operator work").
+
 ## 2026-11-20
 
 - **The palette is a slim bar with suggestions under it, in the theme's own

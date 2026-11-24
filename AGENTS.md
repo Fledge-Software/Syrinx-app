@@ -198,6 +198,15 @@ time:
   Since 2026-10-13 the repository is on GitHub at `Fledge-Software/Syrinx-app`:
   push only the branch your session was assigned, never `main` unless the
   owner asks (`docs/decisions.md`).
+- **Development happens on the owner's private Forgejo server; GitHub gets
+  the work afterwards (owner, 2026-11-24).** Forgejo is a self-hosted Git
+  service, like GitHub but run by the owner. Branches, reviews and work in
+  progress are pushed to the Forgejo remote, and a change goes to GitHub at
+  `Fledge-Software/Syrinx-app` only once it is finished there. Do not push
+  work in progress to GitHub. The server is private, so its address, and
+  any token for it, stay out of this public repository, its issues and its
+  commits; if your session has no Forgejo remote, ask the owner instead of
+  pushing to GitHub. The same rule covers every plugin repository.
 
 - **Always take the next piece of work from the earliest phase or plan that
   still has open work.** Within one, go in the plan's order unless its notes
@@ -525,6 +534,9 @@ the task description seems to imply it or a script or tool makes it easy:
   their branch were the exception, D1; the plans were removed on 2026-10-16)
 - Adding another remote, pushing `main` or a branch other than the one your
   session was assigned, or opening a pull request unasked
+- Pushing work in progress to GitHub instead of the owner's Forgejo server,
+  or writing that server's address or a token for it anywhere in a
+  repository, an issue or a commit
 - Force-pushing, or rewriting history (rebase, amend, filter-branch) that
   someone else may have
 - Deleting branches or tags
