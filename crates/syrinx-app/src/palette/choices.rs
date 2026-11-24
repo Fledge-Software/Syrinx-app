@@ -70,6 +70,13 @@ impl PaletteChoices {
         };
     }
 
+    /// A plugin command's outcome on the status line, after any registry problem (#29). It
+    /// takes the place of this query's line until the next query or reply replaces it; the
+    /// window's own status line keeps it.
+    pub(super) fn show_outcome(&mut self, outcome: &str) {
+        outcome.clone_into(&mut self.status);
+    }
+
     /// The one line drawn under the rows; empty when there is nothing to say.
     pub(super) fn status_line(&self) -> String {
         compose_status_line(self.registry_problem.as_deref(), &self.status)
@@ -1614,6 +1621,24 @@ mod tests {
         let request = choices.query("");
         assert!(choices.receive(request, Ok(results(&targets()))));
         assert_eq!(choices.status_line(), "");
+    }
+
+    #[test]
+    fn a_plugin_outcome_follows_the_registry_problem_until_the_next_query() {
+        let registry = "Commands are unavailable: synthetic";
+        let mut choices = PaletteChoices::default();
+        choices.reset(Some(registry.to_owned()));
+        choices.show_outcome("Done.");
+        assert_eq!(
+            choices.status_line(),
+            format!("{registry}{STATUS_SEPARATOR}Done.")
+        );
+        choices.query("");
+        assert_eq!(
+            choices.status_line(),
+            registry,
+            "the next query replaces it"
+        );
     }
 
     #[test]

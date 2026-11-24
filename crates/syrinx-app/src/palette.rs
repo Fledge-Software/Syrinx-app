@@ -206,16 +206,16 @@ impl PaletteView {
         render::height(self.scopes_shown, &self.choices, self.view)
     }
 
-    /// Redraws after a change to what is drawn, asking the browser to refit the popup first
-    /// when its height changed. Every such change goes through here (#265), except `query`,
-    /// `refresh` and `choose_chip`: they only notify, because their reply refits the popup.
-    /// Show `status` on this entry's status line, after any registry problem (#274): a plugin
-    /// command's outcome while the palette is open (#29).
-    pub fn show_status(&mut self, status: String, cx: &mut Context<Self>) {
-        self.choices.status = status;
+    /// Show a plugin command's outcome on this entry's status line while it is open (#29);
+    /// see `PaletteChoices::show_outcome`.
+    pub fn show_outcome(&mut self, outcome: &str, cx: &mut Context<Self>) {
+        self.choices.show_outcome(outcome);
         self.redraw(cx);
     }
 
+    /// Redraws after a change to what is drawn, asking the browser to refit the popup first
+    /// when its height changed. Every such change goes through here (#265), except `query`,
+    /// `refresh` and `choose_chip`: they only notify, because their reply refits the popup.
     fn redraw(&mut self, cx: &mut Context<Self>) {
         self.announce_height();
         cx.notify();

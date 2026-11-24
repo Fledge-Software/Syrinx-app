@@ -45,10 +45,9 @@ impl BrowserView {
             return;
         };
         if let Some(popup) = &self.palette {
-            let shown = text.clone();
             popup
                 .view
-                .update(cx, |palette, cx| palette.show_status(shown, cx));
+                .update(cx, |palette, cx| palette.show_outcome(&text, cx));
         }
         self.message = text;
     }

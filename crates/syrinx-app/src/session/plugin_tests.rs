@@ -54,7 +54,7 @@ pub(super) fn registered_fixture_requiring_storage(
 }
 
 /// `registered_fixture_requiring_storage`, with `extra` manifest text appended.
-pub(super) fn registered_fixture_declaring<'registry>(
+fn registered_fixture_declaring<'registry>(
     registry: &'registry mut PluginRegistry,
     required: bool,
     extra: &str,
