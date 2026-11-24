@@ -16,7 +16,7 @@ use syrinx_plugin_host::grants::{DenyList, FolderRefusal, Protected};
 use syrinx_plugin_host::manifest::{CapabilityKind, DiscoveryOptions, PluginManifest};
 use syrinx_plugin_host::owner::{OwnerError, OwnerRuntime, StoreServices};
 use syrinx_plugin_host::session::{CallResult, Session};
-use syrinx_plugin_host::worker::{PluginStatus, StopReason};
+use syrinx_plugin_host::worker::{PluginEvent, PluginStatus, StopReason};
 use syrinx_plugin_host::{HostError, PluginRegistry};
 use syrinx_store::{
     DirectoryLease, EncodingField, FolderAccess, LocationError, PluginInstall, PluginState, Store,
@@ -144,7 +144,55 @@ fn logged(runtime: &mut OwnerRuntime, plugin: &str) -> Vec<String> {
 
 /// Close the runtime, then the store, as Syrinx does when it exits.
 fn close(runtime: OwnerRuntime, store: Arc<Store>) {
-    runtime.shutdown();
+    // The events are checked by the tests that look for them.
+    drop(runtime.shutdown());
+    let store = Arc::try_unwrap(store).expect("nothing else holds the store");
+    store.shutdown().expect("the store closes");
+}
+
+#[test]
+fn shutdown_hands_back_every_event_still_queued() {
+    let temp = TempStore::new();
+    let store = temp.open();
+    let unused = OwnerRuntime::start(Arc::clone(&store), "0.1.0-owner", DenyList::new(), None)
+        .expect("starts");
+    assert!(unused.shutdown().is_empty(), "no worker ever ran");
+
+    let mut runtime = OwnerRuntime::start(Arc::clone(&store), "0.1.0-owner", DenyList::new(), None)
+        .expect("starts");
+    install(&mut runtime, "test", STORAGE);
+    runtime
+        .grant("test", CapabilityKind::Storage, 20)
+        .expect("granted");
+    // A trap nobody drains, then a restart, which joins the trapped worker before it activates.
+    assert!(
+        call(&mut runtime, "test", |session| session
+            .run_command("test.panic"))
+        .is_err()
+    );
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+    while !matches!(runtime.status("test"), Some(PluginStatus::Failed(_))) {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the trap is never shown"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    assert_eq!(echo(&mut runtime, "test"), Ok(Ok(())));
+    let events = runtime.shutdown();
+    assert!(
+        matches!(
+            events.as_slice(),
+            [
+                PluginEvent::Failed { .. },
+                PluginEvent::Deactivated {
+                    reason: StopReason::Shutdown,
+                    ..
+                },
+            ]
+        ),
+        "{events:?}"
+    );
     let store = Arc::try_unwrap(store).expect("nothing else holds the store");
     store.shutdown().expect("the store closes");
 }

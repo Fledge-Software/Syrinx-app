@@ -660,6 +660,7 @@ fn serve_accepted(
     // The session owns the plugin runtime, which shares its store; plugins never stop browsing.
     let store = Arc::new(store);
     let (plugins, problems) = plugins::start(&store, data_dir, plugin_cache);
+    worker.plugins = plugins;
     let started = problems
         .into_iter()
         .try_for_each(|error| emit_recoverable(events, error));
@@ -675,6 +676,7 @@ fn serve_accepted(
         )
     });
     worker.survival.finish();
+    let plugins = worker.plugins.take();
     if let Err(error) = &result {
         stop::keep_stop(data_dir, error);
     }
@@ -936,6 +938,8 @@ struct Worker {
     unsaved: unsaved::Unsaved,
     /// Whether the window missed the zoom levels a clear applied; an idle tick resends them (#196).
     zoom_levels: zoom_levels::ZoomLevelsReport,
+    /// The plugin runtime while the loop serves; its events are reported at each wake-up (#268).
+    plugins: Option<plugins::SessionPlugins>,
 }
 
 /// The tabs a command created, and those of them that put back an earlier tab's page.
@@ -1018,6 +1022,7 @@ impl Worker {
             survival: stop::Survival::new(),
             unsaved: unsaved::Unsaved::default(),
             zoom_levels: zoom_levels::ZoomLevelsReport::default(),
+            plugins: None,
         })
     }
 
@@ -1060,6 +1065,8 @@ impl Worker {
                 None => wait,
             };
             let received = commands.recv_timeout(wait);
+            // Every wake-up, at least once a minute, empties the plugin workers' queue (#268).
+            plugins::report_events(self.plugins.as_ref());
             // The worker's existing wake-ups carry the five-minute usage write; it adds none,
             // and reads no clock unless a write is waiting.
             if usage.pending()

@@ -1,14 +1,19 @@
 //! Starts and stops the plugin runtime the session owns (#136): the owner's grants read from
 //! the store, the deny list built from Syrinx's own folders and the system's, and the
-//! compiled-code cache in its folder beside the database (#137).
+//! compiled-code cache in its folder beside the database (#137). It also reports the runtime's
+//! events on the local diagnostic path (#268).
 
 use std::ffi::OsString;
 use std::path::Path;
 use std::sync::Arc;
 
 use syrinx_platform::CacheFolder;
+use syrinx_plugin_host::bindings::syrinx::plugin::types::Outcome;
 use syrinx_plugin_host::grants::{DenyList, Protected};
+use syrinx_plugin_host::manifest::is_plugin_id;
 use syrinx_plugin_host::owner::{CacheSetup, OwnerRuntime};
+use syrinx_plugin_host::worker::{PluginEvent, StopReason};
+use syrinx_plugin_host::{CacheError, Failure, Refusal};
 use syrinx_store::{LocationError, Store, StoreError};
 
 use super::SessionError;
@@ -82,22 +87,171 @@ fn compiled_sha256(bytes: &[u8]) -> Result<[u8; 32], String> {
     syrinx_update::sha256(bytes).map_err(|error| error.to_string())
 }
 
-/// Stop every plugin, release the cache folder, then hand back the store, which nothing else
-/// holds any more, for the session to close.
+/// Stop every plugin and report what the runtime raised, stopping included, then hand back
+/// the store, which nothing else holds any more, for the session to close.
 pub(super) fn close(plugins: Option<SessionPlugins>, store: Arc<Store>) -> Result<(), StoreError> {
-    if let Some(SessionPlugins {
-        runtime,
-        cache_folder,
-    }) = plugins
-    {
-        runtime.shutdown();
-        // Only once no plugin can write to it.
-        drop(cache_folder);
+    if let Some(plugins) = plugins {
+        log_lines(stop(plugins));
     }
     match Arc::try_unwrap(store) {
         Ok(store) => store.shutdown(),
         // Dropping the last holder closes it anyway, reporting only to stderr.
         Err(_) => Err(StoreError::WorkerUnavailable),
+    }
+}
+
+/// Stop every plugin, then release the cache folder; one line for each event the runtime
+/// raised that nobody had taken, stopping included.
+pub(super) fn stop(plugins: SessionPlugins) -> Vec<String> {
+    let SessionPlugins {
+        runtime,
+        cache_folder,
+    } = plugins;
+    let lines = describe_all(&runtime.shutdown());
+    // Only once no plugin can write to it.
+    drop(cache_folder);
+    lines
+}
+
+/// Report what the workers queued since the last look, so the queue never grows unread.
+pub(super) fn report_events(plugins: Option<&SessionPlugins>) {
+    if let Some(plugins) = plugins {
+        log_lines(drain(&plugins.runtime));
+    }
+}
+
+/// One diagnostic line for each event queued since the last look.
+pub(super) fn drain(runtime: &OwnerRuntime) -> Vec<String> {
+    describe_all(&runtime.take_events())
+}
+
+/// One diagnostic line for each of `events`, in the order they were queued.
+pub(super) fn describe_all(events: &[PluginEvent]) -> Vec<String> {
+    events.iter().map(describe).collect()
+}
+
+/// Events go to stderr only, which a normal Windows launch has no console for; none is counted,
+/// and whether the window shows them is the owner's to decide with #140.
+fn log_lines(lines: Vec<String>) {
+    for line in lines {
+        eprintln!("{line}");
+    }
+}
+
+/// The plugin's id and what happened, in the host's own words. Text a plugin or the system
+/// wrote (an activation refusal, a load error, a write's outcome) is left out, because it may
+/// hold the owner's data or a path; an id is shown only through `shown`.
+fn describe(event: &PluginEvent) -> String {
+    match event {
+        PluginEvent::Outcome {
+            plugin,
+            request,
+            outcome,
+        } => format!(
+            "Plugin {}: write {request} was settled by the host as {}",
+            shown(plugin),
+            outcome_kind(outcome)
+        ),
+        PluginEvent::Failed { plugin, failure } => {
+            format!(
+                "Plugin {} stopped: {}",
+                shown(plugin),
+                failure_kind(failure)
+            )
+        }
+        PluginEvent::Deactivated { plugin, reason } => {
+            format!(
+                "Plugin {} was deactivated: {}",
+                shown(plugin),
+                stop_kind(reason)
+            )
+        }
+        PluginEvent::Cache {
+            plugin: Some(plugin),
+            error,
+        } => format!(
+            "Plugin {}: its compiled code was not kept or used: {}",
+            shown(plugin),
+            cache_kind(error)
+        ),
+        PluginEvent::Cache {
+            plugin: None,
+            error,
+        } => format!(
+            "The compiled plugin code cache could not be used: {}",
+            cache_kind(error)
+        ),
+        PluginEvent::PrepareFailed { plugin, .. } => format!(
+            "Plugin {} could not be compiled in the background; its first use tries again",
+            shown(plugin)
+        ),
+    }
+}
+
+/// The plugin's id when it is one a manifest may declare; an id the cache read back from a
+/// damaged store row may not be, and is then replaced.
+fn shown(plugin: &str) -> &str {
+    if is_plugin_id(plugin) {
+        return plugin;
+    }
+    "(an id that cannot be shown)"
+}
+
+/// How the host settled a write, without the plugin's or service's text.
+fn outcome_kind(outcome: &Outcome) -> &'static str {
+    match outcome {
+        Outcome::Done(_) => "done",
+        Outcome::Failed(_) => "failed",
+        Outcome::Uncertain(_) => "uncertain",
+    }
+}
+
+/// Why a plugin stopped, without the plugin's or the system's text.
+fn failure_kind(failure: &Failure) -> String {
+    match failure {
+        Failure::DeadlineExpired(export) => format!("{} ran past its deadline", export.name()),
+        Failure::Trapped { export, .. } => format!("{} trapped", export.name()),
+        Failure::Flooded => "it kept queueing deferred calls".to_owned(),
+        Failure::OverBudget => "one call and its deferred calls took too long".to_owned(),
+        Failure::Load(_) => "it could not be compiled, linked or started".to_owned(),
+        Failure::ActivationRefused(_) => "it refused to activate".to_owned(),
+    }
+}
+
+/// Why a plugin was deactivated, in the host's words.
+fn stop_kind(reason: &StopReason) -> String {
+    match reason {
+        StopReason::Shutdown => "Syrinx is closing".to_owned(),
+        StopReason::Uninstalled => "the plugin was uninstalled".to_owned(),
+        StopReason::CapabilityRevoked(kind) => {
+            format!("the required {} capability was revoked", kind.name())
+        }
+    }
+}
+
+/// What went wrong with the compiled-code cache, without the store's, hasher's or wasmtime's
+/// text, which may name a path.
+fn cache_kind(error: &CacheError) -> String {
+    match error {
+        CacheError::Refused(refusal) => format!("an entry was refused ({})", refusal_kind(refusal)),
+        CacheError::File(kind) => format!("a cache file failed ({kind})"),
+        CacheError::NotAFile => "something other than a file is in its folder".to_owned(),
+        CacheError::Unnamed => "the plugin id cannot name a cache file".to_owned(),
+        CacheError::Store(_) => "the store could not read or keep its record".to_owned(),
+        CacheError::Hash(_) => "its SHA-256 could not be computed".to_owned(),
+        CacheError::Serialize(_) => "the compiled code could not be written out".to_owned(),
+    }
+}
+
+/// Why a cached entry was refused and deleted, without wasmtime's text.
+fn refusal_kind(refusal: &Refusal) -> &'static str {
+    match refusal {
+        Refusal::Missing => "its file is missing",
+        Refusal::Length => "its length is wrong",
+        Refusal::Hash => "its SHA-256 is wrong",
+        Refusal::Deserialize(_) => "wasmtime could not load it",
+        Refusal::Checks(_) => "it failed the checks a compile passes",
+        Refusal::OtherBytes => "it was compiled from other bytes",
     }
 }
 
