@@ -60,6 +60,11 @@ above, and `docs/spec.md` below. Before picking up work, also read:
   asks. Syrinx is MPL-2.0, and the owner has made the repository public. A weekly
   preview release runs from `.github/workflows/weekly-release.yml`; see
   `docs/releasing.md` and `docs/decisions.md`.
+- **Develop on the owner's private Forgejo server, then push to GitHub
+  (owner, 2026-11-24).** Work in progress goes to the Forgejo remote;
+  GitHub receives a change only once it is finished there. Never write the
+  server's address or a token for it in the repository. See "Work order" in
+  `AGENTS.md`.
 - **Local implementation is approved (D41; workflow updated 2026-10-12).**
   Build each slice on its own branch in a local worktree. Once an
   independent review approves it and `cargo xtask check` passes, merge it to
