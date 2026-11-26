@@ -2381,7 +2381,7 @@ dependencies = [
 
 [[package]]
 name = "fulltext-bench"
-version = "0.1.0"
+version = "0.10.0"
 dependencies = [
  "rusqlite",
  "syrinx-search",
@@ -7755,7 +7755,7 @@ dependencies = [
 
 [[package]]
 name = "syrinx-app"
-version = "0.1.0"
+version = "0.10.0"
 dependencies = [
  "futures",
  "gpui-component",
@@ -7776,14 +7776,14 @@ dependencies = [
 
 [[package]]
 name = "syrinx-core"
-version = "0.1.0"
+version = "0.10.0"
 dependencies = [
  "url",
 ]
 
 [[package]]
 name = "syrinx-platform"
-version = "0.1.0"
+version = "0.10.0"
 dependencies = [
  "futures",
  "gdkx11",
@@ -7803,7 +7803,7 @@ dependencies = [
 
 [[package]]
 name = "syrinx-plugin-host"
-version = "0.1.0"
+version = "0.10.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -7815,7 +7815,7 @@ dependencies = [
 
 [[package]]
 name = "syrinx-search"
-version = "0.1.0"
+version = "0.10.0"
 dependencies = [
  "frizbee",
  "syrinx-core",
@@ -7824,7 +7824,7 @@ dependencies = [
 
 [[package]]
 name = "syrinx-store"
-version = "0.1.0"
+version = "0.10.0"
 dependencies = [
  "rusqlite",
  "rusqlite_migration",
@@ -7833,11 +7833,11 @@ dependencies = [
 
 [[package]]
 name = "syrinx-ui"
-version = "0.1.0"
+version = "0.10.0"
 
 [[package]]
 name = "syrinx-update"
-version = "0.1.0"
+version = "0.10.0"
 dependencies = [
  "libc",
  "ring",
@@ -7846,7 +7846,7 @@ dependencies = [
 
 [[package]]
 name = "syrinx-update-net"
-version = "0.1.0"
+version = "0.10.0"
 dependencies = [
  "syrinx-update",
  "windows 0.62.2",
@@ -10535,7 +10535,7 @@ checksum = "ec7a2a501ed189703dba8b08142f057e887dfc4b2cc4db2d343ac6376ba3e0b9"
 
 [[package]]
 name = "xtask"
-version = "0.1.0"
+version = "0.10.0"
 dependencies = [
  "serde",
  "serde_json",
